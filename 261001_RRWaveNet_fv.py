@@ -282,6 +282,10 @@ PEAK_MATCH_TOLERANCE_SEC = 1.0  # used when fewer than two reference breaths
 # is judged on the same phase scale at every breathing rate.
 PEAK_MATCH_TOLERANCE_CYCLE_FRACTION = 0.25
 SMART_FUSION_SD_BPM = 4.0  # Karlen et al. 2013
+# A subject's MAE over one or two reference-valid minutes rests on one or two
+# breath counts. Subject means are also reported over the subjects with at
+# least this many valid minutes; the others are listed and summarized apart.
+MIN_VALID_MINUTES_PER_SUBJECT = 3
 DISCORDANT_PCC = 0.8  # legacy minutes with high PCC but a large count error
 DISCORDANT_AE_BPM = 3.0
 
@@ -4210,6 +4214,55 @@ def build_metric_means(
     return pd.DataFrame(rows)
 
 
+def build_min_valid_means(
+    per_subject: pd.DataFrame,
+    min_valid_minutes: int,
+) -> pd.DataFrame:
+    """Subject means over subjects with enough reference-valid minutes.
+
+    Subjects below `min_valid_minutes` (any dataset) are left out of these
+    means, counted and listed as "subject(valid/scored minutes)", and their
+    own mean MAE is given in Below_Min_* columns, so it can be seen whether
+    they are worse. Their valid minutes still count in the pooled
+    minute-level summary.
+    """
+    valid_minutes = pd.to_numeric(per_subject["N60_RefValid"], errors="coerce").fillna(0)
+    meets = valid_minutes >= int(min_valid_minutes)
+    included = build_metric_means(per_subject[meets], COMPARISON_METRICS)
+    below = build_metric_means(per_subject[~meets], COMPARISON_METRICS)
+    rows = []
+    for (_, row), (_, below_row) in zip(included.iterrows(), below.iterrows()):
+        frame = _dataset_subset(per_subject, row["Dataset"])
+        frame = frame[frame["Window_Config"] == row["Window_Config"]]
+        short = frame[~meets.loc[frame.index]]
+        prefix_dataset = row["Dataset"] == "CombinedAllDatasets"
+        listed = [
+            (f"{item['Dataset']}:" if prefix_dataset else "")
+            + f"{item['Subject']}({int(item.get('N60_RefValid', 0) or 0)}"
+            f"/{int(item.get('N60', 0) or 0)})"
+            for _, item in short.iterrows()
+        ]
+        out = {
+            "Dataset": row["Dataset"],
+            "Window_Order": row["Window_Order"],
+            "Window_Config": row["Window_Config"],
+            "Window_Label": row["Window_Label"],
+            "Min_Valid_Minutes": int(min_valid_minutes),
+            "N_Subjects_Total": int(frame["Subject"].nunique()),
+            "N_Subjects_Included": int(row["N_Subjects"]),
+            "N_Subjects_Below_Min": int(below_row["N_Subjects"]),
+            "Below_Min_Subjects": ", ".join(listed),
+        }
+        for column, value in row.items():
+            if column not in out and column != "N_Subjects":
+                out[column] = value
+        for metric in ("RR_MAE_Median3", "RR_MAE_Event", "RR_MAE_SmartFusion", "RR_MAE_BPM"):
+            out[f"Below_Min_{metric}_Mean"] = below_row[f"{metric}_Mean"]
+            out[f"Below_Min_{metric}_N"] = below_row[f"{metric}_N"]
+        rows.append(out)
+    return pd.DataFrame(rows)
+
+
 def build_minute_level_summary(windows: pd.DataFrame) -> pd.DataFrame:
     """Pooled minute-level results per dataset and window condition.
 
@@ -4717,6 +4770,13 @@ def build_manifest(
             f"clip({ADAPTIVE_UPPER_HR_FRACTION} x PPG spectral HR, "
             f"{ADAPTIVE_UPPER_LIMITS_HZ[0]}, {ADAPTIVE_UPPER_LIMITS_HZ[1]}) Hz"
         ),
+        "min_valid_minutes_per_subject": {
+            "value": args.min_valid_minutes,
+            "use": (
+                "extra subject means over subjects with at least this many "
+                "reference-valid minutes; the others are listed with their own MAE"
+            ),
+        },
         "smart_fusion": {
             "estimates": ["event-head count", "waveform count-orig count", "waveform FFT RR"],
             "fusion": "mean",
@@ -5049,7 +5109,12 @@ def run_experiment(args: argparse.Namespace) -> None:
     )
     del window_frames
 
+    per_subject["Meets_Min_Valid_Minutes"] = (
+        pd.to_numeric(per_subject["N60_RefValid"], errors="coerce").fillna(0)
+        >= args.min_valid_minutes
+    )
     performance_means = build_metric_means(per_subject, COMPARISON_METRICS)
+    min_valid_means = build_min_valid_means(per_subject, args.min_valid_minutes)
     minute_level = build_minute_level_summary(windows)
     gate_means = build_metric_means(per_subject, GATE_METRICS)
     feature_means = build_metric_means(per_subject, FEATURE_METRICS)
@@ -5071,6 +5136,7 @@ def run_experiment(args: argparse.Namespace) -> None:
         "per_subject": per_subject,
         "RR60s_windows": windows,
         "performance_means": performance_means,
+        f"performance_means_min{args.min_valid_minutes}validmin": min_valid_means,
         "minute_level_summary": minute_level,
         "baseline_performance_means": baseline_means,
         "baseline_comparison": baseline_comparison,
@@ -5106,6 +5172,7 @@ def run_experiment(args: argparse.Namespace) -> None:
             "Per_subject": per_subject,
             "RR60s_windows": windows,
             "Performance_means": performance_means,
+            "Perf_means_min_valid_min": min_valid_means,
             "Minute_level_summary": minute_level,
             "Baseline_means": baseline_means,
             "Baseline_comparison": baseline_comparison,
@@ -5131,6 +5198,39 @@ def run_experiment(args: argparse.Namespace) -> None:
             f"{row['RR_MAE_SmartFusion_Mean']:>7.3f} {row['SF_Retained_Ratio_Mean']:>5.0%} "
             f"{row['RR_MAE_BPM_Mean']:>7.3f} {row['PCC_60s_Mean_Mean']:>6.3f}"
         )
+    print(
+        f"\nRR MAE per dataset, subjects with >= {args.min_valid_minutes} valid minutes "
+        "(in = included, out = below; out_Med3 = their own Median3 MAE; "
+        "pooled = Median3 MAE over all valid minutes):"
+    )
+    print(
+        f"  {'Dataset':<20s} {'Window':<18s} {'in':>3s} {'out':>3s} {'Median3':>8s} "
+        f"{'Event':>7s} {'SmartF':>7s} {'kept':>5s} {'Legacy':>7s} "
+        f"{'out_Med3':>8s} {'pooled':>7s}"
+    )
+    pooled_median3 = (
+        minute_level.set_index(["Dataset", "Window_Config"])["Median3_MAE"]
+        if not minute_level.empty
+        else pd.Series(dtype=float)
+    )
+    for _, row in min_valid_means.iterrows():
+        if row["N_Subjects_Total"] == 0:
+            continue
+        pooled_value = pooled_median3.get((row["Dataset"], row["Window_Config"]), np.nan)
+        print(
+            f"  {row['Dataset']:<20s} {row['Window_Label']:<18s} "
+            f"{row['N_Subjects_Included']:>3d} {row['N_Subjects_Below_Min']:>3d} "
+            f"{row['RR_MAE_Median3_Mean']:>8.3f} {row['RR_MAE_Event_Mean']:>7.3f} "
+            f"{row['RR_MAE_SmartFusion_Mean']:>7.3f} {row['SF_Retained_Ratio_Mean']:>5.0%} "
+            f"{row['RR_MAE_BPM_Mean']:>7.3f} {row['Below_Min_RR_MAE_Median3_Mean']:>8.3f} "
+            f"{pooled_value:>7.3f}"
+        )
+    for _, row in min_valid_means.iterrows():
+        if row["Dataset"] != "CombinedAllDatasets" and row["Below_Min_Subjects"]:
+            print(
+                f"  below {args.min_valid_minutes} valid min, {row['Dataset']} "
+                f"{row['Window_Label']}: {row['Below_Min_Subjects']}"
+            )
     combined = performance_means[performance_means["Dataset"] == "CombinedAllDatasets"]
     print("\nCombined performance (mean over held-out subjects):")
     for _, row in combined.iterrows():
@@ -5243,6 +5343,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--resume",
         action="store_true",
         help="Reuse folds whose Fold_Summaries JSON already exists.",
+    )
+    parser.add_argument(
+        "--min-valid-minutes",
+        type=int,
+        default=MIN_VALID_MINUTES_PER_SUBJECT,
+        help=(
+            "Subjects with fewer reference-valid minutes are left out of the "
+            "additional subject means (all datasets) and listed separately."
+        ),
     )
     parser.add_argument(
         "--inspect-capnobase",
