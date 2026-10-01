@@ -71,6 +71,7 @@ minute-level MAE/RMSE. The legacy count is not valid for capnograms outside
 """
 
 import argparse
+import csv
 import gc
 import hashlib
 import json
@@ -1801,9 +1802,11 @@ def read_capnobase_breath_labels(
     """Expert CO2 breath labels of one CapnoBase case (sample indices at fs).
 
     CapnoBase stores annotations in {case}_8min_labels.csv with structure
-    fields flattened into column headers (e.g. labels.co2.startexp.x ->
-    a column containing "co2" and "startexp"). The start of expiration is
-    preferred because it matches the onset timing used for breaths here;
+    fields flattened into headers (labels.co2.startexp.x -> a field whose
+    name contains "co2" and "startexp"). Both layouts are read: one field
+    per column, or one field per row (name in the first cell, values after
+    it), which suits fields of different lengths. The start of expiration
+    is preferred because it matches the onset timing used for breaths here;
     the start of inspiration is the fallback. Values that look like seconds
     (all below 1000) are converted to samples.
 
@@ -1812,20 +1815,46 @@ def read_capnobase_breath_labels(
     path = csv_dir / f"{case_id}_8min_labels.csv"
     if not path.exists():
         return None, f"{path.name} not found"
-    frame = pd.read_csv(path)
-    lowered = {str(column).lower().strip(): column for column in frame.columns}
+    fields: Dict[str, np.ndarray] = {}
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        rows = [row for row in csv.reader(handle) if row]
+    if rows:
+        header = [cell.strip() for cell in rows[0]]
+        width = len(header)
+        column_layout = all(len(row) <= width for row in rows[1:]) and not any(
+            _is_number(cell) for cell in header if cell
+        )
+        if column_layout:
+            for index, name in enumerate(header):
+                values = [row[index] for row in rows[1:] if index < len(row)]
+                fields[name] = _numeric_values(values)
+        else:
+            for row in rows:
+                fields[row[0].strip()] = _numeric_values(row[1:])
     for key in ("startexp", "startinsp"):
-        matches = [column for name, column in lowered.items() if "co2" in name and key in name]
-        if not matches:
-            continue
-        preferred = [column for column in matches if str(column).lower().endswith("x")] or matches
-        values = pd.to_numeric(frame[preferred[0]], errors="coerce").dropna().to_numpy(float)
-        if len(values) < 2:
-            continue
-        if values.max() < 1000.0:
-            values = values * float(fs)
-        return np.sort(values), f"{path.name}:{preferred[0]}"
-    return None, f"{path.name} has no co2 startexp/startinsp column ({list(frame.columns)[:10]})"
+        matches = [name for name in fields if "co2" in name.lower() and key in name.lower()]
+        preferred = [name for name in matches if name.lower().endswith("x")] or matches
+        for name in preferred:
+            values = fields[name]
+            if len(values) < 2:
+                continue
+            if values.max() < 1000.0:
+                values = values * float(fs)
+            return np.sort(values), f"{path.name}:{name}"
+    return None, f"{path.name} has no co2 startexp/startinsp field ({list(fields)[:10]})"
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _numeric_values(cells: Sequence[str]) -> np.ndarray:
+    values = pd.to_numeric(pd.Series(list(cells), dtype=object), errors="coerce")
+    return values.dropna().to_numpy(float)
 
 
 def load_capnobase_subjects(spec: WindowSpec) -> Dict[str, dict]:
