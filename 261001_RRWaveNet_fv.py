@@ -4567,6 +4567,20 @@ def run_experiment(args: argparse.Namespace) -> None:
         },
     )
 
+    print("\nRR MAE per dataset (breaths/min; mean over held-out subjects):")
+    print(
+        f"  {'Dataset':<20s} {'Window':<18s} {'N':>3s} {'Median3':>8s} "
+        f"{'Event':>7s} {'SmartF':>7s} {'kept':>5s} {'Legacy':>7s} {'PCC':>6s}"
+    )
+    for _, row in performance_means.iterrows():
+        if row["N_Subjects"] == 0:
+            continue
+        print(
+            f"  {row['Dataset']:<20s} {row['Window_Label']:<18s} {row['N_Subjects']:>3d} "
+            f"{row['RR_MAE_Median3_Mean']:>8.3f} {row['RR_MAE_Event_Mean']:>7.3f} "
+            f"{row['RR_MAE_SmartFusion_Mean']:>7.3f} {row['SF_Retained_Ratio_Mean']:>5.0%} "
+            f"{row['RR_MAE_BPM_Mean']:>7.3f} {row['PCC_60s_Mean_Mean']:>6.3f}"
+        )
     combined = performance_means[performance_means["Dataset"] == "CombinedAllDatasets"]
     print("\nCombined performance (mean over held-out subjects):")
     for _, row in combined.iterrows():
