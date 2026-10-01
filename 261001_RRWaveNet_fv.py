@@ -248,7 +248,11 @@ EVENT_PRIOR = 0.15  # initial event probability (bias of the event head)
 EVENT_MIN_PROMINENCE_FRACTION = 0.3
 EVENT_MIN_RANGE = 0.05  # below this the head is flat: no breath events
 EVENT_MIN_DISTANCE_SEC = 1.5  # same minimum breath spacing as the v16 counter
-PEAK_MATCH_TOLERANCE_SEC = 1.0
+PEAK_MATCH_TOLERANCE_SEC = 1.0  # used when fewer than two reference breaths
+# Breath matching tolerance as a share of the local breath interval: a
+# quarter cycle (1 s at 15 bpm, 2.5 s at 6 bpm, 0.31 s at 48 bpm), so timing
+# is judged on the same phase scale at every breathing rate.
+PEAK_MATCH_TOLERANCE_CYCLE_FRACTION = 0.25
 SMART_FUSION_SD_BPM = 4.0  # Karlen et al. 2013
 DISCORDANT_PCC = 0.8  # legacy minutes with high PCC but a large count error
 DISCORDANT_AE_BPM = 3.0
@@ -1232,16 +1236,23 @@ def detect_event_breaths(
     probability: np.ndarray,
     fs: int,
     min_interval_sec: float = EVENT_MIN_DISTANCE_SEC,
+    rate_hint_breaths: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Breath events from a continuous event-probability trace.
 
     Processed in the same 60 s blocks with 10 s context as the ground truth,
     so the relative prominence threshold follows slow changes in confidence.
+
+    `rate_hint_breaths` are breath onsets from the model's waveform head
+    (same time base). When given, peaks closer than half the local median
+    breath interval are treated as one breath: at slow rates breath timing
+    from the PPG is uncertain by a second or more, the event head answers
+    with a broad bump, and a fixed 0.8 s spacing (sized for infant rates)
+    splits that bump into two or three events. Only model outputs are used.
     """
     length = len(probability)
     block = int(round(BREATH_BLOCK_SEC * fs))
     margin = int(round(BREATH_BLOCK_MARGIN_SEC * fs))
-    distance = max(1, int(round(min_interval_sec * fs)))
     found = []
     for block_start in range(0, length, block):
         block_end = min(length, block_start + block)
@@ -1251,9 +1262,19 @@ def detect_event_breaths(
         spread = float(np.percentile(local, 95) - np.percentile(local, 5))
         if spread < EVENT_MIN_RANGE:
             continue
+        interval_sec = min_interval_sec
+        if rate_hint_breaths is not None:
+            hints = rate_hint_breaths[
+                (rate_hint_breaths >= low) & (rate_hint_breaths < high)
+            ]
+            if len(hints) >= 3:
+                interval_sec = max(
+                    min_interval_sec,
+                    0.5 * float(np.median(np.diff(hints))) / float(fs),
+                )
         peaks, _ = find_peaks(
             local,
-            distance=distance,
+            distance=max(1, int(round(interval_sec * fs))),
             prominence=EVENT_MIN_PROMINENCE_FRACTION * spread,
         )
         peaks = peaks + low
@@ -3173,11 +3194,12 @@ def evaluate_subject_minutes(
       detected once on the continuous reference; excluded minutes keep a
       reason. Band, RR range and breath spacing follow the segment's profile;
     * model estimates: event-head breaths (relative-prominence peaks of the
-      event probability), count-orig breaths of the
+      event probability, at least half the waveform head's local breath
+      interval apart), count-orig breaths of the
       predicted waveform, and the FFT RR of the predicted waveform;
-    * breath matching: event breaths vs reference breaths within +-1 s (at
-      most half the median breath interval), matched on the whole run so
-      that minute edges do not split a pair;
+    * breath matching: event breaths vs reference breaths within a quarter
+      of the median breath interval, matched on the whole run so that
+      minute edges do not split a pair;
     * smart fusion: mean of the three estimates, withheld when their SD
       exceeds 4 breaths/min (Karlen et al. 2013).
     """
@@ -3222,6 +3244,7 @@ def evaluate_subject_minutes(
                     event_series[run_start:run_end],
                     fs,
                     profile["min_breath_interval_sec"],
+                    wave_breaths - run_start,
                 )
                 + run_start
             )
@@ -3231,7 +3254,9 @@ def evaluate_subject_minutes(
             ]
             tolerance = PEAK_MATCH_TOLERANCE_SEC * fs
             if len(gt_span) > 1:
-                tolerance = min(tolerance, 0.5 * float(np.median(np.diff(gt_span))))
+                tolerance = PEAK_MATCH_TOLERANCE_CYCLE_FRACTION * float(
+                    np.median(np.diff(gt_span))
+                )
             gt_idx, ev_idx = match_breaths(gt_span, ev_span, tolerance)
             gt_matched = np.zeros(len(gt_span), dtype=bool)
             ev_matched = np.zeros(len(ev_span), dtype=bool)
@@ -4114,7 +4139,9 @@ def build_manifest(
             "legacy_rr_estimator": "direct respiratory peak count (v16)",
             "legacy_pcc": "waveform Pearson correlation on the same complete 60 s interval",
             "gt_metrics": "event / count-orig / FFT RR vs fixed ground truth on reference-valid minutes",
-            "breath_matching_tolerance_sec": PEAK_MATCH_TOLERANCE_SEC,
+            "breath_matching_tolerance": (
+                f"{PEAK_MATCH_TOLERANCE_CYCLE_FRACTION} x median reference breath interval"
+            ),
         },
         "baseline_comparison": {
             "baseline": BASELINE_LABEL,
