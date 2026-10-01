@@ -30,11 +30,16 @@ assumed adult impedance/belt references at 6-30 bpm:
 3. Ground truth. CapnoBase ships expert CO2 breath labels; they replace
    detection as the ground truth (start of expiration). Detection-vs-label
    agreement is reported per subject.
-4. Delay and polarity. The capnogram lags breathing by its transport delay
-   (1-3 s), so the zero-lag correlation that set the target sign changed
-   sign with each subject's delay and RR, giving inconsistent targets. The
-   capnogram is now shifted by the lag (within +-3 s) and sign of maximal
-   PPG correlation; counts do not depend on this shift.
+4. Delay and polarity. The PPG follows breathing mechanics, the capnogram
+   follows gas exchange (about a quarter cycle later) plus the sidestream
+   transport delay (1-3 s), and positive-pressure ventilation inverts the
+   PPG modulation, so the zero-lag correlation that set the target sign
+   changed sign with each subject's RR, delay and ventilation mode. The
+   capnogram keeps its physical polarity (high CO2 = expiration) and is
+   shifted by the lag of maximal positive PPG correlation within half a
+   breath period (at least 3 s); counts do not depend on this shift.
+   Flipping it instead (an earlier draft) moved the breath-onset targets by
+   half a cycle for some subjects and kept the event head from learning.
 5. Pulses and resampling. Infant heart rates exceed the v16 180 bpm limit;
    PPG beat QC uses 40-220 bpm and a beat spacing from the PPG's spectral
    heart rate. 300 -> 128 Hz uses polyphase resampling instead of FFT
@@ -275,14 +280,15 @@ ANALYSIS_PROFILES = {
         "min_breath_interval_sec": 1.5,
         "ppg_hr_range_bpm": (PPG_HR_MIN_BPM, PPG_HR_MAX_BPM),
         "ppg_spectral_beat_distance": False,
-        "max_target_lag_sec": 0.0,
+        "max_target_lag_sec": 0.0,  # no lag search: v16 zero-lag sign alignment
+        "fixed_target_polarity": False,
         "fft_subharmonic_check": False,
         "resampler": "fft",
     },
     "capnography_wide_rr": {
         "description": (
-            "0.05 Hz to clip(0.5 x PPG heart rate, 0.5, 1.0) Hz, "
-            "lag+sign alignment of the capnogram, 40-220 bpm PPG beats"
+            "0.05 Hz to clip(0.5 x PPG heart rate, 0.5, 1.0) Hz, capnogram "
+            "delay alignment with fixed polarity, 40-220 bpm PPG beats"
         ),
         # Lower edge 0.05 Hz keeps 5 bpm breathing; the upper edge follows
         # the PPG heart rate (an octave below it, so the cardiac component
@@ -293,11 +299,18 @@ ANALYSIS_PROFILES = {
         "min_breath_interval_sec": 0.8,  # up to 75 bpm
         "ppg_hr_range_bpm": (40.0, 220.0),
         "ppg_spectral_beat_distance": True,
-        "max_target_lag_sec": 3.0,  # sidestream CO2 transport delay
+        # Lag search window: at least 3 s (sidestream transport delay) and at
+        # least half a breath period, because the PPG follows breathing
+        # mechanics while CO2 follows gas exchange (about a quarter cycle
+        # later), and positive-pressure ventilation inverts the PPG
+        # modulation. Polarity is fixed: high CO2 is expiration.
+        "max_target_lag_sec": 3.0,
+        "fixed_target_polarity": True,
         "fft_subharmonic_check": True,  # trapezoid capnogram harmonics
         "resampler": "poly",
     },
 }
+MAX_TARGET_LAG_SEC = 15.0  # upper bound of the lag window (half of 4 bpm)
 ADAPTIVE_UPPER_HR_FRACTION = 0.5
 ADAPTIVE_UPPER_LIMITS_HZ = (0.5, 1.0)
 # FFT RR: a spectral peak at f/2 or f/3 with at least this share of the main
@@ -669,15 +682,23 @@ def align_target_lag_and_sign(
     rsp_low: np.ndarray,
     fs: int,
     max_lag_sec: float,
+    allow_sign_flip: bool = True,
 ) -> Tuple[np.ndarray, int, float, float]:
-    """Delay- and sign-align the reference to the PPG respiratory component.
+    """Delay-align the reference to the PPG respiratory component.
 
-    A sidestream capnogram lags breathing by its transport delay (1-3 s).
-    At 20-48 bpm that is a quarter to a whole cycle, so the zero-lag
-    correlation used by v16 to pick the sign is close to zero or flips with
-    the subject's delay, and the waveform targets become inconsistent across
-    subjects. The lag within +-max_lag_sec with the largest |correlation| is
-    removed and its sign applied. Breath counts do not depend on this shift.
+    The PPG modulation follows breathing mechanics; a capnogram follows gas
+    exchange, about a quarter cycle later, plus the sidestream transport
+    delay (1-3 s), and positive-pressure ventilation inverts the PPG
+    modulation. The zero-lag correlation that v16 used to pick the sign
+    therefore changes sign with each subject's RR, delay and ventilation
+    mode. The lag within +-max_lag_sec with the best correlation is removed.
+
+    With allow_sign_flip=False (capnography) only positive correlation is
+    accepted: a capnogram has a physical polarity (high CO2 = expiration),
+    and flipping it would also move the breath-onset targets by about half
+    a cycle relative to the PPG for some subjects but not others. A window
+    of at least half a breath period lets the lag alone reach every phase.
+    Breath counts do not depend on this shift.
 
     Returns (aligned reference, lag in samples, sign, correlation); a positive
     lag means the reference lagged the PPG.
@@ -694,10 +715,10 @@ def align_target_lag_and_sign(
     lags = np.arange(-(length - 1), length)
     window = np.abs(lags) <= int(round(max_lag_sec * fs))
     values = full[window] / ((length - np.abs(lags[window])) * scale)
-    best = int(np.argmax(np.abs(values)))
+    best = int(np.argmax(np.abs(values) if allow_sign_flip else values))
     lag = int(lags[window][best])
     corr = float(values[best])
-    sign = 1.0 if corr >= 0 else -1.0
+    sign = 1.0 if corr >= 0 or not allow_sign_flip else -1.0
     return (sign * shift_signal(y, lag)).astype(np.float32), lag, sign, corr
 
 
@@ -1333,8 +1354,22 @@ def preprocess_segment(
     ppg_low = respiratory_filter(ppg_raw, fs, band, profile)
     rsp_low = respiratory_filter(rsp_raw_arr, fs, band, profile)
     if profile["max_target_lag_sec"] > 0:
+        # Half a breath period from the expert labels (or breaths detected on
+        # the unshifted reference), never below the profile minimum.
+        if label_samples is not None and len(label_samples) >= 3:
+            period_sec = float(np.median(np.diff(np.sort(label_samples)))) / fs
+        else:
+            onsets = detect_breaths_continuous(rsp_low, fs)
+            period_sec = float(np.median(np.diff(onsets))) / fs if len(onsets) >= 3 else 0.0
+        max_lag_sec = float(
+            np.clip(0.5 * period_sec, profile["max_target_lag_sec"], MAX_TARGET_LAG_SEC)
+        )
         rsp_low, lag, sign, alignment_corr = align_target_lag_and_sign(
-            ppg_low, rsp_low, fs, profile["max_target_lag_sec"]
+            ppg_low,
+            rsp_low,
+            fs,
+            max_lag_sec,
+            allow_sign_flip=not profile["fixed_target_polarity"],
         )
     else:
         centered = (ppg_low - np.mean(ppg_low)) * (rsp_low - np.mean(rsp_low))
