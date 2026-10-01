@@ -29,7 +29,19 @@ assumed adult impedance/belt references at 6-30 bpm:
    so a harmonic is not taken for the breathing rate.
 3. Ground truth. CapnoBase ships expert CO2 breath labels; they replace
    detection as the ground truth (start of expiration). Detection-vs-label
-   agreement is reported per subject.
+   agreement is reported per subject. In {case}_8min_labels.csv every
+   annotation field (co2_startexp_x, co2_startinsp_x, pleth_peak_x, the
+   *_artif_x artifact spans) holds all of its events in one cell as
+   space-separated one-based sample numbers, with the unit in units_x. A
+   reader that expects one number per cell finds no labels and silently
+   falls back to detection; the reader here splits the cells, removes the
+   MATLAB index base, takes sampling rates from the param file, checks the
+   record length and cross-checks the label RR against the reference file.
+   Expert artifact spans are used too: PPG artifacts are unusable input
+   samples, and training windows or scored minutes that overlap a CO2
+   artifact are excluded. --inspect-capnobase prints and saves how every
+   case was read (fs, labels, label vs reference RR, CO2 rise at the
+   labels, pulse-peak offset, artifacts) without training.
 4. Delay and polarity. The PPG follows breathing mechanics, the capnogram
    follows gas exchange (about a quarter cycle later) plus the sidestream
    transport delay (1-3 s), and positive-pressure ventilation inverts the
@@ -87,6 +99,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 import warnings
 from dataclasses import dataclass
@@ -151,6 +164,10 @@ DATASET_CONFIGS = {
         # Expert CO2 breath annotations ({case}_8min_labels.csv) are the
         # ground truth when present; detection is the fallback.
         "expert_breath_labels": True,
+        # Expert artifact spans: PPG artifacts are unusable input samples,
+        # CO2 artifacts invalidate the reference (training windows and
+        # scored minutes that overlap them are excluded).
+        "use_artifact_labels": True,
     },
     "steam2": {
         "label": "STEAM2",
@@ -1377,11 +1394,14 @@ def preprocess_segment(
     rsp_valid_mask: Optional[np.ndarray] = None,
     profile: Optional[dict] = None,
     label_samples: Optional[np.ndarray] = None,
+    ppg_artifact_mask: Optional[np.ndarray] = None,
+    rsp_artifact_mask: Optional[np.ndarray] = None,
 ) -> Optional[dict]:
     """Quality maps, fixed ground truth and kept windows of one segment.
 
     `profile` is the dataset analysis profile; `label_samples` are expert
-    breath onsets (sample indices at `fs`) when the dataset provides them.
+    breath onsets (sample indices at `fs`) when the dataset provides them;
+    the artifact masks mark expert-labelled artifacts (True = artifact).
     """
     profile = ANALYSIS_PROFILES["adult_fixed_band"] if profile is None else profile
     ppg_source = np.asarray(ppg_raw, dtype=np.float64).reshape(-1)
@@ -1401,6 +1421,19 @@ def preprocess_segment(
     window_len = int(round(spec.window_sec * fs))
     if length < window_len:
         return None
+
+    def as_artifact_mask(mask: Optional[np.ndarray]) -> np.ndarray:
+        out = np.zeros(length, dtype=bool)
+        if mask is not None:
+            mask = np.asarray(mask, dtype=bool)[:length]
+            out[: len(mask)] = mask
+        return out
+
+    # Expert-labelled artifacts are unusable samples of their signal.
+    ppg_artifact = as_artifact_mask(ppg_artifact_mask)
+    rsp_artifact = as_artifact_mask(rsp_artifact_mask)
+    ppg_valid_mask = ppg_valid_mask & ~ppg_artifact
+    rsp_valid_mask = rsp_valid_mask & ~rsp_artifact
 
     # Analysis band: fixed for the adult profile; for the capnography profile
     # the upper edge follows the PPG heart rate (PPG only, so it is also
@@ -1467,6 +1500,7 @@ def preprocess_segment(
     # The reference was shifted by `lag`; shift its validity maps with it.
     rsp_quality_map = shift_signal(rsp_quality_map, lag, fill=0)
     rsp_valid_mask = shift_signal(rsp_valid_mask, lag, fill=False)
+    rsp_artifact = shift_signal(rsp_artifact, lag, fill=False)
 
     # Fixed ground truth: expert breath labels when available (shifted with
     # the reference), otherwise breaths detected once on the continuous
@@ -1500,6 +1534,8 @@ def preprocess_segment(
         "Waveform_Target": "label_phase" if use_phase_target else "reference_signal",
         "GT_Breaths": int(len(reference_breaths)),
         "Detected_Breaths": int(len(detected_breaths)),
+        "PPG_Artifact_Label_Sec": float(ppg_artifact.sum() / float(fs)),
+        "RSP_Artifact_Label_Sec": float(rsp_artifact.sum() / float(fs)),
     }
     train_quality_map = resp_quality_map & reference_structural
     starts = extract_window_starts(
@@ -1527,7 +1563,14 @@ def preprocess_segment(
             and rsp_usable_ratio >= MIN_USABLE_PROPORTION
         )
         resp_usable_ratio = float(train_quality_map[int(start):end].mean())
-        train_ok = bool(passed and resp_usable_ratio >= MIN_USABLE_PROPORTION)
+        ref_artifact_ratio = float(rsp_artifact[int(start):end].mean())
+        # Labels may be missing inside a labelled reference artifact, so such
+        # windows would teach the event head "no breath" there.
+        train_ok = bool(
+            passed
+            and resp_usable_ratio >= MIN_USABLE_PROPORTION
+            and ref_artifact_ratio == 0.0
+        )
         diagnostics = {
             **ppg_diagnostics,
             **rsp_diagnostics,
@@ -1554,6 +1597,10 @@ def preprocess_segment(
                 ),
                 "Kept": int(passed),
                 "RSP_Resp_Usable_Proportion": resp_usable_ratio,
+                "PPG_Artifact_Label_Proportion": float(
+                    ppg_artifact[int(start):end].mean()
+                ),
+                "RSP_Artifact_Label_Proportion": ref_artifact_ratio,
                 "Train_OK": int(train_ok),
             }
         )
@@ -1573,6 +1620,8 @@ def preprocess_segment(
         "detected_breaths": detected_breaths,
         "label_based": bool(label_based),
         "structural_valid": reference_structural,
+        "artifact_mask": rsp_artifact if rsp_artifact.any() else None,
+        "ppg_artifact_mask": ppg_artifact if ppg_artifact.any() else None,
         "band_hz": band,
         "profile": profile,
         "diagnostics": segment_diagnostics,
@@ -1729,16 +1778,30 @@ def _extract_signal_and_fs(
     return signal.astype(np.float32), fs
 
 
+def spans_to_mask(spans_sec: np.ndarray, length: int, fs: float) -> np.ndarray:
+    """Boolean mask (True inside any (start, end) span given in seconds)."""
+    mask = np.zeros(length, dtype=bool)
+    for start, end in np.asarray(spans_sec, dtype=np.float64).reshape(-1, 2):
+        low = max(0, int(np.floor(start * fs)))
+        high = min(length, int(np.ceil(end * fs)) + 1)
+        if high > low:
+            mask[low:high] = True
+    return mask
+
+
 def preprocess_subject_from_pairs(
     pairs: Sequence[Tuple[np.ndarray, np.ndarray, float, float]],
     spec: WindowSpec,
     profile: Optional[dict] = None,
     pair_labels: Optional[Sequence[Optional[np.ndarray]]] = None,
+    pair_artifacts: Optional[Sequence[Optional[Tuple[np.ndarray, np.ndarray]]]] = None,
 ) -> Optional[dict]:
     """Preprocess (PPG, RSP, PPG fs, RSP fs) pairs of one subject.
 
     `pair_labels` holds, per pair, expert breath onsets as sample indices at
-    the RSP sampling rate (or None).
+    the RSP sampling rate (or None); `pair_artifacts` holds, per pair,
+    expert artifact spans in seconds as (PPG spans, RSP spans), each of
+    shape (k, 2) (or None).
     """
     profile = ANALYSIS_PROFILES["adult_fixed_band"] if profile is None else profile
     segments = []
@@ -1763,6 +1826,11 @@ def preprocess_subject_from_pairs(
             TARGET_FS,
             profile["resampler"],
         )
+        ppg_artifact = rsp_artifact = None
+        if pair_artifacts is not None and pair_artifacts[pair_index] is not None:
+            ppg_spans, rsp_spans = pair_artifacts[pair_index]
+            ppg_artifact = spans_to_mask(ppg_spans, len(ppg_target), TARGET_FS)
+            rsp_artifact = spans_to_mask(rsp_spans, len(rsp_target), TARGET_FS)
         segment = preprocess_segment(
             ppg_target,
             rsp_target,
@@ -1773,6 +1841,8 @@ def preprocess_subject_from_pairs(
             rsp_valid_mask=rsp_mask,
             profile=profile,
             label_samples=labels,
+            ppg_artifact_mask=ppg_artifact,
+            rsp_artifact_mask=rsp_artifact,
         )
         if segment is not None:
             segments.append(segment)
@@ -1805,113 +1875,534 @@ def load_bidmc_subjects(spec: WindowSpec) -> Dict[str, dict]:
     return data
 
 
-def read_capnobase_breath_labels(
+# CapnoBase IEEE TBME RR benchmark (Borealis doi:10.5683/SP2/NLB8IT), one
+# group of files per case (CSV; Borealis also serves them as .tab):
+#   {case}_8min_signal.csv     co2_y, pleth_y (and ecg_y), one row per sample
+#   {case}_8min_param.csv      samplingrate_co2, samplingrate_pleth, ...
+#   {case}_8min_labels.csv     expert annotations: co2_startexp_x,
+#                              co2_startinsp_x, pleth_peak_x, *_artif_x, units_x
+#   {case}_8min_meta.csv       demographics and treatment (ventilation)
+#   {case}_8min_reference.csv  trends derived from the labels (RR, HR)
+# MATLAB structure fields are flattened into names (labels.co2.startexp.x ->
+# co2_startexp_x). An annotation field keeps all of its events in one cell
+# as space-separated sample numbers with MATLAB (one-based) indexing.
+CAPNOBASE_LABEL_INDEX_BASE = 1
+CAPNOBASE_RECORD_SEC = 480.0
+CAPNOBASE_FILE_SUFFIXES = (".csv", ".tab")
+CAPNOBASE_RR_CHECK_BPM = 2.0
+_NUMBER_PATTERN = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
+
+
+def capnobase_file(csv_dir: Path, case_id: str, kind: str) -> Optional[Path]:
+    for suffix in CAPNOBASE_FILE_SUFFIXES:
+        path = csv_dir / f"{case_id}_8min_{kind}{suffix}"
+        if path.exists():
+            return path
+    return None
+
+
+def _sniff_delimiter(path: Path) -> str:
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        first = handle.readline()
+    return "\t" if first.count("\t") > first.count(",") else ","
+
+
+def _normalize_field_name(name: object) -> str:
+    return re.sub(r"[^0-9a-z]+", "_", str(name).lower()).strip("_")
+
+
+def read_capnobase_fields(path: Path) -> Dict[str, List[str]]:
+    """Fields of a CapnoBase param, meta, labels or reference file.
+
+    Fields are read one per column (header row, then value rows) or one per
+    row (name in the first cell, values after it), comma or tab separated.
+    Every cell is split on whitespace, so a field whose events are stored in
+    one cell (" 974 1990 ...") yields one token per event. Names are lower
+    case with every non-alphanumeric run replaced by "_".
+    """
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        rows = [
+            [cell.strip() for cell in row]
+            for row in csv.reader(handle, delimiter=_sniff_delimiter(path))
+            if any(cell.strip() for cell in row)
+        ]
+    fields: Dict[str, List[str]] = {}
+    if not rows:
+        return fields
+    header = rows[0]
+    column_layout = all(len(row) <= len(header) for row in rows[1:]) and not any(
+        _NUMBER_PATTERN.fullmatch(cell) for cell in header if cell
+    )
+    if column_layout and len(header) == 2 and len(rows) > 2:
+        # A two-column "name, value" table is a row layout under a header.
+        names = [row[0] for row in rows[1:] if row]
+        if names and not any(_NUMBER_PATTERN.fullmatch(name) for name in names if name):
+            column_layout = False
+            rows = rows[1:]
+    if column_layout:
+        for index, name in enumerate(header):
+            if name:
+                fields[_normalize_field_name(name)] = [
+                    token
+                    for row in rows[1:]
+                    if index < len(row)
+                    for token in row[index].split()
+                ]
+    else:
+        for row in rows:
+            if row and row[0]:
+                fields[_normalize_field_name(row[0])] = [
+                    token for cell in row[1:] for token in cell.split()
+                ]
+    return fields
+
+
+def _field_numbers(tokens: Sequence[str]) -> np.ndarray:
+    return np.asarray(
+        [float(match) for token in tokens for match in _NUMBER_PATTERN.findall(token)],
+        dtype=np.float64,
+    )
+
+
+def _find_field(fields: Dict[str, List[str]], *parts: str, suffix: str = "") -> Optional[str]:
+    """Shortest field name containing every part; names ending in `suffix` win."""
+    names = [name for name in fields if all(part in name for part in parts)]
+    if suffix:
+        names = [name for name in names if name.endswith(suffix)] or names
+    return min(names, key=len) if names else None
+
+
+def _sampling_rate(
+    fields: Dict[str, List[str]],
+    signal_name: str,
+    default: float,
+) -> Tuple[float, str]:
+    name = _find_field(fields, "samplingrate", signal_name) or _find_field(
+        fields, "rate", signal_name
+    )
+    values = _field_numbers(fields[name]) if name else np.empty(0)
+    values = values[np.isfinite(values) & (values > 0)]
+    if len(values):
+        return float(values[0]), name
+    return float(default), "default"
+
+
+def read_capnobase_signals(path: Path) -> Tuple[np.ndarray, np.ndarray, str]:
+    """PPG (pleth) and capnogram (co2) columns of a signal file."""
+    frame = pd.read_csv(path, sep=_sniff_delimiter(path))
+    frame.columns = [_normalize_field_name(column) for column in frame.columns]
+
+    def column(signal_name: str) -> str:
+        names = [name for name in frame.columns if signal_name in name]
+        names = [name for name in names if name.endswith("_y")] or names
+        if not names:
+            raise KeyError(f"{path.name}: no {signal_name} column in {list(frame.columns)}")
+        return min(names, key=len)
+
+    ppg_column, co2_column = column("pleth"), column("co2")
+    ppg = pd.to_numeric(frame[ppg_column], errors="coerce").to_numpy(np.float32)
+    co2 = pd.to_numeric(frame[co2_column], errors="coerce").to_numpy(np.float32)
+    return ppg, co2, f"{ppg_column},{co2_column}"
+
+
+def _artifact_spans(values: np.ndarray) -> Tuple[np.ndarray, str]:
+    """(start, end) rows of an artifact field.
+
+    The bounds are stored either interleaved (start1 end1 start2 end2 ...)
+    or as all starts followed by all ends (a column-major N x 2 matrix); the
+    interleaved order is the one whose values never decrease.
+    """
+    values = values[np.isfinite(values)]
+    note = ""
+    if len(values) % 2:
+        values = values[:-1]
+        note = "odd number of artifact bounds, last ignored"
+    if len(values) < 2:
+        return np.empty((0, 2)), note
+    half = len(values) // 2
+    if np.all(np.diff(values) >= 0):
+        return values.reshape(-1, 2), note
+    starts, ends = values[:half], values[half:]
+    if np.all(ends >= starts) and np.all(np.diff(starts) >= 0):
+        return np.column_stack([starts, ends]), note
+    note = "; ".join(filter(None, [note, "artifact bounds out of order"]))
+    return np.sort(values.reshape(-1, 2), axis=1), note
+
+
+def read_capnobase_annotations(
+    path: Path,
+    ppg_fs: float,
+    co2_fs: float,
+    ppg_length: int,
+    co2_length: int,
+) -> dict:
+    """Expert breaths, pulse peaks and artifact spans of one labels file.
+
+    Event positions become zero-based sample indices of their own signal.
+    The unit comes from units_x ("samples" in CapnoBase); without it, a
+    breath field ending within the record duration is read as seconds. The
+    one-based MATLAB index is removed unless a zero position shows that the
+    file is zero-based. Breaths are the starts of expiration (the CO2
+    upstroke, where the capnogram crosses zero upward after band-pass
+    filtering); starts of inspiration are the fallback.
+    """
+    fields = read_capnobase_fields(path)
+    units_name = _find_field(fields, "unit", suffix="_x")
+    units_text = " ".join(fields[units_name]).lower() if units_name else ""
+    events = {
+        name: _field_numbers(tokens)
+        for name, tokens in fields.items()
+        if name.endswith("_x") and "unit" not in name
+    }
+    event_fields = {name: fields[name] for name in events}
+    breath_name = None
+    for key in ("startexp", "startinsp"):
+        name = _find_field(event_fields, "co2", key)
+        if name is not None and len(events[name]) >= 2:
+            breath_name = name
+            break
+    if "sample" in units_text:
+        units = "samples"
+    elif "sec" in units_text or units_text.strip() == "s":
+        units = "seconds"
+    elif breath_name is not None and events[breath_name].max() <= CAPNOBASE_RECORD_SEC + 1.0:
+        units = "seconds (inferred)"
+    else:
+        units = "samples (inferred)"
+    zero_based = any(np.any(values == 0) for values in events.values() if len(values))
+    index_base = 0 if (zero_based or units.startswith("seconds")) else CAPNOBASE_LABEL_INDEX_BASE
+
+    warnings_list = []
+
+    def to_samples(values: np.ndarray, fs: float) -> np.ndarray:
+        values = values[np.isfinite(values)]
+        return values * fs if units.startswith("seconds") else values - index_base
+
+    def events_of(name: Optional[str], fs: float, length: int) -> np.ndarray:
+        if name is None:
+            return np.empty(0, dtype=np.int64)
+        samples = np.round(to_samples(events[name], fs)).astype(np.int64)
+        inside = (samples >= 0) & (samples < length)
+        if not np.all(inside):
+            warnings_list.append(
+                f"{name}: {int((~inside).sum())} of {len(samples)} positions outside the record"
+            )
+        return np.unique(samples[inside])
+
+    breaths = events_of(breath_name, co2_fs, co2_length)
+    startinsp_name = _find_field(event_fields, "co2", "startinsp")
+    pleth_peak_name = _find_field(event_fields, "pleth", "peak")
+    artifacts = {"pleth": [], "co2": []}
+    for name, values in events.items():
+        if "artif" not in name:
+            continue
+        signal_name = "pleth" if "pleth" in name else "co2" if "co2" in name else None
+        if signal_name is None:
+            continue
+        fs = ppg_fs if signal_name == "pleth" else co2_fs
+        spans, note = _artifact_spans(to_samples(values, fs))
+        if note:
+            warnings_list.append(f"{name}: {note}")
+        if len(spans):
+            artifacts[signal_name].append(spans / fs)
+    artifacts = {
+        key: np.concatenate(spans, axis=0) if spans else np.empty((0, 2))
+        for key, spans in artifacts.items()
+    }
+    if breath_name is None:
+        warnings_list.append(f"no co2 startexp/startinsp field (fields: {list(events)[:12]})")
+    elif len(breaths) < 2:
+        warnings_list.append(f"{breath_name}: fewer than two breaths inside the record")
+    return {
+        "breaths": breaths if len(breaths) >= 2 else None,
+        "breath_field": breath_name or "",
+        "startinsp": events_of(startinsp_name, co2_fs, co2_length)
+        if startinsp_name != breath_name
+        else np.empty(0, dtype=np.int64),
+        "pleth_peaks": events_of(pleth_peak_name, ppg_fs, ppg_length),
+        "ppg_artifacts_sec": artifacts["pleth"],
+        "co2_artifacts_sec": artifacts["co2"],
+        "units": units,
+        "index_base": index_base,
+        "fields": sorted(events),
+        "warnings": warnings_list,
+    }
+
+
+def read_capnobase_reference_rr(path: Path) -> Tuple[float, str]:
+    """Median of the label-derived CO2 respiratory-rate trend (reference file)."""
+    fields = read_capnobase_fields(path)
+    name = _find_field(fields, "rr", "co2", suffix="_y")
+    values = _field_numbers(fields[name]) if name else np.empty(0)
+    values = values[np.isfinite(values) & (values > 0) & (values < 150)]
+    return (float(np.median(values)) if len(values) else np.nan), name or ""
+
+
+def _text_field(fields: Dict[str, List[str]], *parts: str) -> str:
+    name = _find_field(fields, *parts)
+    return " ".join(fields[name]) if name else ""
+
+
+def read_capnobase_case(
     csv_dir: Path,
     case_id: str,
-    fs: float,
-) -> Tuple[Optional[np.ndarray], str]:
-    """Expert CO2 breath labels of one CapnoBase case (sample indices at fs).
+    default_fs: float,
+    read_labels: bool = True,
+) -> dict:
+    """Signals, sampling rates, expert annotations and metadata of one case.
 
-    CapnoBase stores annotations in {case}_8min_labels.csv with structure
-    fields flattened into headers (labels.co2.startexp.x -> a field whose
-    name contains "co2" and "startexp"). Both layouts are read: one field
-    per column, or one field per row (name in the first cell, values after
-    it), which suits fields of different lengths. The start of expiration
-    is preferred because it matches the onset timing used for breaths here;
-    the start of inspiration is the fallback. Values that look like seconds
-    (all below 1000) are converted to samples.
-
-    Returns (labels or None, a description of the source or the problem).
+    Breath labels are zero-based sample indices at the CO2 rate, artifact
+    spans are (start, end) seconds. Every assumption of the conversion
+    (field names, units, index base, sampling rate source) is recorded in
+    `diagnostics`, inconsistencies in `warnings`.
     """
-    path = csv_dir / f"{case_id}_8min_labels.csv"
-    if not path.exists():
-        return None, f"{path.name} not found"
-    fields: Dict[str, np.ndarray] = {}
-    with open(path, newline="", encoding="utf-8-sig") as handle:
-        rows = [row for row in csv.reader(handle) if row]
-    if rows:
-        header = [cell.strip() for cell in rows[0]]
-        width = len(header)
-        column_layout = all(len(row) <= width for row in rows[1:]) and not any(
-            _is_number(cell) for cell in header if cell
+    signal_path = capnobase_file(csv_dir, case_id, "signal")
+    if signal_path is None:
+        raise FileNotFoundError(f"{case_id}_8min_signal.csv not found in {csv_dir}")
+    ppg, co2, signal_columns = read_capnobase_signals(signal_path)
+    warnings_list = []
+    param_path = capnobase_file(csv_dir, case_id, "param")
+    param = read_capnobase_fields(param_path) if param_path else {}
+    if param_path is None:
+        warnings_list.append(f"param file missing, {default_fs:g} Hz assumed")
+    ppg_fs, ppg_fs_source = _sampling_rate(param, "pleth", default_fs)
+    co2_fs, co2_fs_source = _sampling_rate(param, "co2", ppg_fs)
+    record_sec = len(ppg) / ppg_fs
+    if abs(record_sec - CAPNOBASE_RECORD_SEC) > 2.0:
+        warnings_list.append(
+            f"record is {record_sec:.1f} s at {ppg_fs:g} Hz "
+            f"(CapnoBase cases are {CAPNOBASE_RECORD_SEC:.0f} s): check the sampling rate"
         )
-        if column_layout:
-            for index, name in enumerate(header):
-                values = [row[index] for row in rows[1:] if index < len(row)]
-                fields[name] = _numeric_values(values)
-        else:
-            for row in rows:
-                fields[row[0].strip()] = _numeric_values(row[1:])
-    for key in ("startexp", "startinsp"):
-        matches = [name for name in fields if "co2" in name.lower() and key in name.lower()]
-        preferred = [name for name in matches if name.lower().endswith("x")] or matches
-        for name in preferred:
-            values = fields[name]
-            if len(values) < 2:
-                continue
-            if values.max() < 1000.0:
-                values = values * float(fs)
-            return np.sort(values), f"{path.name}:{name}"
-    return None, f"{path.name} has no co2 startexp/startinsp field ({list(fields)[:10]})"
+    if int(round(ppg_fs)) != int(round(co2_fs)):
+        warnings_list.append(
+            f"pleth {ppg_fs:g} Hz and co2 {co2_fs:g} Hz share one table of {len(ppg)} rows"
+        )
+    meta_path = capnobase_file(csv_dir, case_id, "meta")
+    meta = read_capnobase_fields(meta_path) if meta_path else {}
+
+    annotations = None
+    labels_path = capnobase_file(csv_dir, case_id, "labels") if read_labels else None
+    if read_labels and labels_path is None:
+        warnings_list.append("labels file missing, breaths are detected instead")
+    if labels_path is not None:
+        annotations = read_capnobase_annotations(
+            labels_path, ppg_fs, co2_fs, len(ppg), len(co2)
+        )
+        warnings_list.extend(annotations["warnings"])
+    breaths = annotations["breaths"] if annotations else None
+    label_rr = (
+        float(60.0 * co2_fs / np.median(np.diff(breaths)))
+        if breaths is not None
+        else np.nan
+    )
+    reference_path = capnobase_file(csv_dir, case_id, "reference")
+    reference_rr, reference_field = (
+        read_capnobase_reference_rr(reference_path) if reference_path else (np.nan, "")
+    )
+    if np.isfinite(label_rr) and np.isfinite(reference_rr):
+        if abs(label_rr - reference_rr) > CAPNOBASE_RR_CHECK_BPM:
+            warnings_list.append(
+                f"label RR {label_rr:.1f} vs reference-file RR {reference_rr:.1f} bpm: "
+                "check label units and sampling rate"
+            )
+    empty_spans = np.empty((0, 2))
+    ppg_artifacts = annotations["ppg_artifacts_sec"] if annotations else empty_spans
+    co2_artifacts = annotations["co2_artifacts_sec"] if annotations else empty_spans
+    age_values = [
+        _field_numbers(tokens)
+        for name, tokens in meta.items()
+        if "age" in name.split("_")
+    ]
+    age_values = [values[0] for values in age_values if len(values)]
+    diagnostics = {
+        "CapnoBase_Signal_Columns": signal_columns,
+        "CapnoBase_FS_Pleth": ppg_fs,
+        "CapnoBase_FS_CO2": co2_fs,
+        "CapnoBase_FS_Source": f"{ppg_fs_source},{co2_fs_source}",
+        "CapnoBase_Record_Sec": float(record_sec),
+        "CapnoBase_Label_Field": annotations["breath_field"] if annotations else "",
+        "CapnoBase_Label_Units": annotations["units"] if annotations else "",
+        "CapnoBase_Label_Index_Base": annotations["index_base"] if annotations else np.nan,
+        "CapnoBase_Breath_Labels": int(len(breaths)) if breaths is not None else 0,
+        "CapnoBase_Label_RR_Median_BPM": label_rr,
+        "CapnoBase_Reference_RR_Median_BPM": reference_rr,
+        "CapnoBase_Reference_RR_Field": reference_field,
+        "CapnoBase_PPG_Artifacts": int(len(ppg_artifacts)),
+        "CapnoBase_PPG_Artifact_Sec": float(np.sum(ppg_artifacts[:, 1] - ppg_artifacts[:, 0])),
+        "CapnoBase_CO2_Artifacts": int(len(co2_artifacts)),
+        "CapnoBase_CO2_Artifact_Sec": float(np.sum(co2_artifacts[:, 1] - co2_artifacts[:, 0])),
+        "CapnoBase_Ventilation": _text_field(param, "vent") or _text_field(meta, "vent"),
+        "CapnoBase_Age": float(age_values[0]) if age_values else np.nan,
+        "CapnoBase_Loading_Warnings": " | ".join(warnings_list),
+    }
+    return {
+        "ppg": ppg,
+        "co2": co2,
+        "ppg_fs": ppg_fs,
+        "co2_fs": co2_fs,
+        "breaths": breaths,
+        "startinsp": annotations["startinsp"] if annotations else np.empty(0, dtype=np.int64),
+        "pleth_peaks": annotations["pleth_peaks"] if annotations else np.empty(0, dtype=np.int64),
+        "ppg_artifacts_sec": ppg_artifacts,
+        "co2_artifacts_sec": co2_artifacts,
+        "label_fields": annotations["fields"] if annotations else [],
+        "diagnostics": diagnostics,
+        "warnings": warnings_list,
+    }
 
 
-def _is_number(text: str) -> bool:
-    try:
-        float(text)
-    except ValueError:
-        return False
-    return True
-
-
-def _numeric_values(cells: Sequence[str]) -> np.ndarray:
-    values = pd.to_numeric(pd.Series(list(cells), dtype=object), errors="coerce")
-    return values.dropna().to_numpy(float)
+def capnobase_case_ids(csv_dir: Path) -> List[str]:
+    return sorted(
+        {
+            path.name.split("_")[0]
+            for suffix in CAPNOBASE_FILE_SUFFIXES
+            for path in csv_dir.glob(f"*_8min_signal{suffix}")
+        }
+    )
 
 
 def load_capnobase_subjects(spec: WindowSpec) -> Dict[str, dict]:
     cfg = DATASET_CONFIGS["capnobase"]
     data = {}
     csv_dir = Path(cfg["data_path"])
-    case_ids = sorted(
-        {
-            path.name.split("_")[0]
-            for path in csv_dir.glob("*_8min_signal.csv")
-        }
-    )
-    for case_id in case_ids:
+    for case_id in capnobase_case_ids(csv_dir):
         try:
-            signal_df = pd.read_csv(
-                csv_dir / f"{case_id}_8min_signal.csv"
+            case = read_capnobase_case(
+                csv_dir,
+                case_id,
+                cfg["default_fs"],
+                read_labels=bool(cfg.get("expert_breath_labels")),
             )
-            param_df = pd.read_csv(
-                csv_dir / f"{case_id}_8min_param.csv"
+            for message in case["warnings"]:
+                print(f"[CapnoBase {case_id}] {message}")
+            artifacts = (
+                [(case["ppg_artifacts_sec"], case["co2_artifacts_sec"])]
+                if cfg.get("use_artifact_labels")
+                else None
             )
-            orig_fs = int(param_df["samplingrate_pleth"].iloc[0])
-            co2_fs = (
-                int(param_df["samplingrate_co2"].iloc[0])
-                if "samplingrate_co2" in param_df.columns
-                else orig_fs
-            )
-            ppg = signal_df["pleth_y"].to_numpy(dtype=np.float32)
-            rsp = signal_df["co2_y"].to_numpy(dtype=np.float32)
-            labels, label_source = (
-                read_capnobase_breath_labels(csv_dir, case_id, co2_fs)
-                if cfg.get("expert_breath_labels")
-                else (None, "disabled")
-            )
-            if labels is None:
-                print(f"[CapnoBase {case_id}] expert labels not used: {label_source}")
             result = preprocess_subject_from_pairs(
-                [(ppg, rsp, orig_fs, co2_fs)],
+                [(case["ppg"], case["co2"], case["ppg_fs"], case["co2_fs"])],
                 spec,
                 ANALYSIS_PROFILES[cfg["profile"]],
-                [labels],
+                [case["breaths"]],
+                artifacts,
             )
             if result is not None:
+                result["reference_diagnostics"].update(case["diagnostics"])
                 data[case_id] = result
         except Exception as exc:
             print(f"[CapnoBase {case_id}] skipped: {exc}")
     return data
+
+
+def capnobase_label_checks(case: dict) -> dict:
+    """Checks that the labels sit where the signals say they should.
+
+    A start of expiration is where CO2 rises (mean of the 0.5 s after the
+    label above the 0.5 s before it), a start of inspiration is where it
+    falls, the two alternate, and an expert pulse peak is the PPG maximum
+    within +-0.1 s (offset 0 means index base and sampling rate agree).
+    """
+    co2 = np.asarray(case["co2"], dtype=np.float64)
+    ppg = np.asarray(case["ppg"], dtype=np.float64)
+    half = int(round(0.5 * case["co2_fs"]))
+
+    def co2_step(labels: np.ndarray) -> np.ndarray:
+        labels = labels[(labels >= half) & (labels < len(co2) - half)]
+        return np.asarray(
+            [
+                np.nanmean(co2[index : index + half]) - np.nanmean(co2[index - half : index])
+                for index in labels
+            ]
+        )
+
+    breaths = case["breaths"] if case["breaths"] is not None else np.empty(0, dtype=np.int64)
+    exp_step = co2_step(breaths)
+    insp_step = co2_step(case["startinsp"])
+    alternation = np.nan
+    if len(breaths) > 1 and len(case["startinsp"]):
+        between = np.searchsorted(case["startinsp"], breaths[1:]) - np.searchsorted(
+            case["startinsp"], breaths[:-1]
+        )
+        alternation = float(np.mean(between == 1))
+    reach = int(round(0.1 * case["ppg_fs"]))
+    offsets = [
+        int(np.nanargmax(ppg[p - reach : p + reach + 1])) - reach
+        for p in case["pleth_peaks"]
+        if reach <= p < len(ppg) - reach and np.any(np.isfinite(ppg[p - reach : p + reach + 1]))
+    ]
+    offsets = np.asarray(offsets, dtype=np.float64)
+    return {
+        "Check_CO2_Rises_At_Breath_Label": float(np.mean(exp_step > 0)) if len(exp_step) else np.nan,
+        "Check_CO2_Falls_At_StartInsp": float(np.mean(insp_step < 0)) if len(insp_step) else np.nan,
+        "Check_One_StartInsp_Per_Breath": alternation,
+        "Check_Pleth_Peak_Labels": int(len(case["pleth_peaks"])),
+        "Check_Pleth_Peak_Offset_Median_Samples": float(np.median(offsets)) if len(offsets) else np.nan,
+        "Check_Pleth_Peak_Within_10ms": float(
+            np.mean(np.abs(offsets) <= 0.01 * case["ppg_fs"])
+        )
+        if len(offsets)
+        else np.nan,
+        "Check_Label_HR_Median_BPM": float(
+            60.0 * case["ppg_fs"] / np.median(np.diff(case["pleth_peaks"]))
+        )
+        if len(case["pleth_peaks"]) > 1
+        else np.nan,
+    }
+
+
+def inspect_capnobase(results_root: Path) -> pd.DataFrame:
+    """Print and save how every CapnoBase case is read (no training).
+
+    Writes capnobase_loading_check.csv. A correct load shows 300 Hz, a
+    480 s record, label RR equal to the reference-file RR, CO2 rising at
+    nearly every breath label, and a median pulse-peak offset of 0 samples.
+    """
+    cfg = DATASET_CONFIGS["capnobase"]
+    csv_dir = Path(cfg["data_path"])
+    case_ids = capnobase_case_ids(csv_dir)
+    print(f"CapnoBase directory: {csv_dir} ({len(case_ids)} cases)")
+    rows = []
+    for case_id in case_ids:
+        try:
+            case = read_capnobase_case(csv_dir, case_id, cfg["default_fs"])
+            row = {
+                "Case": case_id,
+                **case["diagnostics"],
+                **capnobase_label_checks(case),
+                "CapnoBase_Label_Fields": " ".join(case["label_fields"]),
+            }
+        except Exception as exc:
+            row = {"Case": case_id, "CapnoBase_Loading_Warnings": f"failed: {exc}"}
+        rows.append(row)
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        print("No {case}_8min_signal.csv files found.")
+        return frame
+    results_root.mkdir(parents=True, exist_ok=True)
+    path = results_root / "capnobase_loading_check.csv"
+    frame.to_csv(path, index=False, encoding="utf-8-sig")
+    shown = {
+        "Case": "case",
+        "CapnoBase_FS_Pleth": "fs",
+        "CapnoBase_Record_Sec": "sec",
+        "CapnoBase_Breath_Labels": "breaths",
+        "CapnoBase_Label_RR_Median_BPM": "RR_lab",
+        "CapnoBase_Reference_RR_Median_BPM": "RR_ref",
+        "Check_CO2_Rises_At_Breath_Label": "CO2up",
+        "Check_Pleth_Peak_Offset_Median_Samples": "pk_off",
+        "CapnoBase_PPG_Artifact_Sec": "ppg_art_s",
+        "CapnoBase_CO2_Artifact_Sec": "co2_art_s",
+        "CapnoBase_Ventilation": "vent",
+    }
+    table = frame[[column for column in shown if column in frame.columns]].rename(columns=shown)
+    with pd.option_context("display.max_rows", None, "display.width", 160):
+        print(table.to_string(index=False, float_format=lambda value: f"{value:.2f}"))
+    warned = frame[frame["CapnoBase_Loading_Warnings"].fillna("").astype(str) != ""]
+    for _, row in warned.iterrows():
+        print(f"[CapnoBase {row['Case']}] {row['CapnoBase_Loading_Warnings']}")
+    print(f"Saved: {path}")
+    return frame
 
 
 def _mat_stem(filename: str) -> str:
@@ -3145,6 +3636,7 @@ def contiguous_runs(mask: np.ndarray) -> List[Tuple[int, int]]:
 
 REFERENCE_EXCLUSION_REASONS = (
     "ref_structural_invalid",
+    "ref_artifact_label",
     "ref_rr_undefined",
     "ref_irregular_cycles",
     "ref_disagreement",
@@ -3376,10 +3868,24 @@ def evaluate_subject_minutes(
                     else np.nan
                 )
                 structural = float(np.mean(ref_structural[start:end]))
+                ref_artifact = (
+                    float(np.mean(reference["artifact_mask"][start:end]))
+                    if reference.get("artifact_mask") is not None
+                    else 0.0
+                )
+                ppg_artifact = (
+                    float(np.mean(reference["ppg_artifact_mask"][start:end]))
+                    if reference.get("ppg_artifact_mask") is not None
+                    else 0.0
+                )
                 _, _, ref_rr_cto, _ = count_orig_breaths(ref_signal[start:end], fs)
                 ref_rr_fft = fft_rr_bpm(ref_signal[start:end], fs, rr_band, subharmonic)
                 if structural < MIN_USABLE_PROPORTION:
                     ref_valid, reason = False, "ref_structural_invalid"
+                elif ref_artifact > 0.0:
+                    # Expert-labelled reference artifact: breaths inside it
+                    # may be unlabelled, so the minute has no ground truth.
+                    ref_valid, reason = False, "ref_artifact_label"
                 elif reference["label_based"]:
                     if not np.isfinite(label_rr):
                         ref_valid, reason = False, "ref_rr_undefined"
@@ -3448,6 +3954,8 @@ def evaluate_subject_minutes(
                         "Ref_Valid": bool(ref_valid),
                         "Ref_Exclusion_Reason": reason,
                         "Ref_Structural_Fraction": structural,
+                        "Ref_Artifact_Label_Fraction": ref_artifact,
+                        "PPG_Artifact_Label_Fraction": ppg_artifact,
                         "Ref_RR_CtO": ref_rr_cto,
                         "Ref_RR_FFT": ref_rr_fft,
                         "Ref_RR_Label": label_rr,
@@ -4177,8 +4685,24 @@ def build_manifest(
                 "expert_breath_labels": bool(
                     DATASET_CONFIGS[key].get("expert_breath_labels", False)
                 ),
+                "expert_artifact_labels": bool(
+                    DATASET_CONFIGS[key].get("use_artifact_labels", False)
+                ),
             }
             for key in dataset_keys
+        },
+        "capnobase_files": {
+            "labels": (
+                "co2_startexp_x (fallback co2_startinsp_x), one cell of "
+                f"space-separated sample numbers, index base {CAPNOBASE_LABEL_INDEX_BASE} "
+                "removed, unit from units_x"
+            ),
+            "sampling_rates": "param samplingrate_pleth / samplingrate_co2",
+            "artifacts": (
+                "pleth *_artif_x -> unusable PPG samples; co2 *_artif_x -> "
+                "no training window and no scored minute overlapping them"
+            ),
+            "check": "--inspect-capnobase writes capnobase_loading_check.csv",
         },
         "capnography_adaptive_upper_edge": (
             f"clip({ADAPTIVE_UPPER_HR_FRACTION} x PPG spectral HR, "
@@ -4258,6 +4782,10 @@ def build_manifest(
 def run_experiment(args: argparse.Namespace) -> None:
     results_root = Path(args.results_root).resolve()
     results_root.mkdir(parents=True, exist_ok=True)
+    DATASET_CONFIGS["capnobase"]["use_artifact_labels"] = args.capnobase_artifacts
+    if args.inspect_capnobase:
+        inspect_capnobase(results_root)
+        return
     if args.require_cuda and not torch.cuda.is_available():
         raise RuntimeError(
             "CUDA is required by default. Use --no-require-cuda for a smoke test."
@@ -4689,11 +5217,26 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Reuse folds whose Fold_Summaries JSON already exists.",
     )
     parser.add_argument(
+        "--inspect-capnobase",
+        action="store_true",
+        help=(
+            "Only read every CapnoBase case, print how it was loaded and save "
+            "capnobase_loading_check.csv (no training, no GPU needed)."
+        ),
+    )
+    parser.add_argument(
+        "--ignore-capnobase-artifacts",
+        dest="capnobase_artifacts",
+        action="store_false",
+        help="Do not use the expert artifact labels of CapnoBase.",
+    )
+    parser.add_argument(
         "--save-features",
         action="store_true",
         help="Also store the post-fusion features in each prediction file.",
     )
     parser.set_defaults(
+        capnobase_artifacts=DATASET_CONFIGS["capnobase"]["use_artifact_labels"],
         require_cuda=True,
         use_identity_channel=MODEL_CONFIG["use_identity_channel"],
         use_scale_gate=MODEL_CONFIG["use_scale_gate"],
