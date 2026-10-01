@@ -65,8 +65,17 @@ and uses 10x the base learning rate. Event breaths are peaks with at least
 Evaluation: legacy v16 count and PCC (unchanged definitions), event /
 count-orig / FFT RR against the fixed ground truth on reference-valid
 minutes, missed and extra breaths per minute, smart fusion (withheld when
-the three estimates' SD exceeds 4 bpm) with the retained share, and pooled
-minute-level MAE/RMSE. The legacy count is not valid for capnograms outside
+the three estimates' SD exceeds 4 bpm) with the retained share, the median
+of the three estimates on every valid minute (RR_MAE_Median3), and pooled
+minute-level MAE/RMSE.
+
+CapnoBase target choice: on a heterogeneous synthetic CapnoBase set (6-44
+bpm, varying I:E split, EtCO2, delay, and inverted PPG modulation under
+ventilation) the label phase target with the median of three gave the
+lowest RR MAE (pooled 0.39 bpm vs 0.51 with the capnogram target; event
+head 0.67 vs 1.00), so "phase" is the default. Synthetic results do not
+guarantee the same order on the real recordings; --capnography-target co2
+reproduces the alternative. The legacy count is not valid for capnograms outside
 6-30 bpm; it is kept only for comparison with earlier results.
 """
 
@@ -384,6 +393,7 @@ GT_PERFORMANCE_METRICS = (
     "Peak_Timing_Error_ms",
     "RR_MAE_SmartFusion",
     "SF_Retained_Ratio",
+    "RR_MAE_Median3",
     "Ref_Valid_Ratio",
 )
 COMPARISON_METRICS = (*PERFORMANCE_METRICS, *GT_PERFORMANCE_METRICS)
@@ -397,6 +407,7 @@ LOWER_IS_BETTER_METRICS = {
     "Peak_Extra_per_min",
     "Peak_Timing_Error_ms",
     "RR_MAE_SmartFusion",
+    "RR_MAE_Median3",
 }
 
 FEATURE_METRICS = (
@@ -3182,6 +3193,7 @@ def summarize_subject_minutes(frame: pd.DataFrame) -> dict:
         "SF_N_Retained": 0,
         "SF_Retained_Ratio": np.nan,
         "RR_MAE_SmartFusion": np.nan,
+        "RR_MAE_Median3": np.nan,
         "N60_Discordant_Legacy": 0,
     }
     if frame.empty:
@@ -3236,6 +3248,7 @@ def summarize_subject_minutes(frame: pd.DataFrame) -> dict:
             "SF_N_Retained": int(len(retained)),
             "SF_Retained_Ratio": float(len(retained) / len(valid)),
             "RR_MAE_SmartFusion": _mean_or_nan(retained["AE_SmartFusion"]),
+            "RR_MAE_Median3": _mean_or_nan(valid["AE_Median3"]),
         }
     )
     return summary
@@ -3268,7 +3281,8 @@ def evaluate_subject_minutes(
       of the median breath interval, matched on the whole run so that
       minute edges do not split a pair;
     * smart fusion: mean of the three estimates, withheld when their SD
-      exceeds 4 breaths/min (Karlen et al. 2013).
+      exceeds 4 breaths/min (Karlen et al. 2013);
+    * median of the three estimates on every valid minute (no withholding).
     """
     predictions = outputs["predictions"]
     targets = outputs["targets"]
@@ -3399,6 +3413,10 @@ def evaluate_subject_minutes(
                     np.isfinite(estimates_sd) and estimates_sd <= SMART_FUSION_SD_BPM
                 )
                 fused = float(np.mean(estimates)) if sf_retained else np.nan
+                # Median of the three estimates: no minute is withheld, and a
+                # single failing estimate cannot move the result.
+                finite = estimates[np.isfinite(estimates)]
+                median3 = float(np.median(finite)) if len(finite) else np.nan
 
                 # Breath-level matching attributed by breath time.
                 gt_in = (gt_span >= start) & (gt_span < end)
@@ -3455,6 +3473,10 @@ def evaluate_subject_minutes(
                         "SF_Retained": sf_retained,
                         "SF_Fused_RR": fused,
                         "AE_SmartFusion": abs(fused - gt_rate) if sf_retained else np.nan,
+                        "Median3_RR": median3,
+                        "AE_Median3": abs(median3 - gt_rate)
+                        if np.isfinite(median3)
+                        else np.nan,
                     }
                 )
     frame = pd.DataFrame(rows)
@@ -3714,6 +3736,7 @@ def build_minute_level_summary(windows: pd.DataFrame) -> pd.DataFrame:
                 ("Wave_CtO", "AE_Wave_CtO", valid),
                 ("Wave_FFT", "AE_Wave_FFT", valid),
                 ("SmartFusion", "AE_SmartFusion", retained),
+                ("Median3", "AE_Median3", valid),
             ):
                 errors = (
                     pd.to_numeric(subset[column], errors="coerce").dropna().to_numpy(float)
@@ -3887,6 +3910,7 @@ METRIC_LABELS = {
     "Peak_Timing_Error_ms": "Matched breath timing error (ms)",
     "RR_MAE_SmartFusion": "Smart-fusion RR MAE on retained minutes (BPM)",
     "SF_Retained_Ratio": "Smart-fusion retained share of valid minutes",
+    "RR_MAE_Median3": "Median-of-three RR MAE, all valid minutes (BPM)",
     "Ref_Valid_Ratio": "Share of minutes with a valid reference",
 }
 
@@ -4423,7 +4447,8 @@ def run_experiment(args: argparse.Namespace) -> None:
                         f"Event MAE={summary['RR_MAE_Event']:.3f}, "
                         f"wrong/min={summary['Peak_Wrong_per_min']:.2f}, "
                         f"SF MAE={summary['RR_MAE_SmartFusion']:.3f} "
-                        f"(kept {summary['SF_Retained_Ratio']:.0%}) | "
+                        f"(kept {summary['SF_Retained_Ratio']:.0%}), "
+                        f"Median3 MAE={summary['RR_MAE_Median3']:.3f} | "
                         f"BestEpoch={audit['Best_Epoch']}"
                     )
                 except Exception as exc:
@@ -4553,6 +4578,7 @@ def run_experiment(args: argparse.Namespace) -> None:
             f"wrong/min={row['Peak_Wrong_per_min_Mean']:.2f}, "
             f"SF MAE={row['RR_MAE_SmartFusion_Mean']:.3f} "
             f"(kept {row['SF_Retained_Ratio_Mean']:.0%}), "
+            f"Median3 MAE={row['RR_MAE_Median3_Mean']:.3f}, "
             f"valid ref {row['Ref_Valid_Ratio_Mean']:.0%}"
         )
     pooled = minute_level[minute_level["Dataset"] == "CombinedAllDatasets"]
@@ -4562,7 +4588,8 @@ def run_experiment(args: argparse.Namespace) -> None:
             f"  {row['Window_Label']}: minutes {row['N_Ref_Valid']}/{row['N_Minutes']} valid | "
             f"Event MAE={row['Event_MAE']:.3f}, RMSE={row['Event_RMSE']:.3f} | "
             f"SF MAE={row['SmartFusion_MAE']:.3f}, RMSE={row['SmartFusion_RMSE']:.3f}, "
-            f"kept {row['SF_Retained_Ratio']:.0%}"
+            f"kept {row['SF_Retained_Ratio']:.0%} | "
+            f"Median3 MAE={row['Median3_MAE']:.3f}, RMSE={row['Median3_RMSE']:.3f}"
         )
     if not baseline_comparison.empty:
         print("Paired vs baseline (CombinedAllDatasets):")
