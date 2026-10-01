@@ -310,6 +310,10 @@ ANALYSIS_PROFILES = {
         # modulation. Polarity is fixed: high CO2 is expiration.
         "max_target_lag_sec": 3.0,
         "fixed_target_polarity": True,
+        # Waveform target when expert breath labels exist: "phase" is a
+        # respiratory-phase waveform built from the labels (see
+        # label_phase_waveform); "co2" is the band-passed capnogram.
+        "capnography_target": "phase",
         "fft_subharmonic_check": True,  # trapezoid capnogram harmonics
         "resampler": "poly",
     },
@@ -667,6 +671,25 @@ def respiratory_filter(
     if not profile["adaptive_upper"] and tuple(band) == tuple(RESP_BAND_HZ):
         return bandpass_filter(signal, fs, band[0], band[1])[0]
     return sos_bandpass(signal, fs, band[0], band[1])
+
+
+def label_phase_waveform(labels: np.ndarray, length: int) -> np.ndarray:
+    """Respiratory-phase waveform from expert breath onsets.
+
+    The phase rises linearly from 0 to 1 between consecutive labels (and is
+    extrapolated with the first and last interval), and the waveform is
+    sin(2 pi phase), so every labelled breath is one cycle whose upward zero
+    crossing is exactly the label. RR needs only breath timing; the rest of
+    a capnogram (trapezoid shape, inspiratory/expiratory split, EtCO2 level)
+    varies between subjects and cannot be inferred from the PPG, so this
+    target keeps the timing and drops what the model cannot predict.
+    """
+    labels = np.unique(np.asarray(labels, dtype=np.float64))
+    samples = np.arange(length, dtype=np.float64)
+    intervals = np.diff(labels)
+    index = np.clip(np.searchsorted(labels, samples, side="right") - 1, 0, len(labels) - 2)
+    phase = (samples - labels[index]) / intervals[index]
+    return np.sin(2.0 * np.pi * phase).astype(np.float32)
 
 
 def shift_signal(signal: np.ndarray, lag: int, fill=None) -> np.ndarray:
@@ -1374,6 +1397,11 @@ def preprocess_segment(
     band = resolve_respiratory_band(profile, ppg_hr_hz)
     ppg_low = respiratory_filter(ppg_raw, fs, band, profile)
     rsp_low = respiratory_filter(rsp_raw_arr, fs, band, profile)
+    use_phase_target = bool(
+        profile.get("capnography_target") == "phase"
+        and label_samples is not None
+        and len(label_samples) >= 3
+    )
     if profile["max_target_lag_sec"] > 0:
         # Half a breath period from the expert labels (or breaths detected on
         # the unshifted reference), never below the profile minimum.
@@ -1385,17 +1413,26 @@ def preprocess_segment(
         max_lag_sec = float(
             np.clip(0.5 * period_sec, profile["max_target_lag_sec"], MAX_TARGET_LAG_SEC)
         )
-        rsp_low, lag, sign, alignment_corr = align_target_lag_and_sign(
+        # The waveform target (label phase waveform or capnogram) is aligned
+        # to the PPG; the capnogram reference moves by the same lag.
+        unaligned_target = (
+            label_phase_waveform(label_samples, length) if use_phase_target else rsp_low
+        )
+        target_signal, lag, sign, alignment_corr = align_target_lag_and_sign(
             ppg_low,
-            rsp_low,
+            unaligned_target,
             fs,
             max_lag_sec,
             allow_sign_flip=not profile["fixed_target_polarity"],
         )
+        rsp_low = target_signal if not use_phase_target else (
+            sign * shift_signal(rsp_low, lag)
+        ).astype(np.float32)
     else:
         centered = (ppg_low - np.mean(ppg_low)) * (rsp_low - np.mean(rsp_low))
         sign = -1.0 if float(np.mean(centered)) < 0.0 else 1.0
         rsp_low = align_target_orientation(ppg_low, rsp_low)
+        target_signal = rsp_low
         lag = 0
         alignment_corr = safe_pcc(ppg_low, rsp_low)
     beat_distance = (
@@ -1448,6 +1485,7 @@ def preprocess_segment(
         "Target_Sign": float(sign),
         "Target_Alignment_Corr": float(alignment_corr),
         "Expert_Labels_Used": bool(label_based),
+        "Waveform_Target": "label_phase" if use_phase_target else "reference_signal",
         "GT_Breaths": int(len(reference_breaths)),
         "Detected_Breaths": int(len(detected_breaths)),
     }
@@ -1510,7 +1548,7 @@ def preprocess_segment(
         quality_rows.append(diagnostics)
         if passed:
             low_kept.append(ppg_low[int(start):end])
-            rsp_kept.append(rsp_low[int(start):end])
+            rsp_kept.append(target_signal[int(start):end])
             event_kept.append(
                 breath_event_target(reference_breaths, int(start), window_len, fs)
             )
@@ -4178,6 +4216,7 @@ def run_experiment(args: argparse.Namespace) -> None:
         use_identity_channel=args.use_identity_channel,
         use_scale_gate=args.use_scale_gate,
     )
+    ANALYSIS_PROFILES["capnography_wide_rr"]["capnography_target"] = args.capnography_target
     window_specs = [spec for spec in WINDOW_SPECS if spec.name in args.windows]
     dataset_keys = [key for key in DATASET_ORDER if key in args.datasets]
     manifest = build_manifest(
@@ -4567,6 +4606,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=Path,
         default=list(DEFAULT_BASELINE_CSVS),
         help="v16 early-fusion per-subject CSVs; pass no value to skip.",
+    )
+    parser.add_argument(
+        "--capnography-target",
+        choices=["phase", "co2"],
+        default=ANALYSIS_PROFILES["capnography_wide_rr"]["capnography_target"],
+        help="CapnoBase waveform target: label phase waveform or capnogram.",
     )
     parser.add_argument(
         "--resume",
