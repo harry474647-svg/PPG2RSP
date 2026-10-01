@@ -1,7 +1,8 @@
 """261001_RRWaveNet_fv: final version of the v16 early-fusion RR pipeline.
 
-Model: v16 Deep-only early stem fusion with the identity channel and scale
-gate, a dilated CNN decoder with a waveform head and a breath-event head,
+Model: v16 Deep-only early stem fusion with the identity channel (the scale
+gate is off by default; --scale-gate turns it back on), a dilated CNN
+decoder with a waveform head and a breath-event head,
 trained with the v16 waveform loss + heatmap BCE + soft-count loss. RR is
 scored per complete 60 s minute against a fixed ground truth, with reference
 quality control, breath matching and smart fusion (Karlen et al. 2013).
@@ -383,7 +384,9 @@ MODEL_CONFIG = {
     "identity_channel_bypasses_scale_gate": True,
     "identity_fusion_weight_init": "zeros",
     # Proposal 5: window-adaptive scale gate before the early stem fusion.
-    "use_scale_gate": True,
+    # Off by default: the stem branches enter the fusion with fixed weights,
+    # as in v16. --scale-gate turns it on.
+    "use_scale_gate": False,
     "scale_gate_descriptor": "relative_log_energy_of_pre_groupnorm_stem_responses",
     "scale_gate_hidden": 8,
     "scale_gate_output": "softmax_over_branches_times_branch_count",
@@ -461,7 +464,7 @@ BRANCH_COLORS = ("#f58518", "#e45756", "#b279a2")
 @dataclass(frozen=True)
 class ModelOptions:
     use_identity_channel: bool = True
-    use_scale_gate: bool = True
+    use_scale_gate: bool = False
 
     @property
     def key(self) -> str:
@@ -2863,9 +2866,9 @@ def make_breath_decoder_trunk() -> nn.Sequential:
 
 
 class DeepOnlyV16EventDecoder(nn.Module):
-    """v16 early stem fusion (identity channel, scale gate) + breath-event decoder.
+    """v16 early stem fusion (identity channel, optional scale gate) + event decoder.
 
-    stem branches -> scale gate -> [gated stem, identity channel]
+    stem branches -> [scale gate, off by default] -> [stem, identity channel]
     -> 1x1 fusion + GroupNorm (no GELU) -> depthwise residual encoder
     -> dilated decoder trunk -> {waveform head (tanh), breath-event head}.
     The waveform head is the v16 output layer (1x1 conv + tanh); the event
@@ -2875,7 +2878,7 @@ class DeepOnlyV16EventDecoder(nn.Module):
     def __init__(
         self,
         use_identity_channel: bool = True,
-        use_scale_gate: bool = True,
+        use_scale_gate: bool = False,
         stem_base_channels: Optional[int] = None,
     ):
         super().__init__()
@@ -4639,12 +4642,18 @@ def build_manifest(
         "model_label": model_options.label,
         "parameters": {
             "v16_early_fusion": count_parameters(reference) - event_head,
-            "v16_identity_scalegate": count_parameters(proposed) - event_head,
+            "v16_with_stem_options": count_parameters(proposed) - event_head,
             "proposed": count_parameters(proposed),
         },
         "model_path": (
-            "stem branches (k=32/64/128, 8 filters) -> scale gate -> "
-            "[gated stem, z-scored identity] -> 1x1 fusion + GroupNorm (no GELU) "
+            "stem branches (k=32/64/128, 8 filters) -> "
+            + ("scale gate -> " if model_options.use_scale_gate else "")
+            + (
+                "[stem, z-scored identity] -> "
+                if model_options.use_identity_channel
+                else ""
+            )
+            + "1x1 fusion + GroupNorm (no GELU) "
             "-> depthwise residual encoder -> dilated decoder trunk "
             "-> {waveform head (tanh), breath-event head (logits)}"
         ),
@@ -4855,8 +4864,20 @@ def run_experiment(args: argparse.Namespace) -> None:
                 tag = safe_tag(test_subject)
                 summary_path = summary_root / f"{tag}_summary.json"
                 fold_window_path = summary_root / f"{tag}_RR60s_windows.csv"
-                if args.resume and summary_path.exists():
-                    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                summary = (
+                    json.loads(summary_path.read_text(encoding="utf-8"))
+                    if args.resume and summary_path.exists()
+                    else None
+                )
+                if summary is not None and summary.get("Model") != model_options.key:
+                    # A fold of another model variant (e.g. with the scale
+                    # gate) in the same results root is retrained, not reused.
+                    print(
+                        f"{dataset_label} {test_subject}: stored fold is "
+                        f"{summary.get('Model')}, retraining as {model_options.key}"
+                    )
+                    summary = None
+                if summary is not None:
                     window_frame = (
                         pd.read_csv(
                             fold_window_path,
@@ -5077,7 +5098,8 @@ def run_experiment(args: argparse.Namespace) -> None:
         results_root,
         model_options.label,
     )
-    save_gate_boxplots(per_subject, results_root)
+    if model_options.use_scale_gate:
+        save_gate_boxplots(per_subject, results_root)
     excel_path = write_results_excel(
         results_root / f"{prefix}_results.xlsx",
         {
@@ -5181,10 +5203,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Disable proposal 4 (identity channel into the stem fusion).",
     )
     parser.add_argument(
+        "--scale-gate",
+        dest="use_scale_gate",
+        action="store_true",
+        help="Enable proposal 5 (window-adaptive scale gate); off by default.",
+    )
+    parser.add_argument(
         "--no-scale-gate",
         dest="use_scale_gate",
         action="store_false",
-        help="Disable proposal 5 (window-adaptive scale gate).",
+        help="Disable the scale gate (the default).",
     )
     parser.add_argument(
         "--datasets",
