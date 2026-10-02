@@ -11,21 +11,39 @@ pulse amplitude (RIAV) and the pulse intervals (RIFV) all reach the network
 261001_RRWaveNet_fv (0.1-0.5 Hz, or 0.05 Hz to <= 1 Hz for CapnoBase)
 removed the pulses and with them RIAV and RIFV.
 
-Why the network suits it unchanged: it is RRWaveNet-style, which was
-designed for raw PPG. The multi-scale stem kernels (32/64/128 samples =
-0.25/0.5/1 s) span the pulse upstroke, the whole pulse and the beat-to-beat
-scale; the GELU after each stem branch rectifies the pulses, so the
-depthwise dilated encoder (receptive field about 3.3 s, 4.3 s with the stem)
-can low-pass the pulse envelope and baseline into respiratory-rate
-components; the z-scored identity channel passes the unfiltered waveform to
-the 1x1 fusion. No gating is used.
+Structure for raw input (same layers and topology, two settings changed).
+With pulses in the input the network has to turn the pulse train into a
+respiratory waveform itself: average over whole beats for the baseline
+(RIIV), rectify and average the pulses for their amplitude (RIAV), compare
+beat spacing (RIFV). That needs longer temporal support than denoising an
+already respiratory-band input, so
+* stem kernels 32/64/128 -> 64/128/256 samples (0.5/1/2 s at 128 Hz): one
+  pulse, one beat-to-beat interval at 60 bpm, and two beats, so every
+  branch spans at least a whole pulse (+1,792 parameters, 11,202 in total);
+* encoder dilations (1, 2, 4, 8) -> (2, 4, 8, 16), no new parameters: the
+  encoder's receptive field grows from 421 to 841 samples (3.3 -> 6.6 s)
+  and the whole network's to about 9.5 s, i.e. the 10 s window, which
+  covers at least one breath down to about 6 breaths/min.
+Selection used the validation loss only (held-out windows of the training
+subjects; test subjects never looked at) of one BIDMC and one CapnoBase
+fold, 20 epochs each, residual encoder:
+    variant                              BIDMC val   CapnoBase val
+    original kernels and dilations         0.7167        0.5140
+    dilations (2, 4, 8, 16)                0.6928        0.5053
+    stem kernels 64/128/256                0.6874        0.5038
+    both (used here)                       0.6620        0.4937
+The two changes add up; a larger receptive field would exceed the window.
+The stem GELU rectifies the pulses so the dilated encoder can low-pass
+their envelope; the z-scored identity channel passes the unfiltered
+waveform to the 1x1 fusion. No gating is used.
 Encoder: the fv residual blocks (GELU(block(x) + x)).
 
 Unchanged: PPG quality control (pulse templates on the raw PPG), target and
 ground truth (the respiratory-band PPG is still computed, but only to align
 the reference target's lag and sign, never as model input), decoder, loss,
-evaluation and LOSOCV. Fold seeds come from the fv model key, so each fold
-starts from the same initial weights and batch order as the fv runs.
+evaluation and LOSOCV. Fold seeds come from the fv model key; the raw-PPG
+residual and residualX scripts have identical parameter shapes, so their
+paired folds start from the same initial weights and batch order.
 --ppg-input resp_band restores the respiratory-band input.
 
 Description of the encoder ablation and the fv pipeline follows.
@@ -255,8 +273,9 @@ WINDOW_SPECS = (
     WindowSpec(3, 60.0, 60.0, "w60s_nonoverlap", "60 s / 0% overlap"),
 )
 
-# Paired baseline: 261001_RRWaveNet_fv (respiratory-band input, residual
-# encoder); same seeds and code except for the model input.
+# Paired baseline: 261001_RRWaveNet_fv (respiratory-band input, v16 stem
+# kernels and encoder dilations, residual encoder); same seeds, data and
+# evaluation, so the comparison shows the raw-input model against fv.
 DEFAULT_BASELINE_CSVS = (
     Path(
         r"D:\PPG2RSP_RRWaveNet_Inspired\261001_RRWaveNet_fv\Results"
@@ -408,11 +427,13 @@ FFT_SUBHARMONIC_POWER_RATIO = 0.3
 # v16 Deep-only early-fusion configuration with proposals 4 and 5 and the
 # breath-event decoder.
 MODEL_CONFIG = {
-    "stem_kernel_sizes": (32, 64, 128),
+    # Raw-PPG input: 0.5/1/2 s stem kernels (v16: 32, 64, 128 samples).
+    "stem_kernel_sizes": (64, 128, 256),
     "stem_base_channels": 8,
     "hidden_channels": 24,
     "encoder_kernel_size": 15,
-    "encoder_dilations": (1, 2, 4, 8),
+    # Raw-PPG input: encoder receptive field 6.6 s (v16: 1, 2, 4, 8).
+    "encoder_dilations": (2, 4, 8, 16),
     "dropout": 0.20,
     # Keep the 24-channel representation as the decoder input; do not expand
     # it to 64 channels before reducing to the scalar waveform output.
@@ -447,6 +468,8 @@ MODEL_CONFIG = {
     "scale_gate_output_init": "zeros_uniform_branch_weights",
 }
 BRANCH_LABELS = tuple(f"k{size}" for size in MODEL_CONFIG["stem_kernel_sizes"])
+# v16 settings changed for the raw-PPG input (reference parameter count).
+V16_STRUCTURE = {"stem_kernel_sizes": (32, 64, 128), "encoder_dilations": (1, 2, 4, 8)}
 
 # Legacy v16 metrics (direct count on stitched, window-normalized signals).
 PERFORMANCE_METRICS = (
@@ -4767,7 +4790,12 @@ def build_manifest(
     window_specs: Sequence[WindowSpec],
     dataset_keys: Sequence[str],
 ) -> dict:
-    reference = ModelOptions(False, False, True, False).build()
+    saved = {key: MODEL_CONFIG[key] for key in V16_STRUCTURE}
+    MODEL_CONFIG.update(V16_STRUCTURE)
+    try:
+        reference = ModelOptions(False, False, True, False).build()
+    finally:
+        MODEL_CONFIG.update(saved)
     proposed = model_options.build()
     event_head = count_parameters(proposed.event_head)
     return {
