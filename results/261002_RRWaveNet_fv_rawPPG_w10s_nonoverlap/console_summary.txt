@@ -1,0 +1,130 @@
+v16 early fusion + identity channel + raw PPG input + breath-event decoder: 11202 parameters (v16 early fusion: 9377)
+
+[Window condition 1/3] 10 s / 0% overlap
+BIDMC: 53 LOSOCV folds; device=cpu
+BIDMC 01: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/01_summary.json
+BIDMC 02: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/02_summary.json
+BIDMC 03: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/03_summary.json
+BIDMC 04: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/04_summary.json
+BIDMC 05: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/05_summary.json
+BIDMC 06: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/06_summary.json
+BIDMC 07: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/07_summary.json
+BIDMC 08: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/08_summary.json
+BIDMC 09: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/09_summary.json
+BIDMC 10: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/10_summary.json
+BIDMC 11: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/11_summary.json
+BIDMC 12: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/12_summary.json
+BIDMC 13: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/13_summary.json
+BIDMC 14: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/14_summary.json
+BIDMC 15: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/15_summary.json
+BIDMC 16: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/16_summary.json
+BIDMC 17: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/17_summary.json
+BIDMC 18: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/18_summary.json
+BIDMC 19: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/19_summary.json
+BIDMC 20: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/20_summary.json
+BIDMC 21: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/21_summary.json
+BIDMC 22: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/22_summary.json
+BIDMC 23: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/23_summary.json
+BIDMC 24: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/24_summary.json
+BIDMC 25: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/25_summary.json
+BIDMC 26: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/26_summary.json
+BIDMC 27: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/27_summary.json
+BIDMC 28: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/28_summary.json
+BIDMC 29: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/29_summary.json
+BIDMC 30: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/30_summary.json
+BIDMC 31: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/31_summary.json
+BIDMC 32: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/32_summary.json
+BIDMC 33: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/33_summary.json
+BIDMC 34: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/34_summary.json
+BIDMC 35: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/35_summary.json
+BIDMC 36: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/36_summary.json
+BIDMC 37: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/37_summary.json
+BIDMC 38: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/38_summary.json
+BIDMC 39: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/39_summary.json
+BIDMC 40: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/40_summary.json
+BIDMC 41: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/41_summary.json
+BIDMC 42: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/42_summary.json
+BIDMC 43: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/43_summary.json
+BIDMC 44: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/44_summary.json
+BIDMC 45: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/45_summary.json
+BIDMC 46: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/46_summary.json
+BIDMC 47: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/47_summary.json
+BIDMC 48: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/48_summary.json
+BIDMC 49: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/49_summary.json
+BIDMC 50: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/50_summary.json
+BIDMC 51: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/51_summary.json
+BIDMC 52: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/52_summary.json
+BIDMC 53: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/BIDMC/Fold_Summaries/53_summary.json
+CapnoBase: 42 LOSOCV folds; device=cpu
+CapnoBase 0009: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0009_summary.json
+CapnoBase 0015: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0015_summary.json
+CapnoBase 0016: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0016_summary.json
+CapnoBase 0018: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0018_summary.json
+CapnoBase 0023: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0023_summary.json
+CapnoBase 0028: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0028_summary.json
+CapnoBase 0029: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0029_summary.json
+CapnoBase 0030: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0030_summary.json
+CapnoBase 0031: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0031_summary.json
+CapnoBase 0032: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0032_summary.json
+CapnoBase 0035: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0035_summary.json
+CapnoBase 0038: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0038_summary.json
+CapnoBase 0103: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0103_summary.json
+CapnoBase 0104: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0104_summary.json
+CapnoBase 0105: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0105_summary.json
+CapnoBase 0115: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0115_summary.json
+CapnoBase 0121: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0121_summary.json
+CapnoBase 0122: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0122_summary.json
+CapnoBase 0123: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0123_summary.json
+CapnoBase 0125: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0125_summary.json
+CapnoBase 0127: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0127_summary.json
+CapnoBase 0128: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0128_summary.json
+CapnoBase 0133: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0133_summary.json
+CapnoBase 0134: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0134_summary.json
+CapnoBase 0142: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0142_summary.json
+CapnoBase 0147: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0147_summary.json
+CapnoBase 0148: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0148_summary.json
+CapnoBase 0149: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0149_summary.json
+CapnoBase 0150: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0150_summary.json
+CapnoBase 0309: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0309_summary.json
+CapnoBase 0311: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0311_summary.json
+CapnoBase 0312: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0312_summary.json
+CapnoBase 0313: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0313_summary.json
+CapnoBase 0322: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0322_summary.json
+CapnoBase 0325: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0325_summary.json
+CapnoBase 0328: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0328_summary.json
+CapnoBase 0329: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0329_summary.json
+CapnoBase 0330: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0330_summary.json
+CapnoBase 0331: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0331_summary.json
+CapnoBase 0332: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0332_summary.json
+CapnoBase 0333: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0333_summary.json
+CapnoBase 0370: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0370_summary.json
+
+RR MAE per dataset (breaths/min; mean over held-out subjects):
+  Dataset              Window               N  Median3   Event  SmartF  kept  Legacy    PCC
+  BIDMC                10 s / 0% overlap   53    1.159   1.646   1.160   98%   1.349  0.469
+  CapnoBase            10 s / 0% overlap   42    2.050   2.308   1.814   86%   2.603  0.769
+  CombinedAllDatasets  10 s / 0% overlap   95    1.552   1.939   1.449   93%   1.903  0.602
+
+RR MAE per dataset, subjects with >= 3 valid minutes (in = included, out = below; out_Med3 = their own Median3 MAE; pooled = Median3 MAE over all valid minutes):
+  Dataset              Window              in out  Median3   Event  SmartF  kept  Legacy out_Med3  pooled
+  BIDMC                10 s / 0% overlap   52   1    1.094   1.562   1.114   98%   1.237    4.500   1.083
+  CapnoBase            10 s / 0% overlap   39   3    2.117   2.357   1.907   87%   2.484    1.167   1.765
+  CombinedAllDatasets  10 s / 0% overlap   91   4    1.533   1.903   1.454   93%   1.772    2.000   1.375
+  below 3 valid min, BIDMC 10 s / 0% overlap: 05(2/7)
+  below 3 valid min, CapnoBase 10 s / 0% overlap: 0147(2/7), 0309(2/7), 0329(2/3)
+
+Combined performance (mean over held-out subjects):
+  10 s / 0% overlap (N=95): legacy RR_MAE=1.903, PCC=0.602 | Event MAE=1.939, wrong/min=5.91, SF MAE=1.449 (kept 93%), Median3 MAE=1.552, valid ref 94%
+  20 s / 0% overlap (N=0): legacy RR_MAE=nan, PCC=nan | Event MAE=nan, wrong/min=nan, SF MAE=nan (kept nan%), Median3 MAE=nan, valid ref nan%
+  60 s / 0% overlap (N=0): legacy RR_MAE=nan, PCC=nan | Event MAE=nan, wrong/min=nan, SF MAE=nan (kept nan%), Median3 MAE=nan, valid ref nan%
+Pooled over minutes (CombinedAllDatasets):
+  10 s / 0% overlap: minutes 697/741 valid | Event MAE=1.762, RMSE=3.542 | SF MAE=1.071, RMSE=2.391, kept 94% | Median3 MAE=1.375, RMSE=3.454
+  20 s / 0% overlap: minutes 0/0 valid | Event MAE=nan, RMSE=nan | SF MAE=nan, RMSE=nan, kept nan% | Median3 MAE=nan, RMSE=nan
+  60 s / 0% overlap: minutes 0/0 valid | Event MAE=nan, RMSE=nan | SF MAE=nan, RMSE=nan, kept nan% | Median3 MAE=nan, RMSE=nan
+
+Saved results under: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res
+Per-subject: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/v16_early_fusion_identity_rawppg_eventdecoder_10s20s60s_nonoverlap_per_subject.csv
+Minute-level summary: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/v16_early_fusion_identity_rawppg_eventdecoder_10s20s60s_nonoverlap_minute_level_summary.csv
+Baseline comparison: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/v16_early_fusion_identity_rawppg_eventdecoder_10s20s60s_nonoverlap_baseline_comparison.csv
+Failed folds: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/failed_folds.csv
+Excel workbook: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/v16_early_fusion_identity_rawppg_eventdecoder_10s20s60s_nonoverlap_results.xlsx

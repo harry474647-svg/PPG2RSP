@@ -1,0 +1,13 @@
+﻿Dataset,Window_Order,Window_Config,Window_Label,N_Subjects,Best_Epoch_Mean,Best_Epoch_SD,Best_Epoch_N,Convergence_Epoch_95pct_Mean,Convergence_Epoch_95pct_SD,Convergence_Epoch_95pct_N,History_Epochs_Mean,History_Epochs_SD,History_Epochs_N
+BIDMC,1,w10s_nonoverlap,10 s / 0% overlap,53,112.83018867924528,10.66398657065453,53,62.18867924528302,5.585202302560088,53,119.15094339622641,6.042784083309914,53
+BIDMC,2,w20s_nonoverlap,20 s / 0% overlap,0,,,0,,,0,,,0
+BIDMC,3,w60s_nonoverlap,60 s / 0% overlap,0,,,0,,,0,,,0
+CapnoBase,1,w10s_nonoverlap,10 s / 0% overlap,42,116.07142857142857,4.474278015844143,42,62.357142857142854,5.083792652655263,42,120.0,0.0,42
+CapnoBase,2,w20s_nonoverlap,20 s / 0% overlap,0,,,0,,,0,,,0
+CapnoBase,3,w60s_nonoverlap,60 s / 0% overlap,0,,,0,,,0,,,0
+STEAM2,1,w10s_nonoverlap,10 s / 0% overlap,0,,,0,,,0,,,0
+STEAM2,2,w20s_nonoverlap,20 s / 0% overlap,0,,,0,,,0,,,0
+STEAM2,3,w60s_nonoverlap,60 s / 0% overlap,0,,,0,,,0,,,0
+CombinedAllDatasets,1,w10s_nonoverlap,10 s / 0% overlap,95,114.26315789473684,8.617412513756717,95,62.26315789473684,5.341946665489248,95,119.52631578947368,4.514379166720297,95
+CombinedAllDatasets,2,w20s_nonoverlap,20 s / 0% overlap,0,,,0,,,0,,,0
+CombinedAllDatasets,3,w60s_nonoverlap,60 s / 0% overlap,0,,,0,,,0,,,0
