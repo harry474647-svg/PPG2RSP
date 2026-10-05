@@ -1,8 +1,8 @@
-"""261005_RRWaveNet_Capno_Optimized_fv_1_STEAM2: 261005_RRWaveNet_Capno_Optimized_fv_1 on STEAM2.
+"""261005_RRWaveNet_Capno_Optimized_fv_2_STEAM2: 261005_RRWaveNet_Capno_Optimized_fv_2 on STEAM2.
 
-Identical model, training and evaluation to 261005_RRWaveNet_Capno_Optimized_fv_1.py; only the
+Identical model, training and evaluation to 261005_RRWaveNet_Capno_Optimized_fv_2.py; only the
 defaults differ: dataset STEAM2, 10 s non-overlapping windows, results
-under 261005_RRWaveNet_Capno_Optimized_fv_1_STEAM2, and no default paired baseline (pass --baseline-csv
+under 261005_RRWaveNet_Capno_Optimized_fv_2_STEAM2, and no default paired baseline (pass --baseline-csv
 with an earlier STEAM2 per-subject CSV to compare). STEAM2 was not used to
 choose any setting, so it is the fair test.
 
@@ -13,20 +13,20 @@ number of files), each holding a struct with fields "data" and "srate"
 6-30 breaths/min) with breaths detected on the reference RSP as ground
 truth, so speed augmentation targets 6-30 breaths/min.
 
-Run (GPU):                 python 261005_RRWaveNet_Capno_Optimized_fv_1_STEAM2.py
-Stem fusion ablation:      python 261005_RRWaveNet_Capno_Optimized_fv_1_STEAM2.py --stem-fusion none
-Check the data only:       python 261005_RRWaveNet_Capno_Optimized_fv_1_STEAM2.py --dry-run --no-require-cuda
+Run (GPU):                 python 261005_RRWaveNet_Capno_Optimized_fv_2_STEAM2.py
+Stem fusion ablation:      python 261005_RRWaveNet_Capno_Optimized_fv_2_STEAM2.py --stem-fusion none
+Check the data only:       python 261005_RRWaveNet_Capno_Optimized_fv_2_STEAM2.py --dry-run --no-require-cuda
 Resume:                    add --resume
 
-Description of 261005_RRWaveNet_Capno_Optimized_fv_1 follows.
+Description of 261005_RRWaveNet_Capno_Optimized_fv_2 follows.
 
-261005_RRWaveNet_Capno_Optimized_fv_1: CapnoBase-optimized raw-PPG RRWaveNet, model 1 of 2.
+261005_RRWaveNet_Capno_Optimized_fv_2: CapnoBase-optimized raw-PPG RRWaveNet, model 2 of 2.
 
-Model 1 (C7): 64 Hz, stem kernels 0.25/1/2 s (16/64/128 samples, 8 filters
+Model 2 (C8): 64 Hz, stem kernels 0.5/1/2 s (32/64/128 samples, 16 filters
 per branch), 1x1 stem fusion + GroupNorm, residual depthwise encoder
 (kernel 15, dilations 1, 2, 4, 8; 6.6 s), decoder kernels 7, 5 with
-dilations 16, 32 (3.5 s), v3 augmentation; 9,282 parameters. Model 2
-(261005_RRWaveNet_Capno_Optimized_fv_2) is the other configuration of the same
+dilations 16, 32 (3.5 s), v3 augmentation; 11,850 parameters. Model 1
+(261005_RRWaveNet_Capno_Optimized_fv_1) is the other configuration of the same
 selection. One decoder, no gating, raw PPG min-max normalized per 10 s
 window as the only input.
 
@@ -65,24 +65,25 @@ Selection, on CapnoBase only (BIDMC and STEAM2 were not used):
 
 Stem fusion ablation: --stem-fusion none removes the 1x1 fusion convolution
 and its GroupNorm. The three stem branches (each GroupNorm + GELU) and the
-z-scored identity channel are concatenated (25 channels) and go straight
-into the encoder, whose width follows (8,866 parameters). Fold seeds come
+z-scored identity channel are concatenated (49 channels) and go straight
+into the encoder, whose width follows (the 1x1 fusion otherwise projects
+them to 24 channels; 17,002 parameters). Fold seeds come
 from the same key as the main model, so each ablation fold starts from the
 same data order and the shared layers from the same random stream; results
 go to Results_no_stem_fusion unless --results-root is given.
 
-Run (GPU):              python 261005_RRWaveNet_Capno_Optimized_fv_1.py
-Stem fusion ablation:   python 261005_RRWaveNet_Capno_Optimized_fv_1.py --stem-fusion none
-STEAM2:                 261005_RRWaveNet_Capno_Optimized_fv_1_STEAM2.py
+Run (GPU):              python 261005_RRWaveNet_Capno_Optimized_fv_2.py
+Stem fusion ablation:   python 261005_RRWaveNet_Capno_Optimized_fv_2.py --stem-fusion none
+STEAM2:                 261005_RRWaveNet_Capno_Optimized_fv_2_STEAM2.py
 Resume:                 add --resume
 
 Description of the kernel-optimized base script follows.
 
-261005_RRWaveNet_Capno_Optimized_fv_1 (base): raw-PPG RRWaveNet for breathing-rate accuracy.
+261005_RRWaveNet_Capno_Optimized_fv_2 (base): raw-PPG RRWaveNet for breathing-rate accuracy.
 
 Model (one decoder, no gating, 1x1 stem fusion with GroupNorm unchanged):
 raw PPG (min-max per 10 s window) at 64 Hz -> three stem branches
-(kernels (16, 64, 128) samples = [0.25, 1.0, 2.0] s, 8 filters, GroupNorm,
+(kernels (32, 64, 128) samples = [0.5, 1.0, 2.0] s, 16 filters, GroupNorm,
 GELU) + z-scored identity channel -> 1x1 fusion + GroupNorm -> depthwise
 residual encoder (kernel 15, dilations (1, 2, 4, 8); receptive field
 6.58 s) -> v16 decoder (kernels (7, 5), dilations (16, 32);
@@ -327,7 +328,7 @@ from torch.utils.data import DataLoader, Dataset
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(
-    r"D:\PPG2RSP_RRWaveNet_Inspired\261005_RRWaveNet_Capno_Optimized_fv_1_STEAM2"
+    r"D:\PPG2RSP_RRWaveNet_Inspired\261005_RRWaveNet_Capno_Optimized_fv_2_STEAM2"
 )
 DEFAULT_RESULTS_ROOT = PROJECT_ROOT / "Results"
 
@@ -567,9 +568,9 @@ FFT_SUBHARMONIC_POWER_RATIO = 0.3
 # v16 Deep-only early-fusion configuration with proposals 4 and 5 and the
 # breath-event decoder.
 MODEL_CONFIG = {
-    # Stem kernels [0.25, 1.0, 2.0] s at 64 Hz (v16: 32, 64, 128 samples at 128 Hz).
-    "stem_kernel_sizes": (16, 64, 128),
-    "stem_base_channels": 8,
+    # Stem kernels [0.5, 1.0, 2.0] s at 64 Hz (v16: 32, 64, 128 samples at 128 Hz).
+    "stem_kernel_sizes": (32, 64, 128),
+    "stem_base_channels": 16,
     "hidden_channels": 24,
     "encoder_kernel_size": 15,
     # Encoder receptive field 6.58 s.
@@ -5302,7 +5303,7 @@ def build_manifest(
                 f"subjects (>= {MIN_VALIDATION_SUBJECTS}) evenly spaced over the rate ranking; "
                 "refit on all training subjects for the selected epochs"
             ),
-            "kernels": {"config": "K7", "fs": 64, "stem": [16, 64, 128], "enc_k": 15, "enc_d": [1, 2, 4, 8], "dec_k": [7, 5], "dec_d": [16, 32], "stem_sec": [0.25, 1.0, 2.0], "encoder_sec": 6.58, "decoder_sec": 3.52, "total_sec": 12.06},
+            "kernels": {"config": "K4", "fs": 64, "stem": [32, 64, 128], "enc_k": 15, "enc_d": [1, 2, 4, 8], "dec_k": [7, 5], "dec_d": [16, 32], "stem_sec": [0.5, 1.0, 2.0], "encoder_sec": 6.58, "decoder_sec": 3.52, "total_sec": 12.06},
             "event_target": (
                 f"sigma = {EVENT_SIGMA_PERIOD_FRACTION} x local period, limited to "
                 f"{EVENT_SIGMA_LIMITS_SEC} s"
@@ -5632,7 +5633,7 @@ def run_experiment(args: argparse.Namespace) -> None:
                             "Residual_Encoder_Type": MODEL_CONFIG["encoder_channel_mixing"],
                             "Encoder_Residual": model_options.use_residual,
                             "PPG_Input": PPG_INPUT,
-                            "Kernel_Config": "K7",
+                            "Kernel_Config": "K4",
                             "Model_FS": TARGET_FS,
                             "Speed_Aug": model_options.speed_aug,
                             "RR_Balance": model_options.rr_balance,

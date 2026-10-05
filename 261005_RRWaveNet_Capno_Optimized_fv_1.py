@@ -1,10 +1,10 @@
 """261005_RRWaveNet_Capno_Optimized_fv_1: CapnoBase-optimized raw-PPG RRWaveNet, model 1 of 2.
 
-Model 1: 64 Hz, stem kernels 0.25/1/2 s (16/64/128 samples, 8 filters per
-branch), 1x1 stem fusion + GroupNorm, residual depthwise encoder (kernel
-15, dilations 1, 2, 4, 8; 6.6 s), decoder kernels 7, 5 with dilations
-16, 32 (3.5 s), v3 augmentation; 9,282 parameters. Model 2
-(261005_RRWaveNet_Capno_Optimized_fv_2) is the runner-up of the same
+Model 1 (C7): 64 Hz, stem kernels 0.25/1/2 s (16/64/128 samples, 8 filters
+per branch), 1x1 stem fusion + GroupNorm, residual depthwise encoder
+(kernel 15, dilations 1, 2, 4, 8; 6.6 s), decoder kernels 7, 5 with
+dilations 16, 32 (3.5 s), v3 augmentation; 9,282 parameters. Model 2
+(261005_RRWaveNet_Capno_Optimized_fv_2) is the other configuration of the same
 selection. One decoder, no gating, raw PPG min-max normalized per 10 s
 window as the only input.
 
@@ -12,27 +12,32 @@ Selection, on CapnoBase only (BIDMC and STEAM2 were not used):
 * Kernel and sampling-rate pilot (30 epochs, held-out validation
   subjects): with the receptive fields kept equal in seconds, 64 Hz was as
   good as or better than 128 Hz, and a 3.5 s decoder (dilations 16, 32 at
-  64 Hz) gave the lowest CapnoBase error. Three structures were kept: K4
-  (stem 0.5/1/2 s), K7 (stem 0.25/1/2 s) and K8 (K4 with 16 filters per
-  stem branch), all with the 3.5 s decoder.
+  64 Hz) gave the lowest CapnoBase error. Three structures were kept, all
+  with the 3.5 s decoder: K4 (stem 0.5/1/2 s, 8 filters per branch), K7
+  (stem 0.25/1/2 s, 8 filters) and K8 (stem 0.5/1/2 s, 16 filters).
 * 5-fold subject-wise cross-validation of CapnoBase (folds stratified by
   the subject's median breathing rate, so every subject, including the two
   above 30 breaths/min, is tested once), 40 epochs, pooled minute-level
-  Median3 MAE in breaths/min (seed 1, 299 reference-valid minutes):
-      config  structure  augmentation  Median3   <12   12-25   >=30 bpm
-      C7      K7         v3              2.23    2.73   0.66    9.65  <- model 1
-      C4      K4         v3              2.33    2.77   0.76   10.65
-      C8      K8         v3              2.45    3.11   0.90    8.65
-      F7      K7         FastAug         2.89    4.11   0.78    8.58
-      F4      K4         FastAug         2.90    4.16   0.78    8.46
-      F8      K8         FastAug         3.12    4.66   0.85    8.06
-  FastAug (target rates drawn log-uniformly up to 50 breaths/min, window
-  re-cutting, slow gain and drift perturbation) lowered the error above 30
-  breaths/min but made slow breaths (< 12 breaths/min, half of the
-  CapnoBase minutes) double-counted more often, so the v3 augmentation is
-  used: rate-targeted speed augmentation (probability 0.5, target uniform
-  over the rates the window can reach with a time scale of 0.7-1.6,
-  6-45 breaths/min) and rate-balanced sampling.
+  Median3 MAE in breaths/min over 299 reference-valid minutes; the
+  breathing-rate columns are the 2-seed means:
+      config  structure  augmentation  seed 1  seed 2  mean   <12   12-25  >=30
+      C7      K7         v3             2.23    2.50   2.36   3.00   0.78   9.18  <- model 1
+      C8      K8         v3             2.45    2.31   2.38   3.07   0.76   8.81  <- model 2
+      C4      K4         v3             2.33    2.46   2.39   2.91   0.82   9.99
+      F7      K7         FastAug        2.89      -      -    4.11   0.78   8.58
+      F4      K4         FastAug        2.90      -      -    4.16   0.78   8.46
+      F8      K8         FastAug        3.12      -      -    4.66   0.85   8.06
+  (FastAug rows: seed 1 only.) The three v3 configurations are within 0.03
+  of each other; C7 had the lowest mean (lower than C4 for 29 of 41
+  subjects, Wilcoxon p = 0.03), and C8 was second with the lowest subject
+  mean and the lowest error above 30 breaths/min, ahead of C4 for 25 of 39
+  subjects. FastAug (target rates drawn log-uniformly up to 50
+  breaths/min, window re-cutting, slow gain and drift perturbation) lowered
+  the error above 30 breaths/min but made slow breaths (< 12 breaths/min,
+  half of the CapnoBase minutes) double-counted more often, so the v3
+  augmentation is used: rate-targeted speed augmentation (probability 0.5,
+  target uniform over the rates the window can reach with a time scale of
+  0.7-1.6, 6-45 breaths/min) and rate-balanced sampling.
   The settings were chosen on CapnoBase, so the CapnoBase LOSOCV result is
   optimistic; BIDMC and STEAM2 are independent of the selection.
 
