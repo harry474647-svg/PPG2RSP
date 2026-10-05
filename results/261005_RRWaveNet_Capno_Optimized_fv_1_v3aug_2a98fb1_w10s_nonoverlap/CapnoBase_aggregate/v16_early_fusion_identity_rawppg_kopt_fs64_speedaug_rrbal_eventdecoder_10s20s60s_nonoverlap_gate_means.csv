@@ -1,0 +1,13 @@
+﻿Dataset,Window_Order,Window_Config,Window_Label,N_Subjects,Gate_k16_Mean_Mean,Gate_k16_Mean_SD,Gate_k16_Mean_N,Gate_k64_Mean_Mean,Gate_k64_Mean_SD,Gate_k64_Mean_N,Gate_k128_Mean_Mean,Gate_k128_Mean_SD,Gate_k128_Mean_N,Gate_k16_SD_Mean,Gate_k16_SD_SD,Gate_k16_SD_N,Gate_k64_SD_Mean,Gate_k64_SD_SD,Gate_k64_SD_N,Gate_k128_SD_Mean,Gate_k128_SD_SD,Gate_k128_SD_N,Gate_k16_Spearman_vs_Target_Freq_Mean,Gate_k16_Spearman_vs_Target_Freq_SD,Gate_k16_Spearman_vs_Target_Freq_N,Gate_k64_Spearman_vs_Target_Freq_Mean,Gate_k64_Spearman_vs_Target_Freq_SD,Gate_k64_Spearman_vs_Target_Freq_N,Gate_k128_Spearman_vs_Target_Freq_Mean,Gate_k128_Spearman_vs_Target_Freq_SD,Gate_k128_Spearman_vs_Target_Freq_N,Gate_Normalized_Entropy_Mean_Mean,Gate_Normalized_Entropy_Mean_SD,Gate_Normalized_Entropy_Mean_N,Target_Dominant_Freq_Hz_Mean_Mean,Target_Dominant_Freq_Hz_Mean_SD,Target_Dominant_Freq_Hz_Mean_N,Fusion_Identity_Column_Norm_Mean,Fusion_Identity_Column_Norm_SD,Fusion_Identity_Column_Norm_N,Fusion_Identity_to_Stem_Norm_Ratio_Mean,Fusion_Identity_to_Stem_Norm_Ratio_SD,Fusion_Identity_to_Stem_Norm_Ratio_N
+BIDMC,1,w10s_nonoverlap,10 s / 0% overlap,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0
+BIDMC,2,w20s_nonoverlap,20 s / 0% overlap,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0
+BIDMC,3,w60s_nonoverlap,60 s / 0% overlap,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0
+CapnoBase,1,w10s_nonoverlap,10 s / 0% overlap,42,1.0,0.0,42,1.0,0.0,42,1.0,0.0,42,0.0,0.0,42,0.0,0.0,42,0.0,0.0,42,,,0,,,0,,,0,0.9999999999999998,1.1102230246251565e-16,42,0.2405137107894429,0.10173397307965243,42,0.1966695479030171,0.033233468691760075,42,0.14166149895605895,0.02521146425136238,42
+CapnoBase,2,w20s_nonoverlap,20 s / 0% overlap,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0
+CapnoBase,3,w60s_nonoverlap,60 s / 0% overlap,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0
+STEAM2,1,w10s_nonoverlap,10 s / 0% overlap,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0
+STEAM2,2,w20s_nonoverlap,20 s / 0% overlap,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0
+STEAM2,3,w60s_nonoverlap,60 s / 0% overlap,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0
+CombinedAllDatasets,1,w10s_nonoverlap,10 s / 0% overlap,42,1.0,0.0,42,1.0,0.0,42,1.0,0.0,42,0.0,0.0,42,0.0,0.0,42,0.0,0.0,42,,,0,,,0,,,0,0.9999999999999998,1.1102230246251565e-16,42,0.2405137107894429,0.10173397307965243,42,0.1966695479030171,0.033233468691760075,42,0.14166149895605895,0.02521146425136238,42
+CombinedAllDatasets,2,w20s_nonoverlap,20 s / 0% overlap,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0
+CombinedAllDatasets,3,w60s_nonoverlap,60 s / 0% overlap,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0,,,0

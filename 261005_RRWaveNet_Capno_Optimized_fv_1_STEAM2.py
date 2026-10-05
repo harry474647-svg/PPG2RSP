@@ -22,46 +22,49 @@ Description of 261005_RRWaveNet_Capno_Optimized_fv_1 follows.
 
 261005_RRWaveNet_Capno_Optimized_fv_1: CapnoBase-optimized raw-PPG RRWaveNet, model 1 of 2.
 
-Model 1 (C7): 64 Hz, stem kernels 0.25/1/2 s (16/64/128 samples, 8 filters
+Model 1 (K7): 64 Hz, stem kernels 0.25/1/2 s (16/64/128 samples, 8 filters
 per branch), 1x1 stem fusion + GroupNorm, residual depthwise encoder
 (kernel 15, dilations 1, 2, 4, 8; 6.6 s), decoder kernels 7, 5 with
-dilations 16, 32 (3.5 s), v3 augmentation; 9,282 parameters. Model 2
+dilations 16, 32 (3.5 s), no speed augmentation or rate-balanced sampling; 9,282 parameters. Model 2
 (261005_RRWaveNet_Capno_Optimized_fv_2) is the other configuration of the same
 selection. One decoder, no gating, raw PPG min-max normalized per 10 s
 window as the only input.
 
-Selection, on CapnoBase only (BIDMC and STEAM2 were not used):
-* Kernel and sampling-rate pilot (30 epochs, held-out validation
-  subjects): with the receptive fields kept equal in seconds, 64 Hz was as
-  good as or better than 128 Hz, and a 3.5 s decoder (dilations 16, 32 at
-  64 Hz) gave the lowest CapnoBase error. Three structures were kept, all
-  with the 3.5 s decoder: K4 (stem 0.5/1/2 s, 8 filters per branch), K7
-  (stem 0.25/1/2 s, 8 filters) and K8 (stem 0.5/1/2 s, 16 filters).
-* 5-fold subject-wise cross-validation of CapnoBase (folds stratified by
-  the subject's median breathing rate, so every subject, including the two
-  above 30 breaths/min, is tested once), 40 epochs, pooled minute-level
-  Median3 MAE in breaths/min over 299 reference-valid minutes; the
-  breathing-rate columns are the 2-seed means:
-      config  structure  augmentation  seed 1  seed 2  mean   <12   12-25  >=30
-      C7      K7         v3             2.23    2.50   2.36   3.00   0.78   9.18  <- model 1
-      C8      K8         v3             2.45    2.31   2.38   3.07   0.76   8.81  <- model 2
-      C4      K4         v3             2.33    2.46   2.39   2.91   0.82   9.99
-      F7      K7         FastAug        2.89      -      -    4.11   0.78   8.58
-      F4      K4         FastAug        2.90      -      -    4.16   0.78   8.46
-      F8      K8         FastAug        3.12      -      -    4.66   0.85   8.06
-  (FastAug rows: seed 1 only.) The three v3 configurations are within 0.03
-  of each other; C7 had the lowest mean (lower than C4 for 29 of 41
-  subjects, Wilcoxon p = 0.03), and C8 was second with the lowest subject
-  mean and the lowest error above 30 breaths/min, ahead of C4 for 25 of 39
-  subjects. FastAug (target rates drawn log-uniformly up to 50
-  breaths/min, window re-cutting, slow gain and drift perturbation) lowered
-  the error above 30 breaths/min but made slow breaths (< 12 breaths/min,
-  half of the CapnoBase minutes) double-counted more often, so the v3
-  augmentation is used: rate-targeted speed augmentation (probability 0.5,
-  target uniform over the rates the window can reach with a time scale of
-  0.7-1.6, 6-45 breaths/min) and rate-balanced sampling.
-  The settings were chosen on CapnoBase, so the CapnoBase LOSOCV result is
-  optimistic; BIDMC and STEAM2 are independent of the selection.
+Selection, on CapnoBase only (BIDMC and STEAM2 were not used). All pilots
+are 5-fold subject-wise cross-validation of CapnoBase (folds stratified by
+the subject's median breathing rate, so every subject is tested once,
+including the two above 30 breaths/min), scored as the pooled minute-level
+Median3 MAE (breaths/min) over the same 299 reference-valid minutes.
+1. Structure (kernel pilot, then 40-epoch CV with the v3 augmentation):
+   64 Hz with a 3.5 s decoder (dilations 16, 32) was best; three
+   structures were kept: K4 (stem 0.5/1/2 s, 8 filters per branch), K7
+   (stem 0.25/1/2 s, 8 filters) and K8 (stem 0.5/1/2 s, 16 filters).
+2. Augmentation, with each script's own LOSOCV training (temporal
+   validation, best-validation checkpoint), 40 epochs, against the
+   261002_RRWaveNet_fv_rawPPG baseline:
+       run                                   Median3   <12   25-30  >=30   better/worse subjects vs baseline
+       baseline 261002_RRWaveNet_fv_rawPPG     2.02    1.51   2.20  15.1
+       K0 (128 Hz rawPPG kernels), no aug      2.06    1.82   2.60  13.2   21/19
+       K8, no speed aug, no rate balancing     2.07    1.46   2.92  17.1   25/15   <- model 2
+       K7, no speed aug, no rate balancing     2.08    1.26   4.06  17.6   28/13   <- model 1
+       K7, rate balancing with sqrt weights    2.11    2.25   2.93  10.8   21/20
+       K7, log-symmetric speed aug             2.14    1.44   4.13  17.4   23/18
+       K7, v3 speed aug only                   2.17    1.68   3.79  16.2   22/19
+       K4, no speed aug, no rate balancing     2.26    1.76   3.90  16.6   23/18
+       K7, rate balancing capped at 2x         2.33    2.17   2.97  14.7   21/21
+       K7, rate balancing only                 2.45    2.86   2.58  10.7   14/28
+       K7, v3 speed aug + rate balancing       2.54    3.19   2.19   9.9   16/25
+   Rate-balanced sampling (oversampling the few fast windows) lowered the
+   error above 30 breaths/min but made slow breaths (< 12 breaths/min, half
+   of the CapnoBase minutes) double-counted, in every form tried; the
+   committed v3 version (speed aug + rate balancing) gave a CapnoBase LOSOCV
+   Median3 MAE of 2.29 against 1.77 for the baseline. Both are therefore off
+   by default here (--speed-aug and --rr-balance switch them on). Without
+   them K7 and K8 were within 0.06 of the baseline and better than it for
+   most subjects (28 of 41 and 25 of 40); no configuration had a lower
+   pooled error than the baseline in this 40-epoch pilot.
+   The settings were chosen on CapnoBase, so the CapnoBase LOSOCV result is
+   optimistic; BIDMC and STEAM2 are independent of the selection.
 
 Stem fusion ablation: --stem-fusion none removes the 1x1 fusion convolution
 and its GroupNorm. The three stem branches (each GroupNorm + GELU) and the
@@ -96,12 +99,14 @@ Training and evaluation (data selection, parameters; from the 261005
 analysis of the rawPPG LOSOCV errors: CapnoBase >= 30 breaths/min was 6% of
 the minutes but 43% of the error, and slow breaths were double-counted):
 
-1. Breathing-rate-targeted speed augmentation: with probability 0.5 a
+1. Off by default (--speed-aug): breathing-rate-targeted speed
+   augmentation: with probability 0.5 a
    training window is rebuilt from a span of local rate x 0.7-1.6 of the
    continuous record (target rate uniform over what the window can reach,
    within 6-45 breaths/min for CapnoBase and 6-30 for adults); input,
    waveform target and breath times are transformed together.
-2. Rate-balanced sampling of training windows (inverse bin frequency,
+2. Off by default (--rr-balance): rate-balanced sampling of training
+   windows (inverse bin frequency,
    capped at 5x the median weight).
 3. Validation as in the paired baseline (default --validation temporal):
    the last 20% of each training subject's windows pick the epoch (up to
@@ -115,8 +120,8 @@ the minutes but 43% of the error, and slow breaths were double-counted):
    check (stored rawPPG predictions: CapnoBase Median3 MAE 1.765 -> 1.686).
 
 Defaults: BIDMC and CapnoBase, 10 s non-overlapping windows, baseline the
-261002_RRWaveNet_fv_rawPPG per-subject file. --no-speed-aug,
---no-rr-balance switch the training changes off.
+261002_RRWaveNet_fv_rawPPG per-subject file. --speed-aug and
+--rr-balance switch items 1 and 2 on.
 
 Description of the rawPPG pipeline follows.
 
@@ -685,8 +690,8 @@ class ModelOptions:
     use_scale_gate: bool = False
     use_residual: bool = True
     raw_input: bool = True
-    speed_aug: bool = True
-    rr_balance: bool = True
+    speed_aug: bool = False
+    rr_balance: bool = False
     validation: str = "temporal"
     stem_fusion: str = "conv1x1"
 
@@ -5961,16 +5966,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--no-speed-aug",
+        "--speed-aug",
         dest="speed_aug",
-        action="store_false",
-        help="Disable the breathing-rate-targeted speed augmentation.",
+        action="store_true",
+        help="Enable the breathing-rate-targeted speed augmentation (off by default).",
     )
     parser.add_argument(
-        "--no-rr-balance",
+        "--rr-balance",
         dest="rr_balance",
-        action="store_false",
-        help="Disable rate-balanced sampling of training windows.",
+        action="store_true",
+        help="Enable rate-balanced sampling of training windows (off by default).",
     )
     parser.add_argument(
         "--ppg-input",
@@ -6053,8 +6058,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         use_identity_channel=MODEL_CONFIG["use_identity_channel"],
         use_scale_gate=MODEL_CONFIG["use_scale_gate"],
         use_residual=MODEL_CONFIG["encoder_residual"],
-        speed_aug=True,
-        rr_balance=True,
+        speed_aug=False,
+        rr_balance=False,
     )
     return parser.parse_args(argv)
 

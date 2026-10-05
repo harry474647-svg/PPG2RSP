@@ -1,0 +1,255 @@
+{
+  "script": "/home/user/PPG2RSP/261005_RRWaveNet_Capno_Optimized_fv_1.py",
+  "results_root": "/tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main",
+  "device": "cpu",
+  "experiment": "v16 early stem fusion + breath-event decoder, reference QC, fixed ground truth and smart fusion",
+  "model_key": "early_fusion_identity_rawppg_kopt_fs64_speedaug_rrbal_eventdecoder",
+  "model_label": "v16 early fusion + identity channel + raw PPG input + kernel-optimized (64 Hz) + speed augmentation + rate-balanced sampling + breath-event decoder",
+  "parameters": {
+    "v16_early_fusion": 9377,
+    "v16_with_stem_options": 9273,
+    "encoder_residual": true,
+    "proposed": 9282
+  },
+  "model_path": "stem branches (k=32/64/128, 8 filters) -> [stem, z-scored identity] -> 1x1 fusion + GroupNorm (no GELU) -> depthwise residual encoder -> dilated decoder trunk -> {waveform head (tanh), breath-event head (logits)}",
+  "changes_261005": {
+    "speed_augmentation": "p=0.5, target rate uniform over local rate x (0.7, 1.6) within the dataset band and (6.0, 45.0) bpm",
+    "rate_balanced_sampling": "weights 1/bin frequency, bins (8.0, 12.0, 16.0, 20.0, 25.0, 30.0, 40.0) bpm, capped at 5.0x median",
+    "validation": "temporal: 20% of training subjects (>= 3) evenly spaced over the rate ranking; refit on all training subjects for the selected epochs",
+    "kernels": {
+      "config": "K7",
+      "fs": 64,
+      "stem": [
+        16,
+        64,
+        128
+      ],
+      "enc_k": 15,
+      "enc_d": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "dec_k": [
+        7,
+        5
+      ],
+      "dec_d": [
+        16,
+        32
+      ],
+      "stem_sec": [
+        0.25,
+        1.0,
+        2.0
+      ],
+      "encoder_sec": 6.58,
+      "decoder_sec": 3.52,
+      "total_sec": 12.06
+    },
+    "event_target": "sigma = 0.12 x local period, limited to (0.15, 0.5) s",
+    "count_loss": "weight 0.1, heatmap counted above 0.1",
+    "evaluation": "FFT RR of the predicted waveform without the sub-harmonic check"
+  },
+  "decoder_change": {
+    "trunk": "v16 decoder convs (24->16 k7, 16->8 k5) with dilations (8, 16)",
+    "receptive_field_samples": {
+      "v16": 11,
+      "proposed": 113
+    },
+    "added_parameters": 9,
+    "event_target": "Gaussian bumps (sigma 0.3 s) at reference breaths",
+    "event_head_init": "weights N(0, 0.01), bias logit(0.15)"
+  },
+  "loss": {
+    "total": "wave * v16 hybrid + event * BCE(heatmap) + count * soft-count |error| (bpm)",
+    "weights": {
+      "wave": 1.0,
+      "event": 0.5,
+      "count": 0.1
+    },
+    "v16_hybrid_weights": [
+      0.45,
+      0.45,
+      0.1
+    ]
+  },
+  "reference_quality": {
+    "breath_detector": "count-orig (RRest ref_cto): peaks > 0.2 x Q3, trough < 0 between breaths",
+    "agreement_rule": "count-orig RR vs FFT RR < 2.0 bpm",
+    "min_clean_cycle_time_fraction": 0.75,
+    "rr_band_bpm": [
+      6.0,
+      30.0
+    ],
+    "training_map": "32 s windows every 8 s",
+    "training_use": "train/val windows need >= 50% reference-quality samples",
+    "evaluation_use": "each 60 s minute must pass the rule to be scored"
+  },
+  "ground_truth": "expert breath labels where the dataset provides them (CapnoBase co2 start of expiration); otherwise breath onsets detected once on the continuous reference RSP (60 s blocks, 10 s context)",
+  "analysis_profiles": {
+    "CapnoBase": {
+      "profile": "capnography_wide_rr",
+      "description": "0.05 Hz to clip(0.5 x PPG heart rate, 0.5, 1.0) Hz, capnogram delay alignment with fixed polarity, 40-220 bpm PPG beats",
+      "band_hz": [
+        0.05,
+        1.0
+      ],
+      "adaptive_upper": true,
+      "rr_band_bpm": [
+        3.0,
+        60.0
+      ],
+      "min_breath_interval_sec": 0.8,
+      "ppg_hr_range_bpm": [
+        40.0,
+        220.0
+      ],
+      "ppg_spectral_beat_distance": true,
+      "max_target_lag_sec": 3.0,
+      "fixed_target_polarity": true,
+      "capnography_target": "phase",
+      "fft_subharmonic_check": true,
+      "resampler": "poly",
+      "expert_breath_labels": true,
+      "expert_artifact_labels": true
+    }
+  },
+  "capnobase_files": {
+    "labels": "co2_startexp_x (fallback co2_startinsp_x), one cell of space-separated sample numbers, index base 1 removed, unit from units_x",
+    "sampling_rates": "param samplingrate_pleth / samplingrate_co2",
+    "artifacts": "pleth *_artif_x -> unusable PPG samples; co2 *_artif_x -> no training window and no scored minute overlapping them",
+    "check": "--inspect-capnobase writes capnobase_loading_check.csv"
+  },
+  "capnography_adaptive_upper_edge": "clip(0.5 x PPG spectral HR, 0.5, 1.0) Hz",
+  "min_valid_minutes_per_subject": {
+    "value": 3,
+    "use": "extra subject means over subjects with at least this many reference-valid minutes; the others are listed with their own MAE"
+  },
+  "smart_fusion": {
+    "estimates": [
+      "event-head count",
+      "waveform count-orig count",
+      "waveform FFT RR"
+    ],
+    "fusion": "mean",
+    "withhold_if_sd_bpm_above": 4.0,
+    "reported": "MAE on retained minutes and retained share of valid minutes"
+  },
+  "model_config": {
+    "stem_kernel_sizes": [
+      16,
+      64,
+      128
+    ],
+    "stem_base_channels": 8,
+    "hidden_channels": 24,
+    "encoder_kernel_size": 15,
+    "encoder_dilations": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "dropout": 0.2,
+    "decoder_mid_channels": [
+      16,
+      8
+    ],
+    "decoder_kernel_sizes": [
+      7,
+      5,
+      1
+    ],
+    "decoder_dilations": [
+      16,
+      32
+    ],
+    "decoder_heads": [
+      "waveform_tanh",
+      "breath_event_logit"
+    ],
+    "event_sigma_sec": 0.3,
+    "stem_fusion_position": "early_fusion",
+    "stem_fusion_activation": "none_after_1x1_conv_groupnorm",
+    "encoder_channel_mixing": "depthwise_temporal_conv_groups24",
+    "residual_encoder_cross_channel_mixing": false,
+    "encoder_normalization": "per_channel_groupnorm_groups24",
+    "encoder_residual": true,
+    "model_input": "raw PPG time series, per-window min-max [0, 1], no filter",
+    "use_identity_channel": true,
+    "identity_channel_normalization": "per_window_zscore",
+    "identity_channel_bypasses_scale_gate": true,
+    "identity_fusion_weight_init": "zeros",
+    "use_scale_gate": false,
+    "scale_gate_descriptor": "relative_log_energy_of_pre_groupnorm_stem_responses",
+    "scale_gate_hidden": 8,
+    "scale_gate_output": "softmax_over_branches_times_branch_count",
+    "scale_gate_output_init": "zeros_uniform_branch_weights"
+  },
+  "window_conditions": [
+    {
+      "order": 1,
+      "name": "w10s_nonoverlap",
+      "window_sec": 10.0,
+      "stride_sec": 10.0,
+      "label": "10 s / 0% overlap"
+    }
+  ],
+  "datasets": [
+    "CapnoBase"
+  ],
+  "cross_validation": {
+    "method": "Leave-One-Subject-Out Cross-Validation",
+    "fold_definition": "one held-out subject per fold",
+    "subject_reuse": "each valid subject is held out exactly once"
+  },
+  "validation": "last 20 percent of each training subject's windows",
+  "input_ppg_band_hz": [
+    0.1,
+    0.5
+  ],
+  "quality_selection": {
+    "quality_map_before_model_windowing": true,
+    "qc_unit_sec": 10.0,
+    "ppg_sqi": "continuous beat-level pulse-template quality map",
+    "ppg_high_sqi_threshold": 0.86,
+    "ppg_usable_sqi_threshold": 0.5,
+    "minimum_usable_proportion": 0.5,
+    "rsp_structural_validity": true,
+    "target_similarity_gate": false
+  },
+  "evaluation": {
+    "window_sec": 60.0,
+    "stride_sec": 60.0,
+    "timeline_reconstruction": "overlap-add mean using original window starts",
+    "legacy_rr_estimator": "direct respiratory peak count (v16)",
+    "legacy_pcc": "waveform Pearson correlation on the same complete 60 s interval",
+    "gt_metrics": "event / count-orig / FFT RR vs fixed ground truth on reference-valid minutes",
+    "breath_matching_tolerance": "0.25 x median reference breath interval"
+  },
+  "baseline_comparison": {
+    "baseline": "fv, respiratory-band input (baseline)",
+    "files": [
+      "/tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/v16_early_fusion_identity_rawppg_eventdecoder_10s20s60s_nonoverlap_per_subject.csv"
+    ],
+    "pairing": "same dataset, subject, and window condition",
+    "tests": [
+      "paired t-test",
+      "Wilcoxon signed-rank test"
+    ],
+    "multiple_testing": "Benjamini-Hochberg FDR over all baseline comparisons"
+  },
+  "training": {
+    "epochs": 120,
+    "min_epochs": 20,
+    "patience": 25,
+    "batch_size": 48,
+    "learning_rate": 0.0002,
+    "weight_decay": 5e-05,
+    "event_head_lr_multiplier": 10.0,
+    "early_stopping": "validation loss (total) with best-checkpoint restore",
+    "train_val_windows": "reference-quality windows only (Train_OK)"
+  }
+}

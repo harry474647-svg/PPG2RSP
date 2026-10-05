@@ -1,0 +1,13 @@
+﻿Dataset,Window_Order,Window_Config,Window_Label,N_Subjects,N_Minutes,N_Ref_Valid,Ref_Valid_Ratio,N_Excluded_ref_structural_invalid,N_Excluded_ref_artifact_label,N_Excluded_ref_rr_undefined,N_Excluded_ref_irregular_cycles,N_Excluded_ref_disagreement,N_Excluded_ref_out_of_band,Legacy_N,Legacy_MAE,Legacy_RMSE,Event_N,Event_MAE,Event_RMSE,Wave_CtO_N,Wave_CtO_MAE,Wave_CtO_RMSE,Wave_FFT_N,Wave_FFT_MAE,Wave_FFT_RMSE,SmartFusion_N,SmartFusion_MAE,SmartFusion_RMSE,Median3_N,Median3_MAE,Median3_RMSE,SF_N_Retained,SF_Retained_Ratio,Peak_Missed_per_min,Peak_Extra_per_min,Peak_Wrong_per_min
+BIDMC,1,w10s_nonoverlap,10 s / 0% overlap,0,0,0,,0,0,0,0,0,0,0,,,0,,,0,,,0,,,0,,,0,,,0,,,,
+BIDMC,2,w20s_nonoverlap,20 s / 0% overlap,0,0,0,,0,0,0,0,0,0,0,,,0,,,0,,,0,,,0,,,0,,,0,,,,
+BIDMC,3,w60s_nonoverlap,60 s / 0% overlap,0,0,0,,0,0,0,0,0,0,0,,,0,,,0,,,0,,,0,,,0,,,0,,,,
+CapnoBase,1,w10s_nonoverlap,10 s / 0% overlap,42,321,299,0.9314641744548287,0,19,3,0,0,0,321,3.64797507788162,5.107260728564062,299,2.5953177257525084,5.298450584398965,299,2.5451505016722407,5.03133990810629,299,1.887907608695652,5.223498658766703,277,1.7348262635379061,4.065912271950195,299,2.2880434782608696,4.960128738587879,277,0.9264214046822743,1.1772575250836121,2.488294314381271,3.6655518394648827
+CapnoBase,2,w20s_nonoverlap,20 s / 0% overlap,0,0,0,,0,0,0,0,0,0,0,,,0,,,0,,,0,,,0,,,0,,,0,,,,
+CapnoBase,3,w60s_nonoverlap,60 s / 0% overlap,0,0,0,,0,0,0,0,0,0,0,,,0,,,0,,,0,,,0,,,0,,,0,,,,
+STEAM2,1,w10s_nonoverlap,10 s / 0% overlap,0,0,0,,0,0,0,0,0,0,0,,,0,,,0,,,0,,,0,,,0,,,0,,,,
+STEAM2,2,w20s_nonoverlap,20 s / 0% overlap,0,0,0,,0,0,0,0,0,0,0,,,0,,,0,,,0,,,0,,,0,,,0,,,,
+STEAM2,3,w60s_nonoverlap,60 s / 0% overlap,0,0,0,,0,0,0,0,0,0,0,,,0,,,0,,,0,,,0,,,0,,,0,,,,
+CombinedAllDatasets,1,w10s_nonoverlap,10 s / 0% overlap,42,321,299,0.9314641744548287,0,19,3,0,0,0,321,3.64797507788162,5.107260728564062,299,2.5953177257525084,5.298450584398965,299,2.5451505016722407,5.03133990810629,299,1.887907608695652,5.223498658766703,277,1.7348262635379061,4.065912271950195,299,2.2880434782608696,4.960128738587879,277,0.9264214046822743,1.1772575250836121,2.488294314381271,3.6655518394648827
+CombinedAllDatasets,2,w20s_nonoverlap,20 s / 0% overlap,0,0,0,,0,0,0,0,0,0,0,,,0,,,0,,,0,,,0,,,0,,,0,,,,
+CombinedAllDatasets,3,w60s_nonoverlap,60 s / 0% overlap,0,0,0,,0,0,0,0,0,0,0,,,0,,,0,,,0,,,0,,,0,,,0,,,,
