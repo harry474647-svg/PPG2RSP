@@ -1,0 +1,13 @@
+﻿Dataset,Left_Window_Order,Left_Window_Config,Left_Window_Label,Right_Window_Order,Right_Window_Config,Right_Window_Label,N_Paired_RR_Subjects,RR_Left_Mean,RR_Right_Mean,Right_Minus_Left_RR_Mean,RR_Paired_t_p,RR_Wilcoxon_p,N_Paired_PCC_Subjects,PCC_Left_Mean,PCC_Right_Mean,Right_Minus_Left_PCC_Mean,PCC_Paired_t_p,PCC_Wilcoxon_p,RR_Wilcoxon_FDR_p,PCC_Wilcoxon_FDR_p,RR_Significant_FDR05,PCC_Significant_FDR05
+BIDMC,1,w10s_nonoverlap,10 s / 0% overlap,2,w20s_nonoverlap,20 s / 0% overlap,0,,,,,,0,,,,,,,,False,False
+BIDMC,1,w10s_nonoverlap,10 s / 0% overlap,3,w60s_nonoverlap,60 s / 0% overlap,0,,,,,,0,,,,,,,,False,False
+BIDMC,2,w20s_nonoverlap,20 s / 0% overlap,3,w60s_nonoverlap,60 s / 0% overlap,0,,,,,,0,,,,,,,,False,False
+CapnoBase,1,w10s_nonoverlap,10 s / 0% overlap,2,w20s_nonoverlap,20 s / 0% overlap,0,,,,,,0,,,,,,,,False,False
+CapnoBase,1,w10s_nonoverlap,10 s / 0% overlap,3,w60s_nonoverlap,60 s / 0% overlap,0,,,,,,0,,,,,,,,False,False
+CapnoBase,2,w20s_nonoverlap,20 s / 0% overlap,3,w60s_nonoverlap,60 s / 0% overlap,0,,,,,,0,,,,,,,,False,False
+STEAM2,1,w10s_nonoverlap,10 s / 0% overlap,2,w20s_nonoverlap,20 s / 0% overlap,0,,,,,,0,,,,,,,,False,False
+STEAM2,1,w10s_nonoverlap,10 s / 0% overlap,3,w60s_nonoverlap,60 s / 0% overlap,0,,,,,,0,,,,,,,,False,False
+STEAM2,2,w20s_nonoverlap,20 s / 0% overlap,3,w60s_nonoverlap,60 s / 0% overlap,0,,,,,,0,,,,,,,,False,False
+CombinedAllDatasets,1,w10s_nonoverlap,10 s / 0% overlap,2,w20s_nonoverlap,20 s / 0% overlap,0,,,,,,0,,,,,,,,False,False
+CombinedAllDatasets,1,w10s_nonoverlap,10 s / 0% overlap,3,w60s_nonoverlap,60 s / 0% overlap,0,,,,,,0,,,,,,,,False,False
+CombinedAllDatasets,2,w20s_nonoverlap,20 s / 0% overlap,3,w60s_nonoverlap,60 s / 0% overlap,0,,,,,,0,,,,,,,,False,False

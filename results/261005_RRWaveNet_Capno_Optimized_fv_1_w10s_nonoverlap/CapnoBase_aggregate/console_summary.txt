@@ -1,0 +1,127 @@
+v16 early fusion + identity channel + raw PPG input + kernel-optimized (64 Hz) + breath-event decoder: 9282 parameters (v16 early fusion: 9377)
+Baseline rows: 95 (RR_MAE_BPM, PCC_60s_Mean, RR_MAE_Event, RR_MAE_Wave_CtO, RR_MAE_Wave_FFT, RR_Bias_Event, Peak_Wrong_per_min, Peak_Missed_per_min, Peak_Extra_per_min, Peak_Sensitivity, Peak_PPV, Peak_Timing_Error_ms, RR_MAE_SmartFusion, SF_Retained_Ratio, RR_MAE_Median3, Ref_Valid_Ratio) from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/raw_res/v16_early_fusion_identity_rawppg_eventdecoder_10s20s60s_nonoverlap_per_subject.csv
+
+[Window condition 1/3] 10 s / 0% overlap
+CapnoBase: 42 LOSOCV folds; device=cpu
+CapnoBase 0009: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0009_summary.json
+CapnoBase 0015: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0015_summary.json
+CapnoBase 0016: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0016_summary.json
+CapnoBase 0018: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0018_summary.json
+CapnoBase 0023: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0023_summary.json
+CapnoBase 0028: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0028_summary.json
+CapnoBase 0029: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0029_summary.json
+CapnoBase 0030: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0030_summary.json
+CapnoBase 0031: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0031_summary.json
+CapnoBase 0032: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0032_summary.json
+CapnoBase 0035: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0035_summary.json
+CapnoBase 0038: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0038_summary.json
+CapnoBase 0103: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0103_summary.json
+CapnoBase 0104: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0104_summary.json
+CapnoBase 0105: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0105_summary.json
+CapnoBase 0115: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0115_summary.json
+CapnoBase 0121: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0121_summary.json
+CapnoBase 0122: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0122_summary.json
+CapnoBase 0123: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0123_summary.json
+CapnoBase 0125: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0125_summary.json
+CapnoBase 0127: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0127_summary.json
+CapnoBase 0128: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0128_summary.json
+CapnoBase 0133: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0133_summary.json
+CapnoBase 0134: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0134_summary.json
+CapnoBase 0142: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0142_summary.json
+CapnoBase 0147: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0147_summary.json
+CapnoBase 0148: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0148_summary.json
+CapnoBase 0149: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0149_summary.json
+CapnoBase 0150: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0150_summary.json
+CapnoBase 0309: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0309_summary.json
+CapnoBase 0311: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0311_summary.json
+CapnoBase 0312: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0312_summary.json
+CapnoBase 0313: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0313_summary.json
+CapnoBase 0322: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0322_summary.json
+CapnoBase 0325: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0325_summary.json
+CapnoBase 0328: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0328_summary.json
+CapnoBase 0329: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0329_summary.json
+CapnoBase 0330: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0330_summary.json
+CapnoBase 0331: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0331_summary.json
+CapnoBase 0332: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0332_summary.json
+CapnoBase 0333: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0333_summary.json
+CapnoBase 0370: resumed from /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/01_w10s_nonoverlap/CapnoBase/Fold_Summaries/0370_summary.json
+/tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/venv/lib/python3.11/site-packages/scipy/stats/_wilcoxon.py:181: RuntimeWarning: invalid value encountered in scalar divide
+  z = (r_plus - mn) / se
+/tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/venv/lib/python3.11/site-packages/scipy/stats/_wilcoxon.py:181: RuntimeWarning: invalid value encountered in scalar divide
+  z = (r_plus - mn) / se
+
+RR MAE per dataset (breaths/min; mean over held-out subjects):
+  Dataset              Window               N  Median3   Event  SmartF  kept  Legacy    PCC
+  CapnoBase            10 s / 0% overlap   42    1.880   1.924   1.578   93%   2.698  0.765
+  CombinedAllDatasets  10 s / 0% overlap   42    1.880   1.924   1.578   93%   2.698  0.765
+
+RR MAE per dataset, subjects with >= 3 valid minutes (in = included, out = below; out_Med3 = their own Median3 MAE; pooled = Median3 MAE over all valid minutes):
+  Dataset              Window              in out  Median3   Event  SmartF  kept  Legacy out_Med3  pooled
+  CapnoBase            10 s / 0% overlap   39   3    1.896   1.879   1.571   92%   2.591    1.667   1.576
+  CombinedAllDatasets  10 s / 0% overlap   39   3    1.896   1.879   1.571   92%   2.591    1.667   1.576
+  below 3 valid min, CapnoBase 10 s / 0% overlap: 0147(2/7), 0309(2/7), 0329(2/3)
+
+Combined performance (mean over held-out subjects):
+  10 s / 0% overlap (N=42): legacy RR_MAE=2.698, PCC=0.765 | Event MAE=1.924, wrong/min=3.16, SF MAE=1.578 (kept 93%), Median3 MAE=1.880, valid ref 92%
+  20 s / 0% overlap (N=0): legacy RR_MAE=nan, PCC=nan | Event MAE=nan, wrong/min=nan, SF MAE=nan (kept nan%), Median3 MAE=nan, valid ref nan%
+  60 s / 0% overlap (N=0): legacy RR_MAE=nan, PCC=nan | Event MAE=nan, wrong/min=nan, SF MAE=nan (kept nan%), Median3 MAE=nan, valid ref nan%
+Pooled over minutes (CombinedAllDatasets):
+  10 s / 0% overlap: minutes 299/321 valid | Event MAE=1.602, RMSE=4.183 | SF MAE=0.973, RMSE=2.774, kept 93% | Median3 MAE=1.576, RMSE=4.357
+  20 s / 0% overlap: minutes 0/0 valid | Event MAE=nan, RMSE=nan | SF MAE=nan, RMSE=nan, kept nan% | Median3 MAE=nan, RMSE=nan
+  60 s / 0% overlap: minutes 0/0 valid | Event MAE=nan, RMSE=nan | SF MAE=nan, RMSE=nan, kept nan% | Median3 MAE=nan, RMSE=nan
+Paired vs baseline (CombinedAllDatasets):
+  10 s / 0% overlap RR_MAE_BPM: baseline=2.6035, proposed=2.6976, diff=+0.0941, better=13/42, Wilcoxon FDR p=0.3189
+  10 s / 0% overlap PCC_60s_Mean: baseline=0.7693, proposed=0.7652, diff=-0.0041, better=20/42, Wilcoxon FDR p=0.5254
+  10 s / 0% overlap RR_MAE_Event: baseline=2.3077, proposed=1.9236, diff=-0.3841, better=27/42, Wilcoxon FDR p=0.038
+  10 s / 0% overlap RR_MAE_Wave_CtO: baseline=2.3448, proposed=2.3225, diff=-0.0223, better=17/42, Wilcoxon FDR p=0.9754
+  10 s / 0% overlap RR_MAE_Wave_FFT: baseline=2.4059, proposed=1.9543, diff=-0.4516, better=30/42, Wilcoxon FDR p=0.008071
+  10 s / 0% overlap RR_Bias_Event: baseline=0.4016, proposed=-0.1368, diff=-0.5384, better=8/42, Wilcoxon FDR p=0.01579
+  10 s / 0% overlap Peak_Wrong_per_min: baseline=3.6473, proposed=3.1605, diff=-0.4868, better=24/42, Wilcoxon FDR p=0.09742
+  10 s / 0% overlap Peak_Missed_per_min: baseline=1.6169, proposed=1.6546, diff=+0.0377, better=15/42, Wilcoxon FDR p=0.9754
+  10 s / 0% overlap Peak_Extra_per_min: baseline=2.0304, proposed=1.5059, diff=-0.5245, better=25/42, Wilcoxon FDR p=0.02988
+  10 s / 0% overlap Peak_Sensitivity: baseline=0.9205, proposed=0.9192, diff=-0.0013, better=15/42, Wilcoxon FDR p=0.9754
+  10 s / 0% overlap Peak_PPV: baseline=0.8634, proposed=0.8897, diff=+0.0263, better=25/42, Wilcoxon FDR p=0.02988
+  10 s / 0% overlap Peak_Timing_Error_ms: baseline=331.1287, proposed=307.7260, diff=-23.4027, better=24/42, Wilcoxon FDR p=0.09742
+  10 s / 0% overlap RR_MAE_SmartFusion: baseline=1.8143, proposed=1.5775, diff=-0.2368, better=26/42, Wilcoxon FDR p=0.5069
+  10 s / 0% overlap SF_Retained_Ratio: baseline=0.8630, proposed=0.9255, diff=+0.0625, better=10/42, Wilcoxon FDR p=0.06804
+  10 s / 0% overlap RR_MAE_Median3: baseline=2.0495, proposed=1.8796, diff=-0.1699, better=23/42, Wilcoxon FDR p=0.3189
+  10 s / 0% overlap Ref_Valid_Ratio: baseline=0.9228, proposed=0.9228, diff=+0.0000, better=0/42, Wilcoxon FDR p=nan
+  20 s / 0% overlap RR_MAE_BPM: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap PCC_60s_Mean: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap RR_MAE_Event: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap RR_MAE_Wave_CtO: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap RR_MAE_Wave_FFT: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap RR_Bias_Event: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap Peak_Wrong_per_min: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap Peak_Missed_per_min: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap Peak_Extra_per_min: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap Peak_Sensitivity: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap Peak_PPV: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap Peak_Timing_Error_ms: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap RR_MAE_SmartFusion: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap SF_Retained_Ratio: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap RR_MAE_Median3: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  20 s / 0% overlap Ref_Valid_Ratio: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap RR_MAE_BPM: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap PCC_60s_Mean: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap RR_MAE_Event: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap RR_MAE_Wave_CtO: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap RR_MAE_Wave_FFT: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap RR_Bias_Event: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap Peak_Wrong_per_min: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap Peak_Missed_per_min: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap Peak_Extra_per_min: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap Peak_Sensitivity: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap Peak_PPV: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap Peak_Timing_Error_ms: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap RR_MAE_SmartFusion: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap SF_Retained_Ratio: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap RR_MAE_Median3: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+  60 s / 0% overlap Ref_Valid_Ratio: baseline=nan, proposed=nan, diff=+nan, better=0/0, Wilcoxon FDR p=nan
+
+Saved results under: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main
+Per-subject: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/v16_early_fusion_identity_rawppg_kopt_fs64_eventdecoder_10s20s60s_nonoverlap_per_subject.csv
+Minute-level summary: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/v16_early_fusion_identity_rawppg_kopt_fs64_eventdecoder_10s20s60s_nonoverlap_minute_level_summary.csv
+Baseline comparison: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/v16_early_fusion_identity_rawppg_kopt_fs64_eventdecoder_10s20s60s_nonoverlap_baseline_comparison.csv
+Failed folds: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/failed_folds.csv
+Excel workbook: /tmp/claude-0/-home-user-PPG2RSP/328070d5-c544-5c92-8cdc-bf9b1be69d0e/scratchpad/capno_runs/cap_fv1_main/v16_early_fusion_identity_rawppg_kopt_fs64_eventdecoder_10s20s60s_nonoverlap_results.xlsx
