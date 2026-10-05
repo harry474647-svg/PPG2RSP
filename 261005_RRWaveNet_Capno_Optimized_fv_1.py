@@ -1,67 +1,95 @@
-"""261005_RRWaveNet_fv_rawPPG_SpeedAug_DualDecoder: raw-PPG RRWaveNet tuned for breathing-rate accuracy.
+"""261005_RRWaveNet_Capno_Optimized_fv_1: CapnoBase-optimized raw-PPG RRWaveNet, model 1 of 2.
 
-Starting point: 261002_RRWaveNet_fv_rawPPG (raw PPG input min-max normalized
-per 10 s window, stem kernels 64/128/256, encoder dilations 2/4/8/16,
-residual encoder, identity channel, no gating, breath-event decoder). Its
-LOSOCV errors were concentrated in two places (10 s windows):
+Model 1: 64 Hz, stem kernels 0.25/1/2 s (16/64/128 samples, 8 filters per
+branch), 1x1 stem fusion + GroupNorm, residual depthwise encoder (kernel
+15, dilations 1, 2, 4, 8; 6.6 s), decoder kernels 7, 5 with dilations
+16, 32 (3.5 s), v3 augmentation; 9,282 parameters. Model 2
+(261005_RRWaveNet_Capno_Optimized_fv_2) is the runner-up of the same
+selection. One decoder, no gating, raw PPG min-max normalized per 10 s
+window as the only input.
 
-* fast breathing: CapnoBase minutes at >= 30 breaths/min were 6% of the
-  minutes but 43% of the absolute error (bias -13 breaths/min). Only two
-  CapnoBase subjects breathe that fast, so the held-out one has almost no
-  training example at its rate; the model halves the rate;
-* slow breathing: at 8-12 breaths/min the event head and the count-orig
-  count double-count (CapnoBase 29% of the error, BIDMC 8-16 breaths/min
-  53%), while the FFT count is right.
+Selection, on CapnoBase only (BIDMC and STEAM2 were not used):
+* Kernel and sampling-rate pilot (30 epochs, held-out validation
+  subjects): with the receptive fields kept equal in seconds, 64 Hz was as
+  good as or better than 128 Hz, and a 3.5 s decoder (dilations 16, 32 at
+  64 Hz) gave the lowest CapnoBase error. Three structures were kept: K4
+  (stem 0.5/1/2 s), K7 (stem 0.25/1/2 s) and K8 (K4 with 16 filters per
+  stem branch), all with the 3.5 s decoder.
+* 5-fold subject-wise cross-validation of CapnoBase (folds stratified by
+  the subject's median breathing rate, so every subject, including the two
+  above 30 breaths/min, is tested once), 40 epochs, pooled minute-level
+  Median3 MAE in breaths/min (seed 1, 299 reference-valid minutes):
+      config  structure  augmentation  Median3   <12   12-25   >=30 bpm
+      C7      K7         v3              2.23    2.73   0.66    9.65  <- model 1
+      C4      K4         v3              2.33    2.77   0.76   10.65
+      C8      K8         v3              2.45    3.11   0.90    8.65
+      F7      K7         FastAug         2.89    4.11   0.78    8.58
+      F4      K4         FastAug         2.90    4.16   0.78    8.46
+      F8      K8         FastAug         3.12    4.66   0.85    8.06
+  FastAug (target rates drawn log-uniformly up to 50 breaths/min, window
+  re-cutting, slow gain and drift perturbation) lowered the error above 30
+  breaths/min but made slow breaths (< 12 breaths/min, half of the
+  CapnoBase minutes) double-counted more often, so the v3 augmentation is
+  used: rate-targeted speed augmentation (probability 0.5, target uniform
+  over the rates the window can reach with a time scale of 0.7-1.6,
+  6-45 breaths/min) and rate-balanced sampling.
+  The settings were chosen on CapnoBase, so the CapnoBase LOSOCV result is
+  optimistic; BIDMC and STEAM2 are independent of the selection.
 
-Changes (decoder, simple parameters and data selection only; no gating):
+Stem fusion ablation: --stem-fusion none removes the 1x1 fusion convolution
+and its GroupNorm. The three stem branches (each GroupNorm + GELU) and the
+z-scored identity channel are concatenated (25 channels) and go straight
+into the encoder, whose width follows (8,866 parameters). Fold seeds come
+from the same key as the main model, so each ablation fold starts from the
+same data order and the shared layers from the same random stream; results
+go to Results_no_stem_fusion unless --results-root is given.
 
-1. Breathing-rate-targeted speed augmentation (data). With probability
-   0.5 a training window is rebuilt from a longer or shorter span of
-   the continuous record, resampled to 10 s: a target rate is drawn
-   uniformly from the rates the window can reach (local rate x 0.7-1.6)
-   within the dataset's rate band (6-45 breaths/min for CapnoBase, 6-30
-   for adults), and the time scale is target / local rate. PPG input,
-   waveform target and breath times are transformed together, and the span
-   must be reference-quality. With rate-balanced sampling this raises the
-   CapnoBase training share at >= 40 breaths/min from 0% to about 2% when
-   the 41 breaths/min subject is held out (>= 35: 1.5% -> 6%).
-2. Rate-balanced sampling (data selection). Training windows are drawn with
-   weights inverse to the frequency of their local breathing-rate bin
-   (capped at 5x the median weight), so rare fast and slow windows are not
-   drowned.
-3. Subject-wise validation and refit (data selection). Validation is a set
-   of whole training subjects (20%, at least 3), evenly spaced over the
-   breathing-rate ranking, so early stopping measures unseen subjects as
-   the LOSOCV test does; the fastest and slowest subjects stay in training.
-   The best epoch found this way is then used to retrain from the same
-   initial weights on all training subjects.
-4. Dual-dilation decoder (decoder). The v16 decoder branch (k7 d8, k5 d16;
-   0.88 s) is kept and a parallel context branch (k7 d24, k5 d48; 2.6 s) is
-   added; their outputs are concatenated (no gating) and read by the
-   waveform and event heads, so a whole slow breath and a fast breath can
-   both be seen.
-5. Event target width proportional to the breath period (target
-   definition): sigma = 0.12 x local breath period, limited to 0.15-0.5 s,
-   so a slow breath is one broad bump and fast breaths do not merge.
-6. Count loss (parameters): the heatmap is counted above a background
-   threshold of 0.1 (both prediction and target, normalized by the
-   thresholded bump area) and weighted 0.1 instead of 0.02; the old
-   integral counted the background probability, and its validation error
-   stayed flat during training.
-7. FFT RR of the predicted waveform without the f/2, f/3 check (evaluation
-   parameter). The check is meant for capnograms and halved fast rates on
-   predicted waveforms; on the stored rawPPG predictions it lowered the
-   CapnoBase Median3 MAE from 1.765 to 1.686 without retraining. An
-   FFT-based event spacing was also tried on those predictions and not
-   kept: it improved the event MAE but worsened Median3.
+Run (GPU):              python 261005_RRWaveNet_Capno_Optimized_fv_1.py
+Stem fusion ablation:   python 261005_RRWaveNet_Capno_Optimized_fv_1.py --stem-fusion none
+STEAM2:                 261005_RRWaveNet_Capno_Optimized_fv_1_STEAM2.py
+Resume:                 add --resume
 
-Defaults: BIDMC and CapnoBase, 10 s non-overlapping windows. The paired
-baseline is the 261002_RRWaveNet_fv_rawPPG per-subject file. Every change
-has a switch (--no-speed-aug, --no-rr-balance, --validation temporal,
---no-dual-decoder) for ablations. These changes were designed from the
-LOSOCV errors of the earlier runs on the same data, so the gain measured on
-BIDMC and CapnoBase is optimistic; an untouched dataset (e.g. STEAM2) is
-the fair check.
+Description of the kernel-optimized base script follows.
+
+261005_RRWaveNet_Capno_Optimized_fv_1 (base): raw-PPG RRWaveNet for breathing-rate accuracy.
+
+Model (one decoder, no gating, 1x1 stem fusion with GroupNorm unchanged):
+raw PPG (min-max per 10 s window) at 64 Hz -> three stem branches
+(kernels (16, 64, 128) samples = [0.25, 1.0, 2.0] s, 8 filters, GroupNorm,
+GELU) + z-scored identity channel -> 1x1 fusion + GroupNorm -> depthwise
+residual encoder (kernel 15, dilations (1, 2, 4, 8); receptive field
+6.58 s) -> v16 decoder (kernels (7, 5), dilations (16, 32);
+3.52 s) -> waveform head (tanh) and breath-event head. Whole-network
+receptive field about 12.06 s.
+
+The temporal extent is set by kernel sizes, dilations and the sampling rate
+only; no layer or branch is added. 
+
+Training and evaluation (data selection, parameters; from the 261005
+analysis of the rawPPG LOSOCV errors: CapnoBase >= 30 breaths/min was 6% of
+the minutes but 43% of the error, and slow breaths were double-counted):
+
+1. Breathing-rate-targeted speed augmentation: with probability 0.5 a
+   training window is rebuilt from a span of local rate x 0.7-1.6 of the
+   continuous record (target rate uniform over what the window can reach,
+   within 6-45 breaths/min for CapnoBase and 6-30 for adults); input,
+   waveform target and breath times are transformed together.
+2. Rate-balanced sampling of training windows (inverse bin frequency,
+   capped at 5x the median weight).
+3. Validation as in the paired baseline (default --validation temporal):
+   the last 20% of each training subject's windows pick the epoch (up to
+   120 epochs, min 20, patience 25); re-cut and time-scaled training
+   windows end before them. --validation subject_refit instead picks the
+   epoch on 20% held-out training subjects (evenly spaced over the rate
+   ranking, extremes kept in training) and refits on all of them.
+4. Event target width 0.12 x local breath period (0.15-0.5 s).
+5. Count loss on the heatmap above a 0.1 threshold, weight 0.1.
+6. FFT RR of the predicted waveform without the capnogram sub-harmonic
+   check (stored rawPPG predictions: CapnoBase Median3 MAE 1.765 -> 1.686).
+
+Defaults: BIDMC and CapnoBase, 10 s non-overlapping windows, baseline the
+261002_RRWaveNet_fv_rawPPG per-subject file. --no-speed-aug,
+--no-rr-balance switch the training changes off.
 
 Description of the rawPPG pipeline follows.
 
@@ -272,7 +300,7 @@ from torch.utils.data import DataLoader, Dataset
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(
-    r"D:\PPG2RSP_RRWaveNet_Inspired\261005_RRWaveNet_fv_rawPPG_SpeedAug_DualDecoder"
+    r"D:\PPG2RSP_RRWaveNet_Inspired\261005_RRWaveNet_Capno_Optimized_fv_1"
 )
 DEFAULT_RESULTS_ROOT = PROJECT_ROOT / "Results"
 
@@ -361,7 +389,7 @@ PPG_INPUT_MODES = ("raw", "resp_band")
 PPG_INPUT = "raw"
 
 # v16 input/output and training constants.
-TARGET_FS = 128
+TARGET_FS = 64  # model and analysis sampling rate (Hz)
 EVAL_WINDOW_SEC = 60.0
 EVAL_STRIDE_SEC = 60.0
 BATCH_SIZE = 48
@@ -410,6 +438,7 @@ EVENT_SIGMA_LIMITS_SEC = (0.15, 0.5)
 EVENT_COUNT_THRESHOLD = 0.1
 # Breathing-rate-targeted speed augmentation and rate-balanced sampling.
 SPEED_AUG_PROB = 0.5
+SHIFT_AUG_SEC = 0.094  # random time shift of training windows (12 samples at 128 Hz)
 SPEED_SCALE_LIMITS = (0.7, 1.6)  # >1 compresses time (faster breathing)
 SPEED_TARGET_RR_LIMITS_BPM = (6.0, 45.0)
 RR_LOCAL_CONTEXT_SEC = 5.0
@@ -417,6 +446,9 @@ RR_BALANCE_BIN_EDGES_BPM = (8.0, 12.0, 16.0, 20.0, 25.0, 30.0, 40.0)
 RR_BALANCE_MAX_WEIGHT_RATIO = 5.0
 # Subject-wise validation (fraction of training subjects) and refit.
 VALIDATION_MODES = ("subject_refit", "subject", "temporal")
+# conv1x1: proposed 1x1 stem fusion + GroupNorm; none: ablation, the
+# concatenated stem branches (+ identity channel) feed the encoder.
+STEM_FUSION_MODES = ("conv1x1", "none")
 VALIDATION_SUBJECT_FRACTION = 0.2
 MIN_VALIDATION_SUBJECTS = 3
 EVENT_PRIOR = 0.15  # initial event probability (bias of the event head)
@@ -513,13 +545,13 @@ FFT_SUBHARMONIC_POWER_RATIO = 0.3
 # v16 Deep-only early-fusion configuration with proposals 4 and 5 and the
 # breath-event decoder.
 MODEL_CONFIG = {
-    # Raw-PPG input: 0.5/1/2 s stem kernels (v16: 32, 64, 128 samples).
-    "stem_kernel_sizes": (64, 128, 256),
+    # Stem kernels [0.25, 1.0, 2.0] s at 64 Hz (v16: 32, 64, 128 samples at 128 Hz).
+    "stem_kernel_sizes": (16, 64, 128),
     "stem_base_channels": 8,
     "hidden_channels": 24,
     "encoder_kernel_size": 15,
-    # Raw-PPG input: encoder receptive field 6.6 s (v16: 1, 2, 4, 8).
-    "encoder_dilations": (2, 4, 8, 16),
+    # Encoder receptive field 6.58 s.
+    "encoder_dilations": (1, 2, 4, 8),
     "dropout": 0.20,
     # Keep the 24-channel representation as the decoder input; do not expand
     # it to 64 channels before reducing to the scalar waveform output.
@@ -528,11 +560,8 @@ MODEL_CONFIG = {
     # Breath-event decoder: dilations widen the decoder receptive field from
     # 11 samples (0.09 s) to 113 samples (0.88 s) with the same parameters;
     # a second 1x1 head predicts breath-apex logits next to the waveform.
-    "decoder_dilations": (8, 16),
-    # Parallel context branch of the decoder (k7 d24, k5 d48; 2.6 s),
-    # concatenated with the branch above before the heads.
-    "dual_decoder": True,
-    "decoder_context_dilations": (24, 48),
+    # Decoder receptive field 3.52 s.
+    "decoder_dilations": (16, 32),
     "decoder_heads": ("waveform_tanh", "breath_event_logit"),
     "event_sigma_sec": EVENT_SIGMA_SEC,
     "stem_fusion_position": "early_fusion",
@@ -634,10 +663,10 @@ class ModelOptions:
     use_scale_gate: bool = False
     use_residual: bool = True
     raw_input: bool = True
-    dual_decoder: bool = True
     speed_aug: bool = True
     rr_balance: bool = True
-    validation: str = "subject_refit"
+    validation: str = "temporal"
+    stem_fusion: str = "conv1x1"
 
     @property
     def key(self) -> str:
@@ -650,14 +679,15 @@ class ModelOptions:
             parts.append("noresidual")
         if self.raw_input:
             parts.append("rawppg")
-        if self.dual_decoder:
-            parts.append("dualdec")
+        parts.append("kopt" if TARGET_FS == 128 else "kopt_fs{}".format(TARGET_FS))
         if self.speed_aug:
             parts.append("speedaug")
         if self.rr_balance:
             parts.append("rrbal")
         if self.validation != "temporal":
             parts.append(self.validation.replace("_", ""))
+        if self.stem_fusion != "conv1x1":
+            parts.append("nostemfusion")
         parts.append("eventdecoder")
         return "_".join(parts)
 
@@ -666,16 +696,12 @@ class ModelOptions:
         """Model key of the fv run with the same stem options (residual
         encoder, respiratory-band input); fold seeds use it so all paired
         runs share initial weights, batch order and dropout streams."""
-        return ModelOptions(
-            self.use_identity_channel,
-            self.use_scale_gate,
-            True,
-            False,
-            False,
-            False,
-            False,
-            "temporal",
-        ).key
+        return "_".join(
+            ["early_fusion"]
+            + (["identity"] if self.use_identity_channel else [])
+            + (["scalegate"] if self.use_scale_gate else [])
+            + ["eventdecoder"]
+        )
 
     @property
     def label(self) -> str:
@@ -688,14 +714,15 @@ class ModelOptions:
             additions.append("encoder without residual")
         if self.raw_input:
             additions.append("raw PPG input")
-        if self.dual_decoder:
-            additions.append("dual-dilation decoder")
+        additions.append(f"kernel-optimized ({TARGET_FS} Hz)")
         if self.speed_aug:
             additions.append("speed augmentation")
         if self.rr_balance:
             additions.append("rate-balanced sampling")
         if self.validation != "temporal":
             additions.append(f"{self.validation.replace('_', ' + ')} validation")
+        if self.stem_fusion != "conv1x1":
+            additions.append("no 1x1 stem fusion (concatenated stem into the encoder)")
         additions.append("breath-event decoder")
         return "v16 early fusion + " + " + ".join(additions)
 
@@ -704,7 +731,7 @@ class ModelOptions:
             use_identity_channel=self.use_identity_channel,
             use_scale_gate=self.use_scale_gate,
             use_residual=self.use_residual,
-            dual_decoder=self.dual_decoder,
+            stem_fusion=self.stem_fusion,
         )
 
 
@@ -2836,6 +2863,7 @@ def speed_augmented_window(
     record: dict,
     window_index: int,
     local_rr: float,
+    limit: Optional[Tuple[int, int]] = None,
 ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, float]]:
     """Rebuild a window at another breathing rate (input, target, events).
 
@@ -2844,7 +2872,7 @@ def speed_augmented_window(
     to SPEED_TARGET_RR_LIMITS_BPM; the time scale is s = target / local
     rate. A span of s x window length centred on the window is resampled to
     the window length (linear interpolation; the PPG has little power above
-    128 / 2 / 1.6 Hz), and breath times are divided by s. Returns None when the span leaves the record or is not
+    the Nyquist rate / 1.6), and breath times are divided by s. Returns None when the span leaves the record or is not
     mostly reference-quality, so the original window is used instead.
     """
     if not np.isfinite(local_rr) or local_rr <= 0:
@@ -2870,6 +2898,9 @@ def speed_augmented_window(
         return None
     span_start = int(round(start + 0.5 * length - 0.5 * span))
     span_start = min(max(0, span_start), total - span - 1)
+    if limit is not None and int(record["segment_ids"][window_index]) == limit[0]:
+        if span_start + span > limit[1]:
+            return None
     if float(np.mean(reference["train_map"][span_start : span_start + span])) < MIN_USABLE_PROPORTION:
         return None
     positions = span_start + np.arange(length, dtype=np.float64) * (span / float(length))
@@ -2915,6 +2946,20 @@ class SubjectWindowDataset(Dataset):
             self.samples.extend((subject, int(index)) for index in indices)
         if not self.samples:
             raise RuntimeError(f"No windows available for split={split}")
+        # Temporal split: a rebuilt training window (re-cut or time-scaled)
+        # must end before the subject's first validation window, so the
+        # validation samples are never shown in training.
+        self.limits: Dict[str, Tuple[int, int]] = {}
+        if split == "train":
+            for subject in subjects:
+                record = subject_data[subject]
+                held_out = select_subject_indices(len(record["low"]), "val")
+                if len(held_out):
+                    first = int(np.min(held_out))
+                    self.limits[subject] = (
+                        int(record["segment_ids"][first]),
+                        int(record["starts"][first]),
+                    )
         self.augment = augment
         self.speed_aug = bool(speed_aug and augment)
         self.local_rr = np.asarray(
@@ -2939,7 +2984,9 @@ class SubjectWindowDataset(Dataset):
         record = self.subject_data[subject]
         rebuilt = None
         if self.speed_aug and random.random() < SPEED_AUG_PROB:
-            rebuilt = speed_augmented_window(record, window_index, self.local_rr[index])
+            rebuilt = speed_augmented_window(
+                record, window_index, self.local_rr[index], self.limits.get(subject)
+            )
         if rebuilt is None:
             x = record["low"][window_index]
             y = record["rsp"][window_index]
@@ -2953,7 +3000,8 @@ class SubjectWindowDataset(Dataset):
         y_tensor = torch.from_numpy(np.asarray(y, dtype=np.float32).copy())
         e_tensor = torch.from_numpy(np.asarray(e, dtype=np.float32).copy())
         if self.augment:
-            shift = random.randint(-12, 12)
+            reach = int(round(SHIFT_AUG_SEC * float(record["fs"])))
+            shift = random.randint(-reach, reach)
             scale = random.uniform(0.95, 1.05)
             noise_std = random.uniform(0.002, 0.01)
             if shift:
@@ -3119,8 +3167,8 @@ class Conv1dExplicitSame(nn.Module):
         return self.conv(self.pad(x))
 
 
-def make_encoder(residual: bool = True) -> nn.Sequential:
-    hidden = MODEL_CONFIG["hidden_channels"]
+def make_encoder(residual: bool = True, channels: Optional[int] = None) -> nn.Sequential:
+    hidden = MODEL_CONFIG["hidden_channels"] if channels is None else int(channels)
     return nn.Sequential(
         *[
             ResidualConvBlock(
@@ -3218,15 +3266,17 @@ def standardized_identity_channel(x: torch.Tensor) -> torch.Tensor:
 # Breath-event decoder (the only structural change to the network)
 # ---------------------------------------------------------------------------
 
-def make_breath_decoder_trunk(dilations: Optional[Sequence[int]] = None) -> nn.Sequential:
+def make_breath_decoder_trunk(
+    dilations: Optional[Sequence[int]] = None,
+    channels: Optional[int] = None,
+) -> nn.Sequential:
     """v16 decoder layers with dilated convolutions and no output layer.
 
-    Same layers, channels, kernels and parameter count as the v16 decoder;
-    dilations (8, 16) widen the receptive field from 11 to 113 samples
-    (0.09 s -> 0.88 s at 128 Hz), enough to see the rise and fall around a
-    breath apex instead of mapping each time point on its own.
+    Same layers and channels as the v16 decoder; kernels and dilations come
+    from MODEL_CONFIG (decoder_kernel_sizes, decoder_dilations) so the
+    decoder sees the rise and fall around a breath onset.
     """
-    hidden = MODEL_CONFIG["hidden_channels"]
+    hidden = MODEL_CONFIG["hidden_channels"] if channels is None else int(channels)
     mid1, mid2 = MODEL_CONFIG["decoder_mid_channels"]
     kernel1, kernel2, _ = MODEL_CONFIG["decoder_kernel_sizes"]
     dilation1, dilation2 = (
@@ -3272,9 +3322,12 @@ class DeepOnlyV16EventDecoder(nn.Module):
         use_scale_gate: bool = False,
         stem_base_channels: Optional[int] = None,
         use_residual: bool = False,
-        dual_decoder: bool = False,
+        stem_fusion: str = "conv1x1",
     ):
         super().__init__()
+        if stem_fusion not in STEM_FUSION_MODES:
+            raise ValueError(f"stem_fusion must be one of {STEM_FUSION_MODES}")
+        self.stem_fusion = stem_fusion
         stem_channels = int(
             MODEL_CONFIG["stem_base_channels"]
             if stem_base_channels is None
@@ -3302,24 +3355,26 @@ class DeepOnlyV16EventDecoder(nn.Module):
         fusion_inputs = stem_channels * len(kernel_sizes) + int(
             self.use_identity_channel
         )
-        self.stem_fuse = nn.Sequential(
-            nn.Conv1d(fusion_inputs, hidden, 1),
-            nn.GroupNorm(choose_group_count(hidden), hidden),
-        )
+        if stem_fusion == "conv1x1":
+            self.stem_fuse = nn.Sequential(
+                nn.Conv1d(fusion_inputs, hidden, 1),
+                nn.GroupNorm(choose_group_count(hidden), hidden),
+            )
+            width = hidden
+        else:
+            # Ablation: no 1x1 fusion (and no GroupNorm after it). Every stem
+            # branch is already GroupNorm + GELU and the identity channel is
+            # z-scored, so the concatenation is the encoder input and the
+            # encoder/decoder width follows its channel count.
+            self.stem_fuse = nn.Identity()
+            width = fusion_inputs
+        self.feature_channels = width
         self.use_residual = bool(use_residual)
-        self.encoder = make_encoder(self.use_residual)
+        self.encoder = make_encoder(self.use_residual, width)
         decoder_channels = MODEL_CONFIG["decoder_mid_channels"][-1]
-        self.decoder = make_breath_decoder_trunk()
-        # Context branch (k7 d24, k5 d48; receptive field 337 samples, 2.6 s)
-        # beside the v16 branch (113 samples, 0.88 s); outputs concatenated.
-        self.context_decoder = (
-            make_breath_decoder_trunk(MODEL_CONFIG["decoder_context_dilations"])
-            if dual_decoder
-            else None
-        )
-        head_channels = decoder_channels * (2 if dual_decoder else 1)
-        self.wave_head = nn.Conv1d(head_channels, 1, 1)
-        self.event_head = nn.Conv1d(head_channels, 1, 1)
+        self.decoder = make_breath_decoder_trunk(channels=width)
+        self.wave_head = nn.Conv1d(decoder_channels, 1, 1)
+        self.event_head = nn.Conv1d(decoder_channels, 1, 1)
         self._init_weights()
         self._init_additions()
 
@@ -3346,7 +3401,7 @@ class DeepOnlyV16EventDecoder(nn.Module):
         """
         if self.scale_gate is not None:
             self.scale_gate.reset_to_uniform()
-        if self.use_identity_channel:
+        if self.use_identity_channel and self.stem_fusion == "conv1x1":
             with torch.no_grad():
                 self.stem_fuse[0].weight[:, -1:, :].zero_()
         nn.init.normal_(self.event_head.weight, mean=0.0, std=0.01)
@@ -3376,10 +3431,7 @@ class DeepOnlyV16EventDecoder(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return (waveform, event logits, post-fusion features, gate weights)."""
         fused, gate = self.fused_representation(x)
-        encoded = self.encoder(fused)
-        features = self.decoder(encoded)
-        if self.context_decoder is not None:
-            features = torch.cat([features, self.context_decoder(encoded)], dim=1)
+        features = self.decoder(self.encoder(fused))
         waveform = torch.tanh(self.wave_head(features))
         return waveform, self.event_head(features), fused, gate
 
@@ -3772,6 +3824,13 @@ def gate_diagnostics(
 
 def fusion_weight_diagnostics(model: DeepOnlyV16EventDecoder) -> dict:
     """Column norms of the 1x1 fusion weight per stem branch and identity."""
+    if model.stem_fusion != "conv1x1":
+        empty = {"Fusion_Stem_Column_Norm_Mean": np.nan}
+        for label in model.branch_labels:
+            empty[f"Fusion_{label}_Column_Norm_Mean"] = np.nan
+        empty["Fusion_Identity_Column_Norm"] = np.nan
+        empty["Fusion_Identity_to_Stem_Norm_Ratio"] = np.nan
+        return empty
     weight = model.stem_fuse[0].weight.detach().cpu().numpy()[:, :, 0]
     column_norms = np.linalg.norm(weight.astype(np.float64), axis=0)
     stem_channels = model.stem_base_channels
@@ -5166,7 +5225,7 @@ def build_manifest(
     MODEL_CONFIG.update(V16_STRUCTURE)
     try:
         reference = ModelOptions(
-        False, False, True, False, False, False, False, "temporal"
+        False, False, True, False, False, False, "temporal"
     ).build()
     finally:
         MODEL_CONFIG.update(saved)
@@ -5221,7 +5280,7 @@ def build_manifest(
                 f"subjects (>= {MIN_VALIDATION_SUBJECTS}) evenly spaced over the rate ranking; "
                 "refit on all training subjects for the selected epochs"
             ),
-            "decoder": "v16 branch (k7 d8, k5 d16) + context branch (k7 d24, k5 d48), concatenated",
+            "kernels": {"config": "K7", "fs": 64, "stem": [16, 64, 128], "enc_k": 15, "enc_d": [1, 2, 4, 8], "dec_k": [7, 5], "dec_d": [16, 32], "stem_sec": [0.25, 1.0, 2.0], "encoder_sec": 6.58, "decoder_sec": 3.52, "total_sec": 12.06},
             "event_target": (
                 f"sigma = {EVENT_SIGMA_PERIOD_FRACTION} x local period, limited to "
                 f"{EVENT_SIGMA_LIMITS_SEC} s"
@@ -5376,6 +5435,8 @@ def build_manifest(
 
 
 def run_experiment(args: argparse.Namespace) -> None:
+    if args.stem_fusion != "conv1x1" and Path(args.results_root) == DEFAULT_RESULTS_ROOT:
+        args.results_root = PROJECT_ROOT / "Results_no_stem_fusion"
     results_root = Path(args.results_root).resolve()
     results_root.mkdir(parents=True, exist_ok=True)
     DATASET_CONFIGS["capnobase"]["use_artifact_labels"] = args.capnobase_artifacts
@@ -5396,10 +5457,10 @@ def run_experiment(args: argparse.Namespace) -> None:
         use_scale_gate=args.use_scale_gate,
         use_residual=args.use_residual,
         raw_input=args.ppg_input == "raw",
-        dual_decoder=args.dual_decoder,
         speed_aug=args.speed_aug,
         rr_balance=args.rr_balance,
         validation=args.validation,
+        stem_fusion=args.stem_fusion,
     )
     ANALYSIS_PROFILES["capnography_wide_rr"]["capnography_target"] = args.capnography_target
     window_specs = [spec for spec in WINDOW_SPECS if spec.name in args.windows]
@@ -5549,7 +5610,8 @@ def run_experiment(args: argparse.Namespace) -> None:
                             "Residual_Encoder_Type": MODEL_CONFIG["encoder_channel_mixing"],
                             "Encoder_Residual": model_options.use_residual,
                             "PPG_Input": PPG_INPUT,
-                            "Dual_Decoder": model_options.dual_decoder,
+                            "Kernel_Config": "K7",
+                            "Model_FS": TARGET_FS,
                             "Speed_Aug": model_options.speed_aug,
                             "RR_Balance": model_options.rr_balance,
                             "Validation_Mode": model_options.validation,
@@ -5870,8 +5932,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--validation",
         choices=VALIDATION_MODES,
-        default="subject_refit",
-        help="subject_refit (default), subject, or temporal (v16 split).",
+        default="temporal",
+        help=(
+            "temporal (default; last 20%% of each training subject's windows, "
+            "as in the paired baseline), subject, or subject_refit."
+        ),
     )
     parser.add_argument(
         "--no-speed-aug",
@@ -5886,16 +5951,21 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Disable rate-balanced sampling of training windows.",
     )
     parser.add_argument(
-        "--no-dual-decoder",
-        dest="dual_decoder",
-        action="store_false",
-        help="Use the single v16 decoder branch.",
-    )
-    parser.add_argument(
         "--ppg-input",
         choices=PPG_INPUT_MODES,
         default=PPG_INPUT,
         help="raw: PPG time series, min-max per window (default); resp_band: fv input.",
+    )
+    parser.add_argument(
+        "--stem-fusion",
+        choices=STEM_FUSION_MODES,
+        default="conv1x1",
+        help=(
+            "conv1x1: proposed 1x1 stem fusion + GroupNorm (default); none: "
+            "ablation, the concatenated stem branches and identity channel "
+            "go straight into the encoder (results under Results_no_stem_fusion "
+            "unless --results-root is given)."
+        ),
     )
     parser.add_argument(
         "--datasets",
@@ -5961,7 +6031,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         use_identity_channel=MODEL_CONFIG["use_identity_channel"],
         use_scale_gate=MODEL_CONFIG["use_scale_gate"],
         use_residual=MODEL_CONFIG["encoder_residual"],
-        dual_decoder=MODEL_CONFIG["dual_decoder"],
         speed_aug=True,
         rr_balance=True,
     )
