@@ -113,6 +113,8 @@ All results go to D:\PPG2RSP_RRWaveNet_Inspired\261006_Ensemble:
 
 Run (GPU):                       python 261006_RRWaveNet_Ensemble.py
 Resume after an interruption:    python 261006_RRWaveNet_Ensemble.py --resume
+                                 (finished members are reused, an interrupted
+                                 member continues from its last epoch)
 Some datasets or variants:       --datasets capnobase --variants full no_stem_fusion
 Parallel workers (e.g. 4):       --resume --shard 0/4 ... --shard 3/4, then
                                  --resume --summary-only
@@ -3172,18 +3174,39 @@ def fit_model(
     min_epochs: int,
     patience: int,
     checkpoint: Path,
+    state_path: Optional[Path] = None,
 ) -> List[dict]:
     """Train with early stopping on the validation loss.
 
     The best validation state is saved to `checkpoint`. The cosine schedule
-    spans `epochs`.
+    spans `epochs`. With `state_path`, the full training state (weights,
+    optimizer, schedule, early-stopping counters, history and the random
+    number generators) is saved after every epoch, and an existing state is
+    continued from, so an interrupted run resumes exactly where it stopped.
     """
     criterion = WaveEventLoss()
     optimizer, scheduler = make_optimizer(model, epochs)
     best_val = np.inf
     patience_counter = 0
     history = []
-    for epoch in range(epochs):
+    start_epoch = 0
+    if state_path is not None and state_path.exists():
+        state = torch.load(state_path, map_location=device, weights_only=False)
+        model.load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+        scheduler.load_state_dict(state["scheduler"])
+        best_val = float(state["best_val"])
+        patience_counter = int(state["patience_counter"])
+        history = list(state["history"])
+        start_epoch = int(state["epoch"])
+        random.setstate(state["python_rng"])
+        np.random.set_state(state["numpy_rng"])
+        torch.set_rng_state(state["torch_rng"])
+        if torch.cuda.is_available() and state.get("cuda_rng") is not None:
+            torch.cuda.set_rng_state_all(state["cuda_rng"])
+        if state.get("stopped", False):
+            return history
+    for epoch in range(start_epoch, epochs):
         model.train()
         train_loss = 0.0
         for x, y, e, n in train_loader:
@@ -3216,7 +3239,28 @@ def fit_model(
             patience_counter = 0
         elif epoch + 1 >= min_epochs:
             patience_counter += 1
-        if epoch + 1 >= min_epochs and patience_counter >= patience:
+        stop = epoch + 1 >= min_epochs and patience_counter >= patience
+        if state_path is not None:
+            atomic_torch_save(
+                {
+                    "epoch": epoch + 1,
+                    "stopped": bool(stop),
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "best_val": best_val,
+                    "patience_counter": patience_counter,
+                    "history": history,
+                    "python_rng": random.getstate(),
+                    "numpy_rng": np.random.get_state(),
+                    "torch_rng": torch.get_rng_state(),
+                    "cuda_rng": torch.cuda.get_rng_state_all()
+                    if torch.cuda.is_available()
+                    else None,
+                },
+                state_path,
+            )
+        if stop:
             break
     return history
 
@@ -3236,11 +3280,14 @@ def train_one(
     seed: int,
     model_options: ModelOptions,
     save_features: bool = False,
+    resume: bool = False,
 ) -> Tuple[Dict[str, np.ndarray], List[dict], dict, Path, dict]:
     """Train one ensemble member of one LOSOCV fold and predict the held-out subject.
 
     Validation: the last 20% of each training subject's windows (v16); the
-    best validation state is restored before testing.
+    best validation state is restored before testing. The training state is
+    saved after every epoch; with `resume` an interrupted member continues
+    from it, otherwise it starts over.
     """
     set_seed(seed)
     model_root = member_root / "Models"
@@ -3255,6 +3302,9 @@ def train_one(
     history_path = curve_root / f"{tag}_Learning_Curve.csv"
     audit_path = audit_root / f"{tag}_Training_Audit.csv"
     prediction_path = prediction_root / f"{tag}_test_outputs.npz"
+    state_path = model_root / f"{tag}_training_state.pt"
+    if not resume and state_path.exists():
+        state_path.unlink()
 
     train_dataset = SubjectWindowDataset(subject_data, train_subjects, "train", True)
     val_dataset = SubjectWindowDataset(subject_data, train_subjects, "val", False)
@@ -3266,7 +3316,15 @@ def train_one(
 
     model = model_options.build().to(device)
     history = fit_model(
-        model, train_loader, val_loader, device, epochs, min_epochs, patience, checkpoint
+        model,
+        train_loader,
+        val_loader,
+        device,
+        epochs,
+        min_epochs,
+        patience,
+        checkpoint,
+        state_path,
     )
     history_frame = pd.DataFrame(history)
     history_frame.to_csv(history_path, index=False, encoding="utf-8-sig")
@@ -3317,6 +3375,8 @@ def train_one(
             "post_stem_fusion"
         )
     np.savez_compressed(prediction_path, **arrays)
+    if state_path.exists():
+        state_path.unlink()
     del features, arrays, train_loader, val_loader, test_loader
     del model
     release_memory(device)
@@ -4112,6 +4172,7 @@ def run_member(
         seed,
         variant.options,
         args.save_features,
+        args.resume,
     )
     summary, window_frame = evaluate_subject_minutes(
         outputs,
@@ -4695,7 +4756,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Reuse members whose summary, minutes and predictions already exist.",
+        help=(
+            "Reuse members whose summary, minutes and predictions already exist "
+            "and continue interrupted members from their last epoch."
+        ),
     )
     parser.add_argument(
         "--shard",
