@@ -89,6 +89,10 @@ and changes one thing:
   alone (metrics averaged over the members; no extra training);
 * no_stem_fusion: the 1x1 stem fusion and its GroupNorm removed, the 24
   concatenated stem channels feed the encoder;
+* no_event_head: no breath-event head and no event or count loss; the
+  model is trained, and its epoch picked, with the v16 waveform loss alone
+  (the 260928 loss). The head is built and initialized, then dropped
+  before training, so the shared layers start from the same weights;
 * dropout_0.20: dropout of model A (0.20);
 * epochs_120: up to 120 epochs as for model A.
 Comparison: per dataset, the FFT and Davies & Mandic metrics of every variant
@@ -400,14 +404,17 @@ class ModelOptions:
     stem_fusion: str = "conv1x1"
     dropout: float = MODEL_CONFIG["dropout"]
     decoder_dilations: Tuple[int, ...] = tuple(MODEL_CONFIG["decoder_dilations"])
+    # False: ablation without the auxiliary breath-event head (waveform loss only).
+    event_head: bool = True
 
     @property
     def key(self) -> str:
-        return "rrwavenet_fs{}_{}_dec{}_p{:.2f}".format(
+        return "rrwavenet_fs{}_{}_dec{}_p{:.2f}{}".format(
             TARGET_FS,
             "stemfusion" if self.stem_fusion == "conv1x1" else "nostemfusion",
             "-".join(str(value) for value in self.decoder_dilations),
             self.dropout,
+            "" if self.event_head else "_noeventhead",
         )
 
     @property
@@ -421,14 +428,20 @@ class ModelOptions:
         return (
             f"3 stem branches x 8 filters, {fusion}, residual encoder, "
             f"decoder dilations {dilations}, dropout {self.dropout:.2f}"
+            + ("" if self.event_head else ", waveform loss only (no event head)")
         )
 
     def build(self) -> "DeepOnlyV16EventDecoder":
-        return DeepOnlyV16EventDecoder(
+        model = DeepOnlyV16EventDecoder(
             stem_fusion=self.stem_fusion,
             dropout=self.dropout,
             decoder_dilations=self.decoder_dilations,
         )
+        if not self.event_head:
+            # Built and initialized like the full model (same random stream),
+            # then dropped: trained with the waveform loss alone.
+            model.remove_event_head()
+        return model
 
 
 @dataclass(frozen=True)
@@ -449,6 +462,12 @@ def build_variants() -> Dict[str, Variant]:
             "no_stem_fusion",
             "w/o 1x1 stem fusion",
             replace(final, stem_fusion="none"),
+            DEFAULT_EPOCHS,
+        ),
+        "no_event_head": Variant(
+            "no_event_head",
+            "w/o auxiliary event head (waveform loss only)",
+            replace(final, event_head=False),
             DEFAULT_EPOCHS,
         ),
     }
@@ -2941,6 +2960,14 @@ class WaveEventLoss(nn.Module):
         event_norm: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         wave = self.wave_loss(wave_pred, wave_target)
+        if event_logits is None:
+            # Ablation without the event head: the v16 waveform loss alone.
+            zero = wave.detach() * 0.0
+            return LOSS_WEIGHT_WAVE * wave, {
+                "wave": wave.detach(),
+                "event": zero,
+                "count_bpm": zero,
+            }
         event = self.event_loss(event_logits, event_target)
         minutes = event_target.shape[-1] / self.fs / 60.0
         norm = event_norm.reshape(-1, 1)
@@ -3150,18 +3177,18 @@ def feature_representation_summary(features: np.ndarray) -> dict:
 # ---------------------------------------------------------------------------
 
 def make_optimizer(model: DeepOnlyV16EventDecoder, epochs: int):
-    event_head_ids = {id(param) for param in model.event_head.parameters()}
-    optimizer = torch.optim.AdamW(
-        [
+    if model.event_head is None:
+        groups = [{"params": list(model.parameters())}]
+    else:
+        event_head_ids = {id(param) for param in model.event_head.parameters()}
+        groups = [
             {"params": [p for p in model.parameters() if id(p) not in event_head_ids]},
             {
                 "params": list(model.event_head.parameters()),
                 "lr": LEARNING_RATE * EVENT_HEAD_LR_MULTIPLIER,
             },
-        ],
-        lr=LEARNING_RATE,
-        weight_decay=WEIGHT_DECAY,
-    )
+        ]
+    optimizer = torch.optim.AdamW(groups, lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     return optimizer, CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
 
