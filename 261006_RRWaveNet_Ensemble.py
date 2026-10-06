@@ -11,20 +11,27 @@ raw PPG (min-max per 10 s window) at 64 Hz
    (receptive field 6.58 s)
 -> decoder Conv(24 -> 16, k7, dilation 12) -> Conv(16 -> 8, k5, dilation 24)
    (receptive field 2.64 s), GroupNorm + GELU + dropout after each
--> waveform head (1x1 conv + tanh) and breath-event head (1x1 conv).
+-> waveform head (1x1 conv + tanh): the only output of the trained model.
+During training a breath-event head (1x1 conv on the same decoder
+features) carries the auxiliary event and count losses; it is removed
+after training and the waveform path does not pass through it, so
+removing it changes no output.
 Dropout 0.10 in the encoder and decoder. Compared with 260928 only the
 sampling rate (128 -> 64 Hz, so the same kernel sizes span twice the time),
 the decoder dilations (1/1 -> 12/24) and the dropout (0.20 -> 0.10) differ.
-9,386 (8,738 without the 1x1 stem fusion) parameters.
+9,386 parameters during training (9,377 after the event head is
+removed); without the 1x1 stem fusion 8,738 (8,729) parameters.
 
 Training
 --------
 Raw PPG input without a band-pass; target = respiratory-phase waveform
 from the expert CO2 breath labels (CapnoBase) or the respiratory-band
 reference (BIDMC, STEAM2); loss = v16 waveform loss + breath-event heatmap
-BCE + soft-count loss. Validation is the last 20% of every training
-subject's windows; the epoch with the lowest validation loss is restored
-(AdamW, learning rate 2e-4 with cosine decay, up to 200 epochs, at least 20,
+BCE + soft-count loss (the last two on the training-only event head;
+the validation loss that picks the epoch is the same sum). Validation is
+the last 20% of every training subject's windows; the epoch with the
+lowest validation loss is restored
+(AdamW, learning rate 2e-4 with cosine decay, up to 240 epochs, at least 20,
 patience 25). Training windows keep the v16 jitter (random shift up to
 0.094 s, gain 0.95-1.05, small noise); there is no speed augmentation and
 no rate-balanced sampling.
@@ -36,14 +43,21 @@ STEAM2 were not used to choose anything):
   40 epochs; Davies mMAE 0.461 -> 0.427). Decoder dilations 10/20 (2.207) and
   dropout 0.10 with dilations 10/20 (1.970) did not improve on it, so the
   decoder keeps the dilations 12/24 of model A.
-* training length: (being checked; provisional value)
+* longer training: 80 instead of 40 epochs lowered the pooled FFT MAE
+  further (1.934 -> 1.786; Davies mAE 0.266 -> 0.250, mMAE 0.427 -> 0.450)
+  and the best epoch stayed near the end (67-80 of 80). The LOSOCV schedule
+  is doubled the same way, 120 -> 240 epochs (120-epoch LOSOCV runs of the
+  earlier model reached the cap in 40 of 42 folds, best epoch 106 on average).
+* model A itself (decoder dilations 12/24) was the best of the structure
+  pilot: decoders with two or three layers and increasing or decreasing
+  dilations, two seeds each.
 
 Ensemble
 --------
 Every LOSOCV fold trains 5 models that differ only in the random seed
 (initial weights, batch order, jitter and dropout). On the held-out
-subject their waveform outputs and breath-event probabilities are averaged
-and the averaged waveform is scored. Seeds depend only on the dataset,
+subject their waveform outputs are averaged and the averaged waveform
+is scored. Seeds depend only on the dataset,
 the window condition, the held-out subject and the member index, so every
 ablation variant uses the same five seeds as the final model.
 
@@ -61,10 +75,10 @@ dataset:
 * Davies & Mandic (2022): median absolute error over all minutes (mAE) and
   median of the per-subject mean absolute error (mMAE), each with its
   interquartile range;
+* waveform agreement: Pearson r between the predicted and the target
+  waveform in every minute (mean and median over minutes);
 * every subject with its median true and predicted rate and its MAE
   (Davies & Mandic, Fig. 3b), without any grouping of subjects.
-The per-minute files also keep the event-head count, the waveform count and
-their median; they are not part of the summary.
 
 Ablation study
 --------------
@@ -229,7 +243,7 @@ EVAL_WINDOW_SEC = 60.0
 EVAL_STRIDE_SEC = 60.0
 BATCH_SIZE = 48
 # Maximum epochs of the final model (model A: 120).
-DEFAULT_EPOCHS = 200
+DEFAULT_EPOCHS = 240
 MIN_EPOCHS = 20
 PATIENCE = 25
 LEARNING_RATE = 2e-4
@@ -249,8 +263,7 @@ LOSS_WEIGHT_COUNT = 0.1  # was 0.02; count above a background threshold
 # condition gets (7 steps/epoch x 120 epochs), so the new head uses 10x.
 EVENT_HEAD_LR_MULTIPLIER = 10.0
 
-# Breath detection, reference quality and smart fusion (Karlen et al. 2013;
-# RRest / Charlton et al. 2016).
+# Breath detection and reference quality (RRest / Charlton et al. 2016).
 RESP_BAND_HZ = (0.1, 0.5)
 RR_BAND_BPM = (6.0, 30.0)  # RR representable in the 0.1-0.5 Hz analysis band
 CTO_PEAK_FRACTION = 0.2  # count-orig: peaks above 0.2 x Q3 of all peak values
@@ -278,23 +291,7 @@ SHIFT_AUG_SEC = 0.094
 # conv1x1: 1x1 stem fusion + GroupNorm; none: ablation, the concatenated
 # stem branches feed the encoder.
 STEM_FUSION_MODES = ("conv1x1", "none")
-EVENT_PRIOR = 0.15  # initial event probability (bias of the event head)
-# Event peaks are local maxima of the event probability whose prominence is
-# at least 30% of the local probability range (5th-95th percentile over the
-# 60 s block and its context). A relative rule, because a heatmap trained with
-# BCE lowers its peaks where breath timing is uncertain, so a fixed height
-# would drop correct but less confident breaths.
-EVENT_MIN_PROMINENCE_FRACTION = 0.3
-EVENT_MIN_RANGE = 0.05  # below this the head is flat: no breath events
-EVENT_MIN_DISTANCE_SEC = 1.5  # same minimum breath spacing as the v16 counter
-PEAK_MATCH_TOLERANCE_SEC = 1.0  # used when fewer than two reference breaths
-# Breath matching tolerance as a share of the local breath interval: a
-# quarter cycle (1 s at 15 bpm, 2.5 s at 6 bpm, 0.31 s at 48 bpm), so timing
-# is judged on the same phase scale at every breathing rate.
-PEAK_MATCH_TOLERANCE_CYCLE_FRACTION = 0.25
-SMART_FUSION_SD_BPM = 4.0  # Karlen et al. 2013
-DISCORDANT_PCC = 0.8  # legacy minutes with high PCC but a large count error
-DISCORDANT_AE_BPM = 3.0
+EVENT_PRIOR = 0.15  # initial event probability (bias of the training-only event head)
 
 # PPG-only quality rules. These are applied to each candidate input window.
 PPG_SQI_THRESHOLD = 0.86
@@ -1281,58 +1278,6 @@ def detect_breaths_continuous(filtered: np.ndarray, fs: int) -> np.ndarray:
     return breaths
 
 
-def detect_event_breaths(
-    probability: np.ndarray,
-    fs: int,
-    min_interval_sec: float = EVENT_MIN_DISTANCE_SEC,
-    rate_hint_breaths: Optional[np.ndarray] = None,
-) -> np.ndarray:
-    """Breath events from a continuous event-probability trace.
-
-    Processed in the same 60 s blocks with 10 s context as the ground truth,
-    so the relative prominence threshold follows slow changes in confidence.
-
-    `rate_hint_breaths` are breath onsets from the model's waveform head
-    (same time base). When given, peaks closer than half the local median
-    breath interval are treated as one breath: at slow rates breath timing
-    from the PPG is uncertain by a second or more, the event head answers
-    with a broad bump, and a fixed 0.8 s spacing (sized for infant rates)
-    splits that bump into two or three events. Only model outputs are used.
-    """
-    length = len(probability)
-    block = int(round(BREATH_BLOCK_SEC * fs))
-    margin = int(round(BREATH_BLOCK_MARGIN_SEC * fs))
-    found = []
-    for block_start in range(0, length, block):
-        block_end = min(length, block_start + block)
-        low = max(0, block_start - margin)
-        high = min(length, block_end + margin)
-        local = probability[low:high]
-        spread = float(np.percentile(local, 95) - np.percentile(local, 5))
-        if spread < EVENT_MIN_RANGE:
-            continue
-        interval_sec = min_interval_sec
-        if rate_hint_breaths is not None:
-            hints = rate_hint_breaths[
-                (rate_hint_breaths >= low) & (rate_hint_breaths < high)
-            ]
-            if len(hints) >= 3:
-                interval_sec = max(
-                    min_interval_sec,
-                    0.5 * float(np.median(np.diff(hints))) / float(fs),
-                )
-        peaks, _ = find_peaks(
-            local,
-            distance=max(1, int(round(interval_sec * fs))),
-            prominence=EVENT_MIN_PROMINENCE_FRACTION * spread,
-        )
-        peaks = peaks + low
-        found.append(peaks[(peaks >= block_start) & (peaks < block_end)])
-    if not found:
-        return np.empty(0, dtype=np.int64)
-    return np.unique(np.concatenate(found)).astype(np.int64)
-
-
 def _thresholded_bump_area(threshold: float) -> float:
     """Area of max(exp(-x^2/2) - threshold, 0) for unit sigma."""
     x = np.linspace(-8.0, 8.0, 160001)
@@ -1399,37 +1344,6 @@ def breath_event_target(
 ) -> np.ndarray:
     """Breath heatmap (height 1 at every reference breath onset)."""
     return breath_event_target_and_norm(peaks, start, length, fs)[0]
-
-
-def match_breaths(
-    reference: np.ndarray,
-    predicted: np.ndarray,
-    tolerance: float,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Greedy one-to-one matching of breath times within a tolerance.
-
-    Returns index arrays (into reference, into predicted) of matched pairs,
-    closest pairs first.
-    """
-    reference = np.asarray(reference, dtype=np.float64)
-    predicted = np.asarray(predicted, dtype=np.float64)
-    if len(reference) == 0 or len(predicted) == 0:
-        empty = np.empty(0, dtype=np.int64)
-        return empty, empty
-    distance = np.abs(reference[:, None] - predicted[None, :])
-    rows, cols = np.nonzero(distance <= tolerance)
-    order = np.argsort(distance[rows, cols], kind="stable")
-    used_ref = np.zeros(len(reference), dtype=bool)
-    used_pred = np.zeros(len(predicted), dtype=bool)
-    matched_ref = []
-    matched_pred = []
-    for row, col in zip(rows[order], cols[order]):
-        if not used_ref[row] and not used_pred[col]:
-            used_ref[row] = True
-            used_pred[col] = True
-            matched_ref.append(row)
-            matched_pred.append(col)
-    return np.asarray(matched_ref, dtype=np.int64), np.asarray(matched_pred, dtype=np.int64)
 
 
 def preprocess_segment(
@@ -2834,9 +2748,10 @@ class DeepOnlyV16EventDecoder(nn.Module):
 
     three stem branches -> concatenation (24 channels) -> 1x1 fusion +
     GroupNorm (no GELU) -> depthwise residual encoder -> dilated decoder
-    trunk -> {waveform head (tanh), breath-event head}. With
-    stem_fusion="none" (ablation) the concatenated stem channels feed the
-    encoder directly.
+    trunk -> waveform head (tanh). The breath-event head (1x1 conv on the
+    decoder features) exists for the auxiliary training losses and is
+    removed after training (remove_event_head). With stem_fusion="none"
+    (ablation) the concatenated stem channels feed the encoder directly.
     """
 
     def __init__(
@@ -2909,6 +2824,10 @@ class DeepOnlyV16EventDecoder(nn.Module):
             math.log(EVENT_PRIOR / (1.0 - EVENT_PRIOR)),
         )
 
+    def remove_event_head(self) -> None:
+        """Drop the training-only event head; the model then outputs the waveform only."""
+        self.event_head = None
+
     def fused_representation(self, x: torch.Tensor) -> torch.Tensor:
         stem = torch.cat([branch(x) for branch in self.stem_branches], dim=1)
         return self.stem_fuse(stem)
@@ -2916,12 +2835,13 @@ class DeepOnlyV16EventDecoder(nn.Module):
     def forward_with_diagnostics(
         self,
         x: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return (waveform, event logits, post-fusion features)."""
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor]:
+        """Return (waveform, event logits or None, post-fusion features)."""
         fused = self.fused_representation(x)
         features = self.decoder(self.encoder(fused))
         waveform = torch.tanh(self.wave_head(features))
-        return waveform, self.event_head(features), fused
+        logits = self.event_head(features) if self.event_head is not None else None
+        return waveform, logits, fused
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         waveform, event_logits, _ = self.forward_with_diagnostics(x)
@@ -3156,24 +3076,18 @@ def predict_with_diagnostics(
     loader: DataLoader,
     device: torch.device,
 ) -> Dict[str, np.ndarray]:
-    """Waveforms, event probabilities, targets and post-fusion features."""
+    """Predicted waveforms, targets and post-fusion features."""
     model.eval()
     chunks = {
         "predictions": [],
-        "event_probabilities": [],
         "targets": [],
-        "event_targets": [],
         "features": [],
     }
     with torch.no_grad():
-        for x, y, e, _ in loader:
-            wave, logits, fused = model.forward_with_diagnostics(x.to(device))
+        for x, y, _, _ in loader:
+            wave, _, fused = model.forward_with_diagnostics(x.to(device))
             chunks["predictions"].append(wave.squeeze(1).cpu().numpy())
-            chunks["event_probabilities"].append(
-                torch.sigmoid(logits).squeeze(1).cpu().numpy()
-            )
             chunks["targets"].append(y.squeeze(1).numpy())
-            chunks["event_targets"].append(e.squeeze(1).numpy())
             chunks["features"].append(fused.cpu().numpy().astype(np.float32))
     if not chunks["predictions"]:
         empty = np.empty((0, 0), dtype=np.float32)
@@ -3364,10 +3278,15 @@ def train_one(
     pd.DataFrame([audit]).to_csv(audit_path, index=False, encoding="utf-8-sig")
 
     model.load_state_dict(torch.load(checkpoint, map_location=device))
+    training_parameters = count_parameters(model)
+    # The event head only served the auxiliary training losses.
+    model.remove_event_head()
+    atomic_torch_save(model.state_dict(), model_root / f"{tag}_waveform_model.pth")
     outputs = predict_with_diagnostics(model, test_loader, device)
     features = outputs.pop("features")
     best_row = history_frame.loc[history_frame["Epoch"] == audit["Best_Epoch"]].iloc[0]
     diagnostics = {
+        "N_Params_Training": training_parameters,
         "N_Params": count_parameters(model),
         "Train_Windows": len(train_loader.dataset),
         "Val_Windows": len(val_loader.dataset),
@@ -3377,9 +3296,7 @@ def train_one(
     diagnostics.update(feature_representation_summary(features))
     arrays = {
         "predictions": outputs["predictions"],
-        "event_probabilities": outputs["event_probabilities"],
         "targets": outputs["targets"],
-        "event_targets": outputs["event_targets"],
         "segment_ids": np.asarray(
             [item["segment_id"] for item in metadata],
             dtype=np.int64,
@@ -3421,25 +3338,6 @@ def safe_pcc(x: np.ndarray, y: np.ndarray) -> float:
     if np.std(x_arr) < 1e-8 or np.std(y_arr) < 1e-8:
         return np.nan
     return float(stats.pearsonr(x_arr, y_arr)[0])
-
-
-def direct_rr_bpm(
-    signal: np.ndarray,
-    fs: int,
-) -> Tuple[float, int, np.ndarray]:
-    filtered, _ = bandpass_filter(signal, fs, 0.1, 0.5)
-    spread = float(np.std(filtered))
-    if len(filtered) < 2 or spread < 1e-8:
-        return np.nan, 0, filtered
-    distance = max(1, int(round(1.5 * fs)))
-    peaks, _ = find_peaks(
-        filtered,
-        distance=distance,
-        prominence=max(1e-8, 0.15 * spread),
-    )
-    duration_sec = len(filtered) / float(fs)
-    bpm = float(len(peaks) * 60.0 / duration_sec)
-    return bpm, int(len(peaks)), filtered
 
 
 def reconstruct_segment(
@@ -3509,60 +3407,20 @@ def _mean_or_nan(values: Sequence[float]) -> float:
     return float(np.mean(values)) if len(values) else np.nan
 
 
-def _sd_or_nan(values: Sequence[float]) -> float:
-    values = np.asarray(values, dtype=np.float64)
-    values = values[np.isfinite(values)]
-    if len(values) > 1:
-        return float(np.std(values, ddof=1))
-    return 0.0 if len(values) == 1 else np.nan
-
-
 def summarize_subject_minutes(frame: pd.DataFrame) -> dict:
     """Subject-level summary of the per-minute evaluation table."""
     summary = {
-        "RR_MAE_BPM": np.nan,
-        "RR_MAE_BPM_SD_60s": np.nan,
-        "PCC_60s_Mean": np.nan,
-        "PCC_60s_SD": np.nan,
         "N60": 0,
-        "N_Valid_RR_60s": 0,
-        "N_Valid_PCC_60s": 0,
         "N60_RefValid": 0,
         "Ref_Valid_Ratio": np.nan,
         **{f"N60_Excluded_{reason}": 0 for reason in REFERENCE_EXCLUSION_REASONS},
-        "RR_MAE_Event": np.nan,
-        "RR_MAE_Event_SD_60s": np.nan,
-        "RR_MAE_Wave_CtO": np.nan,
         "RR_MAE_Wave_FFT": np.nan,
-        "RR_Bias_Event": np.nan,
-        "Peak_Wrong_per_min": np.nan,
-        "Peak_Missed_per_min": np.nan,
-        "Peak_Extra_per_min": np.nan,
-        "Peak_Sensitivity": np.nan,
-        "Peak_PPV": np.nan,
-        "Peak_Timing_Error_ms": np.nan,
-        "SF_N_Retained": 0,
-        "SF_Retained_Ratio": np.nan,
-        "RR_MAE_SmartFusion": np.nan,
-        "RR_MAE_Median3": np.nan,
-        "N60_Discordant_Legacy": 0,
+        "RR_Bias_Wave_FFT": np.nan,
+        "Wave_PCC_Mean": np.nan,
     }
     if frame.empty:
         return summary
-    legacy_rr = pd.to_numeric(frame["RR_AE_BPM_Counting"], errors="coerce").dropna()
-    legacy_pcc = pd.to_numeric(frame["PCC_60s_Counting"], errors="coerce").dropna()
-    summary.update(
-        {
-            "RR_MAE_BPM": _mean_or_nan(legacy_rr),
-            "RR_MAE_BPM_SD_60s": _sd_or_nan(legacy_rr),
-            "PCC_60s_Mean": _mean_or_nan(legacy_pcc),
-            "PCC_60s_SD": _sd_or_nan(legacy_pcc),
-            "N60": int(len(frame)),
-            "N_Valid_RR_60s": int(len(legacy_rr)),
-            "N_Valid_PCC_60s": int(len(legacy_pcc)),
-            "N60_Discordant_Legacy": int(frame["Discordant_Legacy"].sum()),
-        }
-    )
+    summary["N60"] = int(len(frame))
     for reason in REFERENCE_EXCLUSION_REASONS:
         summary[f"N60_Excluded_{reason}"] = int(
             (frame["Ref_Exclusion_Reason"] == reason).sum()
@@ -3572,34 +3430,12 @@ def summarize_subject_minutes(frame: pd.DataFrame) -> dict:
     summary["Ref_Valid_Ratio"] = float(len(valid) / len(frame))
     if valid.empty:
         return summary
-    true_positive = float(valid["Peak_TP"].sum())
-    missed = float(valid["Peak_Missed"].sum())
-    extra = float(valid["Peak_Extra"].sum())
-    matched_time = float(valid["Peak_Timing_Error_Sum_ms"].sum())
-    retained = valid[valid["SF_Retained"].astype(bool)]
+    error = valid["Pred_Wave_FFT_RR"] - valid["GT_Breath_Count"] * (60.0 / EVAL_WINDOW_SEC)
     summary.update(
         {
-            "RR_MAE_Event": _mean_or_nan(valid["AE_Event"]),
-            "RR_MAE_Event_SD_60s": _sd_or_nan(valid["AE_Event"]),
-            "RR_MAE_Wave_CtO": _mean_or_nan(valid["AE_Wave_CtO"]),
             "RR_MAE_Wave_FFT": _mean_or_nan(valid["AE_Wave_FFT"]),
-            "RR_Bias_Event": _mean_or_nan(valid["Signed_Error_Event"]),
-            "Peak_Wrong_per_min": _mean_or_nan(valid["Peak_Wrong"]),
-            "Peak_Missed_per_min": _mean_or_nan(valid["Peak_Missed"]),
-            "Peak_Extra_per_min": _mean_or_nan(valid["Peak_Extra"]),
-            "Peak_Sensitivity": true_positive / (true_positive + missed)
-            if true_positive + missed > 0
-            else np.nan,
-            "Peak_PPV": true_positive / (true_positive + extra)
-            if true_positive + extra > 0
-            else np.nan,
-            "Peak_Timing_Error_ms": matched_time / true_positive
-            if true_positive > 0
-            else np.nan,
-            "SF_N_Retained": int(len(retained)),
-            "SF_Retained_Ratio": float(len(retained) / len(valid)),
-            "RR_MAE_SmartFusion": _mean_or_nan(retained["AE_SmartFusion"]),
-            "RR_MAE_Median3": _mean_or_nan(valid["AE_Median3"]),
+            "RR_Bias_Wave_FFT": _mean_or_nan(error),
+            "Wave_PCC_Mean": _mean_or_nan(valid["Wave_PCC"]),
         }
     )
     return summary
@@ -3611,33 +3447,24 @@ def evaluate_subject_minutes(
     references: Dict[int, dict],
     fs: int,
 ) -> Tuple[dict, pd.DataFrame]:
-    """Score every complete 60 s minute of one held-out subject.
+    """Score every complete 60 s minute of one held-out subject (waveform only).
 
-    Minutes are the same as in v16 (non-overlapping 60 s slices of each
-    contiguous run of reconstructed windows). Per minute:
+    Minutes are non-overlapping 60 s slices of each contiguous run of
+    reconstructed windows (overlap-add mean of the window outputs). Per minute:
 
-    * legacy: direct peak count and PCC on the stitched, window-normalized
-      prediction and target (unchanged v16 definition);
     * reference: with expert labels (CapnoBase) the labels are the ground
-      truth and a minute needs two labelled breaths and an RR in band;
-      otherwise the minute of the continuous reference must pass the RRest
-      agreement rule and the ground truth is the number of breath onsets
-      detected once on the continuous reference; excluded minutes keep a
-      reason. Band, RR range and breath spacing follow the segment's profile;
-    * model estimates: event-head breaths (relative-prominence peaks of the
-      event probability, at least half the waveform head's local breath
-      interval apart), count-orig breaths of the
-      predicted waveform, and the FFT RR of the predicted waveform;
-    * breath matching: event breaths vs reference breaths within a quarter
-      of the median breath interval, matched on the whole run so that
-      minute edges do not split a pair;
-    * smart fusion: mean of the three estimates, withheld when their SD
-      exceeds 4 breaths/min (Karlen et al. 2013);
-    * median of the three estimates on every valid minute (no withholding).
+      truth and a minute needs a valid reference, two labelled breaths and a
+      rate in band; otherwise the minute of the continuous reference must
+      pass the RRest agreement rule and the ground truth is the number of
+      breath onsets detected once on the continuous reference. Excluded
+      minutes keep a reason. Band and rate range follow the segment's profile;
+    * breathing rate: largest FFT peak of the predicted waveform within the
+      profile's rate band, after the profile's respiratory filter is applied
+      to the whole run;
+    * waveform agreement: Pearson r of the predicted and target waveforms.
     """
     predictions = outputs["predictions"]
     targets = outputs["targets"]
-    events = outputs["event_probabilities"]
     if len(predictions) == 0:
         return summarize_subject_minutes(pd.DataFrame()), pd.DataFrame()
 
@@ -3647,9 +3474,6 @@ def evaluate_subject_minutes(
     for segment_id in sorted({int(item["segment_id"]) for item in metadata}):
         pred_series, true_series, coverage = reconstruct_segment(
             predictions, targets, metadata, segment_id, fs
-        )
-        event_series, _, _ = reconstruct_segment(
-            events, events, metadata, segment_id, fs
         )
         reference = references[segment_id]
         ref_signal = reference["signal"]
@@ -3665,54 +3489,11 @@ def evaluate_subject_minutes(
             if run_end - run_start < eval_len:
                 continue
             minute_starts = list(range(run_start, run_end - eval_len + 1, eval_len))
-            span_start, span_end = minute_starts[0], minute_starts[-1] + eval_len
-
             wave_run = respiratory_filter(
                 pred_series[run_start:run_end], fs, reference["band_hz"], profile
             )
-            wave_breaths = detect_breaths_continuous(wave_run, fs) + run_start
-            event_breaths = (
-                detect_event_breaths(
-                    event_series[run_start:run_end],
-                    fs,
-                    profile["min_breath_interval_sec"],
-                    wave_breaths - run_start,
-                )
-                + run_start
-            )
-            gt_span = ref_breaths[(ref_breaths >= span_start) & (ref_breaths < span_end)]
-            ev_span = event_breaths[
-                (event_breaths >= span_start) & (event_breaths < span_end)
-            ]
-            tolerance = PEAK_MATCH_TOLERANCE_SEC * fs
-            if len(gt_span) > 1:
-                tolerance = PEAK_MATCH_TOLERANCE_CYCLE_FRACTION * float(
-                    np.median(np.diff(gt_span))
-                )
-            gt_idx, ev_idx = match_breaths(gt_span, ev_span, tolerance)
-            gt_matched = np.zeros(len(gt_span), dtype=bool)
-            ev_matched = np.zeros(len(ev_span), dtype=bool)
-            gt_matched[gt_idx] = True
-            ev_matched[ev_idx] = True
-            pair_gt_time = gt_span[gt_idx]
-            pair_error_ms = np.abs(gt_span[gt_idx] - ev_span[ev_idx]) * 1000.0 / fs
-
             for local_index, start in enumerate(minute_starts, start=1):
                 end = start + eval_len
-                # Legacy v16 definition (stitched, window-normalized signals).
-                pred_rr, pred_count, pred_filtered = direct_rr_bpm(
-                    pred_series[start:end], fs
-                )
-                true_rr, true_count, true_filtered = direct_rr_bpm(
-                    true_series[start:end], fs
-                )
-                legacy_ae = (
-                    abs(pred_rr - true_rr)
-                    if np.isfinite(pred_rr) and np.isfinite(true_rr)
-                    else np.nan
-                )
-                legacy_pcc = safe_pcc(true_filtered, pred_filtered)
-
                 # Reference validity and fixed ground truth. With expert labels
                 # the labels are the ground truth: the minute needs a valid
                 # reference signal, at least two labelled breaths and an RR in
@@ -3757,42 +3538,15 @@ def evaluate_subject_minutes(
                         ref_signal[start:end], fs, rr_band, subharmonic
                     )
 
-                # Model estimates.
-                event_count = int(((event_breaths >= start) & (event_breaths < end)).sum())
-                wave_count = int(((wave_breaths >= start) & (wave_breaths < end)).sum())
-                # The f/2, f/3 check is for capnogram references; on predicted
-                # waveforms it halved fast rates, so it is not used here.
+                # Breathing rate of the predicted waveform. The f/2, f/3 check
+                # is for capnogram references; on predicted waveforms it
+                # halved fast rates, so it is not used here.
                 wave_fft = fft_rr_bpm(
                     wave_run[start - run_start : end - run_start],
                     fs,
                     rr_band,
                     False,
                 )
-                estimates = np.array(
-                    [event_count * per_minute, wave_count * per_minute, wave_fft]
-                )
-                estimates_sd = (
-                    float(np.std(estimates, ddof=1))
-                    if np.all(np.isfinite(estimates))
-                    else np.nan
-                )
-                sf_retained = bool(
-                    np.isfinite(estimates_sd) and estimates_sd <= SMART_FUSION_SD_BPM
-                )
-                fused = float(np.mean(estimates)) if sf_retained else np.nan
-                # Median of the three estimates: no minute is withheld, and a
-                # single failing estimate cannot move the result.
-                finite = estimates[np.isfinite(estimates)]
-                median3 = float(np.median(finite)) if len(finite) else np.nan
-
-                # Breath-level matching attributed by breath time.
-                gt_in = (gt_span >= start) & (gt_span < end)
-                ev_in = (ev_span >= start) & (ev_span < end)
-                pairs_in = (pair_gt_time >= start) & (pair_gt_time < end)
-                true_positive = int(pairs_in.sum())
-                missed = int((gt_in & ~gt_matched).sum())
-                extra = int((ev_in & ~ev_matched).sum())
-
                 rows.append(
                     {
                         "Segment_ID": segment_id,
@@ -3800,18 +3554,6 @@ def evaluate_subject_minutes(
                         "RR_Window_Index": local_index,
                         "RR_Window_Start_Sec": start / float(fs),
                         "RR_Window_End_Sec": end / float(fs),
-                        "Target_Breath_Count": true_count,
-                        "Prediction_Breath_Count": pred_count,
-                        "Target_RR_BPM_Counting": true_rr,
-                        "Prediction_RR_BPM_Counting": pred_rr,
-                        "RR_AE_BPM_Counting": legacy_ae,
-                        "PCC_60s_Counting": legacy_pcc,
-                        "Discordant_Legacy": bool(
-                            np.isfinite(legacy_pcc)
-                            and np.isfinite(legacy_ae)
-                            and legacy_pcc >= DISCORDANT_PCC
-                            and legacy_ae >= DISCORDANT_AE_BPM
-                        ),
                         "Ref_Valid": bool(ref_valid),
                         "Ref_Exclusion_Reason": reason,
                         "Ref_Structural_Fraction": structural,
@@ -3824,28 +3566,11 @@ def evaluate_subject_minutes(
                         if reference["label_based"]
                         else "detected_breaths",
                         "GT_Breath_Count": gt_count,
-                        "Pred_Event_Count": event_count,
-                        "Pred_Wave_CtO_Count": wave_count,
                         "Pred_Wave_FFT_RR": wave_fft,
-                        "AE_Event": abs(event_count - gt_count) * per_minute,
-                        "AE_Wave_CtO": abs(wave_count - gt_count) * per_minute,
                         "AE_Wave_FFT": abs(wave_fft - gt_rate)
                         if np.isfinite(wave_fft)
                         else np.nan,
-                        "Signed_Error_Event": (event_count - gt_count) * per_minute,
-                        "Peak_TP": true_positive,
-                        "Peak_Missed": missed,
-                        "Peak_Extra": extra,
-                        "Peak_Wrong": missed + extra,
-                        "Peak_Timing_Error_Sum_ms": float(pair_error_ms[pairs_in].sum()),
-                        "SF_Estimates_SD": estimates_sd,
-                        "SF_Retained": sf_retained,
-                        "SF_Fused_RR": fused,
-                        "AE_SmartFusion": abs(fused - gt_rate) if sf_retained else np.nan,
-                        "Median3_RR": median3,
-                        "AE_Median3": abs(median3 - gt_rate)
-                        if np.isfinite(median3)
-                        else np.nan,
+                        "Wave_PCC": safe_pcc(true_series[start:end], pred_series[start:end]),
                     }
                 )
     frame = pd.DataFrame(rows)
@@ -3930,9 +3655,15 @@ def fft_davies_metrics(minutes: pd.DataFrame) -> dict:
         "Davies_mMAE": np.nan,
         "Davies_mMAE_Q1": np.nan,
         "Davies_mMAE_Q3": np.nan,
+        "Wave_PCC_Mean": np.nan,
+        "Wave_PCC_Median": np.nan,
     }
     if minutes.empty:
         return result
+    pcc = pd.to_numeric(minutes["Wave_PCC"], errors="coerce").dropna()
+    if len(pcc):
+        result["Wave_PCC_Mean"] = float(pcc.mean())
+        result["Wave_PCC_Median"] = float(pcc.median())
     have = minutes[np.isfinite(minutes["FFT_AE"])]
     result["N_Minutes"] = int(len(minutes))
     result["N_Minutes_No_FFT"] = int(len(minutes) - len(have))
@@ -3988,6 +3719,8 @@ SUMMARY_METRICS = (
     "Davies_mMAE",
     "Davies_mMAE_Q1",
     "Davies_mMAE_Q3",
+    "Wave_PCC_Mean",
+    "Wave_PCC_Median",
 )
 
 
@@ -4066,6 +3799,7 @@ def per_subject_table(minutes: pd.DataFrame) -> pd.DataFrame:
             FFT_RR=("FFT_RR", "mean"),
             FFT_Error=("FFT_Error", "mean"),
             FFT_AE=("FFT_AE", "mean"),
+            Wave_PCC=("Wave_PCC", "mean"),
         )
     return (
         have.groupby("Subject")
@@ -4075,6 +3809,7 @@ def per_subject_table(minutes: pd.DataFrame) -> pd.DataFrame:
             FFT_RR_Median=("FFT_RR", "median"),
             FFT_MAE=("FFT_AE", "mean"),
             FFT_Bias=("FFT_Error", "mean"),
+            Wave_PCC_Mean=("Wave_PCC", "mean"),
         )
         .reset_index()
     )
@@ -4215,8 +3950,8 @@ def build_manifest(
                 f"{list(MODEL_CONFIG['encoder_dilations'])}) -> decoder "
                 f"(channels {list(MODEL_CONFIG['decoder_mid_channels'])}, kernels "
                 f"{list(MODEL_CONFIG['decoder_kernel_sizes'])}, dilations "
-                f"{list(MODEL_CONFIG['decoder_dilations'])}) -> waveform head (tanh) "
-                "and breath-event head"
+                f"{list(MODEL_CONFIG['decoder_dilations'])}) -> waveform head (tanh); "
+                "breath-event head for the auxiliary training losses only, removed after training"
             ),
             "identity_channel": False,
             "gating": False,
@@ -4235,7 +3970,7 @@ def build_manifest(
         },
         "ensemble": {
             "members": args.members,
-            "combination": "mean of waveform outputs and event probabilities",
+            "combination": "mean of the members' waveform outputs",
             "seed": "stable_seed('261006-ensemble-member', window, dataset, subject, member)",
             "same_seeds_for_every_variant": True,
         },
@@ -4260,6 +3995,7 @@ def build_manifest(
         "evaluation": {
             "unit": f"complete {EVAL_WINDOW_SEC:g} s minutes with a valid reference",
             "rate_estimate": "largest FFT peak of the predicted waveform",
+            "waveform_agreement": "Pearson r of predicted and target waveform per minute",
             "ground_truth": "reference breaths in the minute (CapnoBase expert labels)",
             "fft_metrics": list(SUMMARY_METRICS),
             "davies_mandic_2022": "mAE = median minute AE, mMAE = median subject MAE",
@@ -4460,11 +4196,7 @@ def evaluate_ensemble(
             raise RuntimeError(f"{test_subject}: members scored different windows")
     outputs = {
         "predictions": np.mean([a["predictions"] for a in arrays], axis=0).astype(np.float32),
-        "event_probabilities": np.mean(
-            [a["event_probabilities"] for a in arrays], axis=0
-        ).astype(np.float32),
         "targets": arrays[0]["targets"],
-        "event_targets": arrays[0]["event_targets"],
     }
     summary, window_frame = evaluate_subject_minutes(
         outputs,
@@ -4700,11 +4432,14 @@ def summarize_results(
     if overall.empty:
         print("\nNo complete fold to summarize yet.")
         return
-    print("\nFFT and Davies & Mandic metrics (breaths/min; all reference-valid minutes):")
+    print(
+        "\nFFT and Davies & Mandic metrics (breaths/min; all reference-valid minutes; "
+        "PCC = waveform Pearson r):"
+    )
     header = (
         f"  {'Dataset':<10s} {'Model':<44s} {'Subj':>4s} {'Min':>5s} {'MAE':>6s} "
         f"{'RMSE':>6s} {'r':>5s} {'<=2':>5s} {'subjMAE':>12s} {'mAE [IQR]':>18s} "
-        f"{'mMAE [IQR]':>18s}"
+        f"{'mMAE [IQR]':>18s} {'PCC':>5s}"
     )
     print(header)
     for _, row in overall.iterrows():
@@ -4714,7 +4449,8 @@ def summarize_results(
             f"{row['FFT_Pearson_r']:>5.2f} {row['FFT_Within_2_BPM_Pct']:>4.0f}% "
             f"{row['FFT_Subject_MAE_Mean']:>5.2f}+-{row['FFT_Subject_MAE_SD']:<5.2f} "
             f"{row['Davies_mAE']:>5.2f} [{row['Davies_mAE_Q1']:.2f}-{row['Davies_mAE_Q3']:.2f}] "
-            f"{row['Davies_mMAE']:>5.2f} [{row['Davies_mMAE_Q1']:.2f}-{row['Davies_mMAE_Q3']:.2f}]"
+            f"{row['Davies_mMAE']:>5.2f} [{row['Davies_mMAE_Q1']:.2f}-{row['Davies_mMAE_Q3']:.2f}] "
+            f"{row['Wave_PCC_Mean']:>5.2f}"
         )
     if not comparison.empty:
         print("\nAblation (paired with the full model; per-subject FFT MAE):")
