@@ -4663,10 +4663,27 @@ def run_experiment(args: argparse.Namespace) -> None:
                     for subject in subjects
                     for member in range(args.members)
                 ]
+                if args.resume:
+                    # Only the members still to train are shared out, so the
+                    # workers stay balanced when members are added to folds
+                    # that already have some.
+                    jobs = [
+                        (variant, subject, member)
+                        for variant, subject, member in jobs
+                        if not member_done(
+                            condition_root(results_root, variant.name, spec, dataset_key),
+                            variant,
+                            subject,
+                            member,
+                            variant.epochs
+                            if args.epoch_cap is None
+                            else min(variant.epochs, args.epoch_cap),
+                        )
+                    ]
                 mine = [job for index, job in enumerate(jobs) if index % shard_count == shard_index]
                 print(
                     f"\n{dataset_label} ({spec.label}): {len(all_subjects)} LOSOCV folds, "
-                    f"{len(jobs)} member runs ({len(mine)} in this worker)"
+                    f"{len(jobs)} member runs to do ({len(mine)} in this worker)"
                 )
                 for variant, subject, member in mine:
                     try:
