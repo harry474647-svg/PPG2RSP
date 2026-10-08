@@ -1,7 +1,10 @@
 r"""261008_RRWaveNet_Decoder_Ablation: ablation of the decoder of
-261007_RRWaveNet_Ensemble_NoEvent. One part of the decoder is removed at a
-time; the LOSOCV, the three-model ensemble, the 10 s and 20 s input windows
-and the FFT / Davies & Mandic evaluation are those of 261007.
+261007_RRWaveNet_Ensemble_NoEvent, and a feature-level analysis of the stem
+fusion. One part of the decoder is removed at a time; the LOSOCV, the
+three-model ensemble, the 10 s and 20 s input windows and the FFT / Davies
+& Mandic evaluation are those of 261007. For every model, the effective
+rank and the off-diagonal channel correlation of the stem features are
+compared before and after the 1x1 stem fusion.
 
 Backbone: the 261007 full model, unchanged
 ------------------------------------------
@@ -115,6 +118,37 @@ Training, ensemble, windows and evaluation (as in 261007)
   MAE and on the per-minute absolute error, with Benjamini-Hochberg
   correction over the variants.
 
+Stem fusion: feature-level analysis
+-----------------------------------
+How the 1x1 stem fusion mixes the multi-scale stem features is measured
+on the held-out subjects. Every stored model is reloaded and run on the
+test windows of its held-out subject, and the 24 stem channels are taken
+at two points:
+* before the fusion: the three branch outputs (k32 / k64 / k128, GroupNorm,
+  GELU) concatenated;
+* after the fusion: the 1x1 conv + GroupNorm output that enters the encoder.
+At each point, all windows and samples of the subject are pooled into a
+24 x N matrix, centred per channel. Two summaries are computed, as in the
+post-fusion diagnostics of training:
+* effective rank (Roy & Vetterli, 2007) of the channel covariance: the
+  exponential of the entropy of its normalized eigenvalues. It counts how
+  many independent directions the channels span (1 to 24); it is also
+  reported divided by 24.
+* off-diagonal correlation: the mean of the absolute, and of the signed,
+  Pearson correlations between different channels. It shows how much the
+  channels repeat each other.
+The three models of a subject are averaged. Before vs after is compared
+over subjects with the paired Wilcoxon signed-rank test (**** p < 1e-4,
+*** < 1e-3, ** < 1e-2, * < 0.05, ns). The results are written to:
+* Summary/Stem_Fusion_Features: per member, per subject and test tables,
+  and box plots of effective rank and off-diagonal correlation before and
+  after the fusion;
+* a sheet of the results workbook.
+The analysis runs with the summary, for every variant folder under the
+results root. With --feature-analysis-only it runs alone and writes only
+that folder, so it can also be pointed at the results of 261006 or 261007:
+only the stem and stem-fusion weights of their checkpoints are read.
+
 Data and outputs
 ----------------
 Datasets: CapnoBase, BIDMC and STEAM2 (paths in DATASET_CONFIGS, or
@@ -129,13 +163,16 @@ All results go to D:\PPG2RSP_RRWaveNet_Inspired\261008_RRWaveNet_Decoder_Ablatio
   Data_Quality\   window and subject quality of every dataset
   Summary\   fft_davies_overall.csv, fft_davies_single_models.csv,
       ablation_comparison.csv, window_comparison.csv,
-      decoder_selection_pilot.csv, per_subject_fft.csv, per-minute tables,
+      decoder_selection_pilot.csv, stem_fusion_features.csv, per_subject_fft.csv,
+      per-minute tables, Stem_Fusion_Features\ (see above),
       figures and 261008_RRWaveNet_Decoder_Ablation_results.xlsx
 
 Reusing the 261007 full model: copy the folder "full" of the 261007
 results (D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1\full)
 into the results folder of this script and run with --resume. Its members
-are then reused, and only the four ablation variants are trained.
+are then reused, and only the four ablation variants are trained. Members of
+261006_RRWaveNet_Ensemble "full" (trained with the event head, same model
+key) are recognised and not reused.
 
 Run (GPU):                       python 261008_RRWaveNet_Decoder_Ablation.py
 Resume after an interruption:    python 261008_RRWaveNet_Decoder_Ablation.py --resume
@@ -147,6 +184,7 @@ Parallel workers (e.g. 4):       --resume --shard 0/4 ... --shard 3/4, then
                                  --resume --summary-only
 Summary of stored results only:  --summary-only
 Check the data without training: --dry-run --no-require-cuda
+Stem fusion features only:       --feature-analysis-only [--results-root <261007 results>]
 
 References
 ----------
@@ -157,6 +195,8 @@ Chen L-C, Zhu Y, Papandreou G, Schroff F, Adam H. Encoder-decoder with
   (DeepLabv3+). ECCV 2018.
 Yu F, Koltun V. Multi-scale context aggregation by dilated convolutions.
   ICLR 2016.
+Roy O, Vetterli M. The effective rank: a measure of effective
+  dimensionality. EUSIPCO 2007.
 Davies HJ, Mandic DP. Rapid extraction of respiratory waveforms from
   photoplethysmography: a deep corr-encoder approach. Biomed Signal
   Process Control 85, 2023 (arXiv:2212.12578, 2022).
@@ -2926,9 +2966,12 @@ class DeepOnlyV16Decoder(nn.Module):
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0.0)
 
+    def stem_representation(self, x: torch.Tensor) -> torch.Tensor:
+        """The three stem branches concatenated (before the stem fusion)."""
+        return torch.cat([branch(x) for branch in self.stem_branches], dim=1)
+
     def fused_representation(self, x: torch.Tensor) -> torch.Tensor:
-        stem = torch.cat([branch(x) for branch in self.stem_branches], dim=1)
-        return self.stem_fuse(stem)
+        return self.stem_fuse(self.stem_representation(x))
 
     def forward_with_diagnostics(
         self,
@@ -4230,6 +4273,16 @@ def read_json(path: Path) -> Optional[dict]:
         return None
 
 
+def trained_with_event_head(summary: dict) -> bool:
+    """True for a 261006_RRWaveNet_Ensemble member trained with the event
+    head: its full model has the same key as the full model here."""
+    try:
+        value = float(summary.get("Val_Event_BCE_At_Best", 0.0))
+    except (TypeError, ValueError):
+        return False
+    return bool(np.isfinite(value) and value > 0.0)
+
+
 def member_done(root: Path, variant: Variant, subject: str, member: int, epochs: int) -> bool:
     summary_path, window_path, prediction_path = member_paths(root, subject, member)
     summary = read_json(summary_path)
@@ -4237,6 +4290,7 @@ def member_done(root: Path, variant: Variant, subject: str, member: int, epochs:
         summary is not None
         and summary.get("Model") == variant.options.key
         and int(summary.get("Max_Epochs", -1)) == int(epochs)
+        and not trained_with_event_head(summary)
         and window_path.exists()
         and prediction_path.exists()
     )
@@ -4418,6 +4472,316 @@ def read_minutes(paths: Sequence[Path]) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+# ---------------------------------------------------------------------------
+# Stem fusion: feature-level analysis (before vs after the 1x1 fusion)
+# ---------------------------------------------------------------------------
+
+STEM_FEATURE_FOLDER = "Stem_Fusion_Features"
+# Metrics of feature_representation_summary compared before and after fusion.
+STEM_FEATURE_METRICS = (
+    ("Feature_EffectiveRank", "Effective rank"),
+    ("Feature_EffectiveRank_Normalized", "Effective rank / channels"),
+    ("Feature_OffDiag_AbsMean", "Mean |off-diagonal correlation|"),
+    ("Feature_OffDiag_SignedMean", "Mean off-diagonal correlation"),
+)
+# Figures are drawn for these metrics.
+STEM_FEATURE_FIGURES = (
+    "Feature_EffectiveRank",
+    "Feature_OffDiag_AbsMean",
+    "Feature_OffDiag_SignedMean",
+)
+STEM_STAGES = (
+    ("Pre", "Before stem fusion\n(3 branches concatenated)", "#e8968c"),
+    ("Post", "After stem fusion\n(1x1 conv + GroupNorm)", "#5b8db8"),
+)
+STEM_KEYS = ("stem_branches.", "stem_fuse.")
+
+
+def significance_stars(p_value: float) -> str:
+    if not np.isfinite(p_value):
+        return "n/a"
+    for threshold, stars in ((1e-4, "****"), (1e-3, "***"), (1e-2, "**"), (0.05, "*")):
+        if p_value < threshold:
+            return stars
+    return "ns"
+
+
+def stem_features(model: DeepOnlyV16Decoder, loader: DataLoader, device: torch.device):
+    """Stem features of every test window before and after the fusion."""
+    model.eval()
+    before, after = [], []
+    with torch.no_grad():
+        for x, _, _, _ in loader:
+            stem = model.stem_representation(x.to(device))
+            before.append(stem.cpu().numpy().astype(np.float32))
+            after.append(model.stem_fuse(stem).cpu().numpy().astype(np.float32))
+    return np.concatenate(before), np.concatenate(after)
+
+
+def load_stem_weights(model: DeepOnlyV16Decoder, checkpoint: Path, device: torch.device) -> bool:
+    """Load the stem branches and the stem fusion of a stored member.
+
+    Only these layers are used, so checkpoints of 261006, 261007 and of
+    every variant here can be read. False if the checkpoint has no 1x1 stem
+    fusion (no_stem_fusion) or a different stem.
+    """
+    state = torch.load(checkpoint, map_location=device)
+    wanted = {key: value for key, value in model.state_dict().items() if key.startswith(STEM_KEYS)}
+    stored = {key: value for key, value in state.items() if key.startswith(STEM_KEYS)}
+    if set(stored) != set(wanted) or any(
+        stored[key].shape != wanted[key].shape for key in wanted
+    ):
+        return False
+    model.load_state_dict(stored, strict=False)
+    return True
+
+
+def variant_directories(results_root: Path) -> List[Path]:
+    """Variant folders under the results root (the variants here first)."""
+    found = [
+        path
+        for path in results_root.iterdir()
+        if path.is_dir() and path.name not in ("Summary", "Data_Quality")
+        and not path.name.startswith("Summary")
+    ] if results_root.exists() else []
+    order = {name: index for index, name in enumerate(VARIANTS)}
+    return sorted(found, key=lambda path: (order.get(path.name, len(order)), path.name))
+
+
+def plot_stem_fusion_box(
+    path: Path,
+    before: np.ndarray,
+    after: np.ndarray,
+    label: str,
+    title: str,
+    p_value: float,
+) -> None:
+    """Box plot of one metric before and after the stem fusion (paired
+    subjects) with the Wilcoxon significance bracket."""
+    fig, axis = plt.subplots(figsize=(6.2, 4.0))
+    boxes = axis.boxplot(
+        [before, after],
+        widths=0.55,
+        patch_artist=True,
+        showfliers=False,
+        medianprops={"color": "#ff7f0e", "linewidth": 1.5},
+        whiskerprops={"color": "#222222"},
+        capprops={"color": "#222222"},
+    )
+    for patch, (_, _, color) in zip(boxes["boxes"], STEM_STAGES):
+        patch.set_facecolor(color)
+        patch.set_edgecolor("#333333")
+    axis.set_xticks([1, 2])
+    axis.set_xticklabels([stage_label for _, stage_label, _ in STEM_STAGES])
+    axis.set_ylabel(label)
+    axis.yaxis.grid(True, color="#e6e6e6")
+    axis.set_axisbelow(True)
+    top = max(float(np.max(line.get_ydata())) for line in boxes["caps"])
+    bottom = min(float(np.min(line.get_ydata())) for line in boxes["caps"])
+    span = max(top - bottom, 1e-6)
+    level, tick = top + 0.08 * span, 0.03 * span
+    axis.plot([1, 1, 2, 2], [level - tick, level, level, level - tick], color="#111111", linewidth=1.5)
+    axis.text(
+        1.5,
+        level + 0.01 * span,
+        significance_stars(p_value),
+        ha="center",
+        va="bottom",
+        fontsize=14,
+        fontweight="bold",
+    )
+    axis.set_ylim(bottom - 0.08 * span, level + 0.18 * span)
+    axis.set_title(title, fontsize=9)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def stem_fusion_feature_analysis(
+    args: argparse.Namespace,
+    results_root: Path,
+    window_specs: Sequence[WindowSpec],
+    dataset_keys: Sequence[str],
+) -> pd.DataFrame:
+    """Effective rank and off-diagonal channel correlation of the stem
+    features before and after the 1x1 stem fusion, for every stored member.
+
+    Every finished member's model is reloaded and run on its held-out
+    subject. The 24 stem channels before the fusion (three branches
+    concatenated) and after it (1x1 conv + GroupNorm) are summarized like the
+    post-fusion diagnostics of training (feature_representation_summary;
+    all test windows and samples of the subject pooled). Members are averaged
+    per subject, and before vs after is tested with the paired Wilcoxon
+    signed-rank test over subjects. Every variant folder found under the
+    results root is analysed, so results of 261006 and 261007 can be read
+    too. Writes Summary/Stem_Fusion_Features and returns the test table.
+    """
+    out_root = results_root / "Summary" / STEM_FEATURE_FOLDER
+    figure_root = out_root / "Figures"
+    figure_root.mkdir(parents=True, exist_ok=True)
+    device = torch.device(
+        f"cuda:{args.gpu}" if torch.cuda.is_available() and not args.force_cpu else "cpu"
+    )
+    directories = variant_directories(results_root)
+    member_rows, skipped_rows = [], []
+    for spec in window_specs:
+        window_name = f"{spec.order:02d}_{spec.name}"
+        for dataset_key in dataset_keys:
+            dataset_label = DATASET_CONFIGS[dataset_key]["label"]
+            roots = [
+                (directory.name, directory / window_name / dataset_label)
+                for directory in directories
+                if (directory / window_name / dataset_label / "Members").exists()
+            ]
+            if not roots:
+                continue
+            try:
+                subject_data = load_dataset(dataset_key, spec)
+            except Exception as exc:
+                print(f"Stem fusion features: {dataset_label} not loaded ({exc})")
+                continue
+            subjects = selected_subjects(args, subject_data)
+            model = ModelOptions().build().to(device)
+            for variant_name, root in roots:
+                for subject in subjects:
+                    stored = [
+                        member
+                        for member in range(args.members)
+                        if member_paths(root, subject, member)[0].exists()
+                        and (
+                            root / "Members" / f"m{member}" / "Models" / f"{safe_tag(subject)}_best.pth"
+                        ).exists()
+                    ]
+                    if len(stored) < args.members:
+                        skipped_rows.append(
+                            {
+                                "Variant": variant_name,
+                                "Window_Config": spec.name,
+                                "Dataset": dataset_label,
+                                "Subject": subject,
+                                "Reason": f"{len(stored)}/{args.members} members stored",
+                            }
+                        )
+                        continue
+                    loader = make_eval_loader(
+                        SubjectWindowDataset(subject_data, [subject], "test", False),
+                        args.batch_size,
+                        device,
+                    )
+                    for member in stored:
+                        checkpoint = (
+                            root / "Members" / f"m{member}" / "Models" / f"{safe_tag(subject)}_best.pth"
+                        )
+                        if not load_stem_weights(model, checkpoint, device):
+                            skipped_rows.append(
+                                {
+                                    "Variant": variant_name,
+                                    "Window_Config": spec.name,
+                                    "Dataset": dataset_label,
+                                    "Subject": subject,
+                                    "Reason": "no 1x1 stem fusion in the checkpoint",
+                                }
+                            )
+                            break
+                        before, after = stem_features(model, loader, device)
+                        row = {
+                            "Variant": variant_name,
+                            "Window_Config": spec.name,
+                            "Dataset": dataset_label,
+                            "Subject": subject,
+                            "Member": member,
+                        }
+                        for stage, features in (("Pre", before), ("Post", after)):
+                            for key, value in feature_representation_summary(features).items():
+                                row[f"{stage}_{key}"] = value
+                        member_rows.append(row)
+                    del loader
+            del subject_data, model
+            release_memory(device)
+    members = pd.DataFrame(member_rows)
+    skipped = pd.DataFrame(
+        skipped_rows, columns=["Variant", "Window_Config", "Dataset", "Subject", "Reason"]
+    )
+    skipped.to_csv(out_root / "stem_fusion_features_skipped.csv", index=False, encoding="utf-8-sig")
+    if members.empty:
+        print("Stem fusion features: no stored member to analyse yet.")
+        return pd.DataFrame()
+    group = ["Variant", "Window_Config", "Dataset", "Subject"]
+    value_columns = [
+        f"{stage}_{metric}" for stage, _, _ in STEM_STAGES for metric, _ in STEM_FEATURE_METRICS
+    ]
+    subjects_table = members.groupby(group, sort=False)[value_columns].mean().reset_index()
+    subjects_table.insert(4, "N_Members", members.groupby(group, sort=False).size().to_numpy())
+    test_rows = []
+    for (variant_name, window_config, dataset_label), frame in subjects_table.groupby(
+        ["Variant", "Window_Config", "Dataset"], sort=False
+    ):
+        for metric, label in STEM_FEATURE_METRICS:
+            before = frame[f"Pre_{metric}"].to_numpy(float)
+            after = frame[f"Post_{metric}"].to_numpy(float)
+            keep = np.isfinite(before) & np.isfinite(after)
+            before, after = before[keep], after[keep]
+            difference = after - before
+            p_value = safe_pvalue(stats.wilcoxon, before, after)
+            test_rows.append(
+                {
+                    "Variant": variant_name,
+                    "Window_Config": window_config,
+                    "Dataset": dataset_label,
+                    "Metric": metric,
+                    "N_Subjects": int(len(before)),
+                    "Pre_Median": float(np.median(before)) if len(before) else np.nan,
+                    "Pre_Q1": float(np.percentile(before, 25)) if len(before) else np.nan,
+                    "Pre_Q3": float(np.percentile(before, 75)) if len(before) else np.nan,
+                    "Post_Median": float(np.median(after)) if len(after) else np.nan,
+                    "Post_Q1": float(np.percentile(after, 25)) if len(after) else np.nan,
+                    "Post_Q3": float(np.percentile(after, 75)) if len(after) else np.nan,
+                    "Pre_Mean": float(np.mean(before)) if len(before) else np.nan,
+                    "Pre_SD": float(np.std(before, ddof=1)) if len(before) > 1 else np.nan,
+                    "Post_Mean": float(np.mean(after)) if len(after) else np.nan,
+                    "Post_SD": float(np.std(after, ddof=1)) if len(after) > 1 else np.nan,
+                    "Diff_Post_minus_Pre_Median": float(np.median(difference))
+                    if len(difference)
+                    else np.nan,
+                    "N_Subjects_Post_Higher": int(np.sum(difference > 0)),
+                    "N_Subjects_Post_Lower": int(np.sum(difference < 0)),
+                    "Wilcoxon_p": p_value,
+                    "Significance": significance_stars(p_value),
+                }
+            )
+            if metric in STEM_FEATURE_FIGURES and len(before) >= 2:
+                plot_stem_fusion_box(
+                    figure_root
+                    / f"{dataset_label}_{window_config}_{variant_name}_{metric.replace('Feature_', '')}.png",
+                    before,
+                    after,
+                    label,
+                    f"{dataset_label}, {window_config}, {variant_name}\nn = {len(before)} subjects "
+                    f"(mean of {args.members} models), Wilcoxon p = {p_value:.2g}",
+                    p_value,
+                )
+    tests = pd.DataFrame(test_rows)
+    members.to_csv(out_root / "stem_fusion_features_members.csv", index=False, encoding="utf-8-sig")
+    subjects_table.to_csv(out_root / "stem_fusion_features_subjects.csv", index=False, encoding="utf-8-sig")
+    tests.to_csv(out_root / "stem_fusion_features_tests.csv", index=False, encoding="utf-8-sig")
+    write_results_excel(
+        out_root / "stem_fusion_features.xlsx",
+        {"Tests": tests, "Subjects": subjects_table, "Members": members, "Skipped": skipped},
+    )
+    print("\nStem fusion, feature level (per subject, mean of the members; before -> after fusion):")
+    for _, row in tests.iterrows():
+        print(
+            f"  {row['Dataset'][:5]:<5s}{row['Window_Config'][1:4]:<5s} {row['Variant']:<20s} "
+            f"{row['Metric'].replace('Feature_', ''):<26s} "
+            f"{row['Pre_Median']:.3f} [{row['Pre_Q1']:.3f}-{row['Pre_Q3']:.3f}] -> "
+            f"{row['Post_Median']:.3f} [{row['Post_Q1']:.3f}-{row['Post_Q3']:.3f}], "
+            f"higher in {row['N_Subjects_Post_Higher']}/{row['N_Subjects']}, "
+            f"p={row['Wilcoxon_p']:.2g} {row['Significance']}"
+        )
+    print(f"Stem fusion feature analysis saved under: {out_root}")
+    return tests
+
+
 def summarize_results(
     args: argparse.Namespace,
     results_root: Path,
@@ -4589,11 +4953,13 @@ def summarize_results(
     missing = pd.DataFrame(missing_rows)
     windows_table = compare_windows(ensemble_all)
     pilot = pd.DataFrame(list(DECODER_SELECTION_PILOT))
+    stem_tests = stem_fusion_feature_analysis(args, results_root, window_specs, dataset_keys)
     tables = {
         "fft_davies_overall": overall,
         "fft_davies_single_models": single,
         "ablation_comparison": comparison,
         "window_comparison": windows_table,
+        "stem_fusion_features": stem_tests,
         "decoder_selection_pilot": pilot,
         "per_subject_fft": per_subject,
         "minutes_ensemble": ensemble_all,
@@ -4609,6 +4975,7 @@ def summarize_results(
             "Single_models": single,
             "Ablation_comparison": comparison,
             "Window_comparison": windows_table,
+            "Stem_fusion_features": stem_tests,
             "Decoder_selection_pilot": pilot,
             "Per_subject": per_subject,
             "Minutes_ensemble": ensemble_all,
@@ -4711,6 +5078,11 @@ def run_experiment(args: argparse.Namespace) -> None:
     variants = [VARIANTS[name] for name in VARIANTS if name in args.variants]
     window_specs = [spec for spec in WINDOW_SPECS if spec.name in args.windows]
     dataset_keys = [key for key in DATASET_ORDER if key in args.datasets]
+    if args.feature_analysis_only:
+        # Writes only Summary/Stem_Fusion_Features, so the results of other
+        # scripts (261006, 261007) can be analysed in place.
+        stem_fusion_feature_analysis(args, results_root, window_specs, dataset_keys)
+        return
     shard_index, shard_count = parse_shard(args.shard)
     manifest = build_manifest(args, results_root, device, variants, window_specs, dataset_keys)
     manifest_name = "run_manifest.json" if shard_count == 1 else f"run_manifest_shard{shard_index}.json"
@@ -4925,6 +5297,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--summary-only",
         action="store_true",
         help="Do not train; score the ensembles and write the summary.",
+    )
+    parser.add_argument(
+        "--feature-analysis-only",
+        action="store_true",
+        help=(
+            "Do not train; only the stem fusion feature analysis of the stored "
+            "members under --results-root (also of 261006 / 261007 results)."
+        ),
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--capnobase-path", type=Path, default=None)
