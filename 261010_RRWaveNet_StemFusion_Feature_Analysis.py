@@ -248,7 +248,7 @@ def analyse(args: argparse.Namespace) -> None:
             subjects = sorted(subject_data)
             if args.subjects:
                 subjects = [s for s in subjects if s in set(args.subjects)]
-            print(f"{label} {spec.name}: {len(subjects)} subjects")
+            print(f"{label} {spec.name}: {len(subjects)} subjects in the dataset")
             for name, variant in model_types:
                 root = roots[variant]
                 model = module.VARIANTS[variant].options.build().to(device)
@@ -298,6 +298,10 @@ def analyse(args: argparse.Namespace) -> None:
             module.release_memory(device)
 
     members = pd.DataFrame(rows)
+    if not members.empty:
+        analysed = members.groupby(["Window_Config", "Dataset", "Model_Type"]).Subject.nunique()
+        for (window, dataset, name), count in analysed.items():
+            print(f"  analysed: {dataset} {window} {name}: {count} subjects")
     skipped_frame = pd.DataFrame(skipped, columns=["Model_Type", "Window_Config", "Dataset", "Subject", "Reason"])
     if members.empty:
         skipped_frame.to_csv(out_root / "stem_fusion_ox_skipped.csv", index=False, encoding="utf-8-sig")
