@@ -1,0 +1,169 @@
+﻿Dataset,Window_Config,Row,Model,Subject,N_Minutes,GT_RR_Median,FFT_RR_Median,FFT_MAE,FFT_Bias,Wave_PCC_Mean
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0009,8,19.0,19.3359375,0.55078125,0.27734375,0.9291148406089049
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0015,8,29.0,28.828125,0.39453125,0.01953125,0.9185979872410697
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0016,7,10.0,10.078125,4.517857142857143,4.40625,0.5410595078332088
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0018,8,34.5,35.15625,0.50390625,0.37109375,0.705240940701493
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0023,8,21.5,21.5625,0.30078125,-0.13671875,0.9495788300196477
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0028,8,12.0,11.71875,0.33203125,-0.03125,0.9536113816591671
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0029,8,11.0,11.1328125,1.2109375,1.00390625,0.7842944337796848
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0030,5,31.0,30.46875,1.278125,-0.315625,0.7685651831589378
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0031,6,9.5,10.4296875,2.9505208333333335,1.5078125,0.3004789926552321
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0032,8,11.5,12.5390625,1.759765625,1.251953125,0.7067565171762958
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0035,7,24.0,23.4375,3.0625,-2.5625,0.6499414903055564
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0038,8,19.0,18.6328125,0.30078125,-0.0390625,0.9403575020159004
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0103,8,18.0,18.046875,0.046875,0.046875,0.8304400818586356
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0104,8,11.0,11.015625,0.140625,0.140625,0.9109509589237141
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0105,8,10.0,10.078125,0.22265625,0.14453125,0.8440507005541962
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0115,5,41.0,15.703125,27.053125,-27.053125,0.14146026280214372
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0121,8,9.0,9.140625,0.62109375,-0.328125,0.5497608549013101
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0122,8,9.0,8.90625,0.134765625,-0.064453125,0.9248551317772497
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0123,7,11.0,11.015625,0.049107142857142856,0.049107142857142856,0.8791202254174328
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0125,8,14.0,14.296875,0.478515625,0.068359375,0.9660910834330604
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0127,8,18.0,17.578125,1.359375,-1.05859375,0.7439234642419454
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0128,8,12.0,12.3046875,0.412109375,0.083984375,0.926272198391519
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0133,8,10.0,9.9609375,0.4921875,0.0859375,0.9007903242640913
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0134,8,14.0,14.0625,0.0625,0.0625,0.9534291750955177
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0142,8,15.0,15.0,0.271484375,0.154296875,0.6791162734547544
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0147,2,11.0,11.015625,0.015625,0.015625,0.8995916711029859
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0148,8,10.0,9.84375,1.015625,-0.91796875,0.5991952662674214
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0149,8,10.0,10.078125,0.09765625,0.01953125,0.7950362691767636
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0150,7,11.0,11.015625,0.015625,0.015625,0.9442213932569773
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0309,2,9.0,8.90625,0.234375,-0.09375,0.7166988840394545
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0311,8,12.0,11.953125,0.16015625,0.078125,0.9631093599152067
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0312,6,7.0,7.1484375,2.609375,2.5416666666666665,0.5947769446951895
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0313,8,10.0,10.078125,0.18359375,0.14453125,0.9625781309711756
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0322,7,18.0,17.8125,0.4575892857142857,0.06473214285714286,0.9015211365003396
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0325,8,10.0,10.078125,0.232421875,0.115234375,0.846810284036335
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0328,6,10.0,10.078125,0.7578125,0.0390625,0.8984896986639304
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0329,2,9.5,9.9609375,0.6171875,0.4609375,0.8499431649640279
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0330,8,15.0,15.3515625,0.44921875,0.125,0.9460179617808516
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0331,8,14.0,14.4140625,0.30859375,0.046875,0.9170882021493919
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0332,8,23.0,13.2421875,6.13671875,-6.04296875,0.3577424088445641
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0333,8,10.0,9.9609375,0.1171875,-0.0390625,0.9119910798511357
+CapnoBase,w10s_nonoverlap,full,Full model (ensemble of 3),0370,6,9.5,12.65625,3.4270833333333335,3.2447916666666665,0.4591066515744842
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0009,8,19.0,19.296875,0.55078125,0.2578125,0.884800201238092
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0015,8,29.0,28.828125,0.3899739583333333,0.029296875,0.9006697009190433
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0016,7,10.0,10.15625,3.113095238095238,2.8660714285714284,0.4948065667169061
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0018,8,34.5,34.6875,2.6328125,-1.7578125,0.6691891475204917
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0023,8,21.5,21.5625,0.30078125,-0.13671875,0.9339912940027358
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0028,8,12.0,11.71875,0.337890625,-0.021484375,0.9459429570007742
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0029,8,11.0,11.171875,1.298828125,0.935546875,0.7702280730172006
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0030,5,31.0,30.46875,1.325,-0.3625,0.7394715129949552
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0031,6,9.5,11.25,2.808159722222222,1.8463541666666667,0.2915035090829025
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0032,8,11.5,12.6171875,1.779296875,1.271484375,0.6887897859015017
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0035,7,24.0,23.359375,4.558035714285714,-4.058035714285714,0.6255576005292187
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0038,8,19.0,18.671875,0.3287760416666667,-0.009765625,0.9184771420257111
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0103,8,18.0,18.046875,0.046875,0.046875,0.8016086989056758
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0104,8,11.0,11.015625,0.150390625,0.150390625,0.856328884556883
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0105,8,10.0,10.078125,0.22265625,0.14453125,0.8326621208266844
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0115,5,41.0,13.046875,27.7875,-27.7875,0.12889488500494176
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0121,8,9.0,8.9453125,0.78125,-0.54296875,0.5413707339511089
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0122,8,9.0,8.90625,0.115234375,-0.044921875,0.9145998381442684
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0123,7,11.0,11.015625,0.058779761904761904,0.03794642857142857,0.856238428173047
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0125,8,14.0,14.296875,0.46875,0.078125,0.9576676104814236
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0127,8,18.0,17.578125,1.330078125,-1.068359375,0.7186451811732651
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0128,8,12.0,12.265625,0.388671875,0.083984375,0.9089499203287241
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0133,8,10.0,9.9609375,0.4791666666666667,0.0859375,0.8919586171290513
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0134,8,14.0,14.0625,0.0625,0.0625,0.9457074972100689
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0142,8,15.0,14.9609375,0.6861979166666666,-0.34375,0.6034463454031793
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0147,2,11.0,11.015625,0.015625,0.015625,0.889038094780138
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0148,8,10.0,9.6875,1.07421875,-0.99609375,0.5873860582515682
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0149,8,10.0,10.0390625,0.10091145833333334,0.009765625,0.7487144666744591
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0150,7,11.0,11.015625,0.015625,0.015625,0.9290475604434578
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0309,2,9.0,8.984375,0.15625,-0.015625,0.6796903361996649
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0311,8,12.0,11.953125,0.16015625,0.078125,0.9490289563096924
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0312,6,7.0,8.28125,2.599826388888889,2.5546875,0.5683756159240407
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0313,8,10.0,10.078125,0.18033854166666666,0.154296875,0.958404053457958
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0322,7,18.0,17.8125,0.4575892857142857,0.06473214285714286,0.8934734060707517
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0325,8,10.0,10.078125,0.22916666666666666,0.125,0.8304609034623427
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0328,6,10.0,10.078125,0.7578125,0.0390625,0.8882256382194896
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0329,2,9.5,10.0,0.6041666666666666,0.5,0.8097112644219066
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0330,8,15.0,15.3125,0.44921875,0.125,0.9389751615854356
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0331,8,14.0,14.453125,0.30859375,0.06640625,0.8987544267875842
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0332,8,23.0,16.2109375,5.238932291666666,-5.095703125,0.30936121484708107
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0333,8,10.0,10.0,0.11393229166666667,-0.029296875,0.8911996872460435
+CapnoBase,w10s_nonoverlap,no_ensemble,w/o ensemble (single models),0370,6,9.5,12.6171875,3.0364583333333335,2.8541666666666665,0.45094033365963
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0009,8,19.0,19.3359375,0.55078125,0.27734375,0.9486409771506318
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0015,8,29.0,28.828125,0.380859375,0.048828125,0.9240346012427272
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0016,7,10.0,10.3125,7.330357142857143,7.285714285714286,0.45633657053198007
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0018,8,34.5,35.0390625,0.494140625,0.341796875,0.7150436507830338
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0023,8,21.5,21.5625,0.279296875,-0.107421875,0.9638540212810273
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0028,8,12.0,11.71875,0.302734375,-0.001953125,0.959721036291314
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0029,8,11.0,11.1328125,1.240234375,1.033203125,0.8075346619434662
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0030,5,31.0,30.46875,1.278125,-0.315625,0.7373524927985334
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0031,6,9.5,8.90625,3.6979166666666665,1.78125,0.3191768097031742
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0032,8,11.5,12.65625,1.818359375,1.310546875,0.7679348048548271
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0035,8,24.0,23.5546875,0.794921875,-0.306640625,0.6730507643594726
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0038,8,19.0,18.6328125,0.30078125,-0.0390625,0.9532266182627794
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0103,8,18.0,18.046875,0.046875,0.046875,0.9218534169565469
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0104,8,11.0,11.015625,0.140625,0.140625,0.9198655369397386
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0105,8,10.0,10.078125,0.251953125,0.173828125,0.8574439219643584
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0115,5,41.0,12.890625,27.6625,-27.6625,0.10710350077730416
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0121,8,9.0,9.140625,0.65625,-0.328125,0.5457409000594067
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0122,8,9.0,8.90625,0.10546875,-0.03515625,0.9290784952148002
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0123,7,11.0,11.015625,0.049107142857142856,0.049107142857142856,0.9042707682992236
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0125,8,14.0,14.296875,0.478515625,0.068359375,0.9644277053140665
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0127,8,18.0,17.6953125,0.41796875,-0.00390625,0.7819193397114367
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0128,8,12.0,12.3046875,0.3828125,0.11328125,0.9252645410783529
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0133,8,10.0,9.9609375,0.521484375,0.115234375,0.9224640472124866
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0134,8,14.0,14.0625,0.0625,0.0625,0.9664339116479497
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0142,8,15.0,15.0,0.30078125,0.125,0.6424097052376655
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0147,2,11.0,11.015625,0.015625,0.015625,0.9385541016302041
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0148,8,10.0,9.84375,0.166015625,-0.126953125,0.6522704843693545
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0149,8,10.0,10.078125,0.087890625,0.048828125,0.8437054794578849
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0150,7,11.0,11.015625,0.015625,0.015625,0.9237354824358778
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0309,4,9.0,8.90625,0.10546875,-0.03515625,0.8601939815978714
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0311,8,12.0,11.953125,0.16015625,0.078125,0.9638641392431848
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0312,7,7.0,7.265625,2.2075892857142856,2.1495535714285716,0.5986308444299545
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0313,8,10.0,10.078125,0.18359375,0.14453125,0.9680981110376248
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0322,7,18.0,17.8125,0.4575892857142857,0.06473214285714286,0.9353683177292417
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0325,8,10.0,9.9609375,0.2421875,0.0859375,0.8836087984142821
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0328,6,10.0,10.078125,0.5520833333333334,-0.08854166666666667,0.9221601090602006
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0329,2,9.5,9.9609375,0.6171875,0.4609375,0.8334933842189745
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0330,8,15.0,15.3515625,0.478515625,0.154296875,0.9596477345948464
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0331,8,14.0,14.296875,0.279296875,0.017578125,0.939118984150572
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0332,8,23.0,13.2421875,5.814453125,-5.720703125,0.31359859392768236
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0333,8,10.0,9.9609375,0.1171875,-0.0390625,0.9163120613418637
+CapnoBase,w20s_nonoverlap,full,Full model (ensemble of 3),0370,6,9.5,11.1328125,1.9036458333333333,1.7213541666666667,0.4933827544952449
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0009,8,19.0,19.3359375,0.53125,0.2578125,0.9349179955115771
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0015,8,29.0,28.828125,0.38541666666666663,0.0390625,0.9086835642576903
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0016,7,10.0,16.640625,6.165922619047619,6.069196428571429,0.4083920200549311
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0018,8,34.5,34.609375,1.5716145833333333,-0.703125,0.6700152309331335
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0023,8,21.5,21.5625,0.27734375,-0.09765625,0.9501232267140896
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0028,8,12.0,11.71875,0.3125,-0.01171875,0.952654698482378
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0029,8,11.0,11.1328125,1.2903645833333333,0.9453125,0.7925243158358384
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0030,5,31.0,30.46875,1.246875,-0.346875,0.707961327655383
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0031,6,9.5,10.7421875,3.267361111111111,1.6510416666666667,0.30760795836031074
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0032,8,11.5,12.6171875,2.091796875,1.603515625,0.74281162951579
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0035,8,24.0,22.578125,2.7604166666666665,-2.2890625,0.63711495960738
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0038,8,19.0,18.6328125,0.30078125,-0.0390625,0.9370355031864853
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0103,8,18.0,18.046875,0.046875,0.046875,0.9028829431561792
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0104,8,11.0,11.015625,0.140625,0.140625,0.8835001103383889
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0105,8,10.0,10.078125,0.23893229166666669,0.173828125,0.8469905357158454
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0115,5,41.0,12.96875,26.865625,-26.865625,0.09715719714509827
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0121,8,9.0,9.140625,0.65625,-0.328125,0.5323355792121907
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0122,8,9.0,8.9453125,0.109375,-0.015625,0.9168746149852591
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0123,7,11.0,11.015625,0.03645833333333333,0.015625,0.8804534293631321
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0125,8,14.0,14.296875,0.478515625,0.068359375,0.9539489645589667
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0127,8,18.0,17.578125,0.7278645833333333,-0.35546875,0.7529984704852083
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0128,8,12.0,12.265625,0.373046875,0.103515625,0.9103818915213376
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0133,8,10.0,9.9609375,0.53125,0.0859375,0.9146211773071792
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0134,8,14.0,14.0625,0.0625,0.0625,0.9580179660111636
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0142,8,15.0,15.0,0.8671875,-0.421875,0.6051329921108239
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0147,2,11.0,11.015625,0.015625,0.015625,0.929443901132468
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0148,8,10.0,9.8046875,0.47526041666666663,-0.44921875,0.6388931017556251
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0149,8,10.0,10.078125,0.09114583333333333,0.0390625,0.8092104246397538
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0150,7,11.0,11.015625,0.015625,0.015625,0.9079898998426401
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0309,4,9.0,8.90625,0.10546875,-0.03515625,0.8370199122921629
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0311,8,12.0,11.953125,0.16015625,0.078125,0.9526388444382435
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0312,7,7.0,9.296875,2.824404761904762,2.7857142857142856,0.5705620689724672
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0313,8,10.0,10.078125,0.18684895833333334,0.134765625,0.9616217482374592
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0322,7,18.0,17.8125,0.4575892857142857,0.06473214285714286,0.9246369521848162
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0325,8,10.0,10.0390625,0.23567708333333334,0.10546875,0.8633914962602277
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0328,6,10.0,10.078125,0.5520833333333334,-0.08854166666666667,0.910301473073046
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0329,2,9.5,9.9609375,0.6171875,0.4609375,0.7932903395217666
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0330,8,15.0,15.3515625,0.48828125,0.1640625,0.9515819639178574
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0331,8,14.0,14.3359375,0.259765625,0.056640625,0.9166120391269611
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0332,8,23.0,17.265625,5.129557291666667,-4.978515625,0.2804000375518499
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0333,8,10.0,9.921875,0.12044270833333334,-0.048828125,0.8960719125071384
+CapnoBase,w20s_nonoverlap,no_ensemble,w/o ensemble (single models),0370,6,9.5,12.578125,2.984375,2.8020833333333335,0.4821794404002679
