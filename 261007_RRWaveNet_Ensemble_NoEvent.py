@@ -137,6 +137,10 @@ All results go to D:\PPG2RSP_RRWaveNet_Inspired\261007_Ensemble_NoEvent
   Summary\   fft_davies_overall.csv, fft_davies_single_models.csv,
       ablation_comparison.csv, window_comparison.csv, per_subject_fft.csv,
       per-minute tables, figures and 261007_RRWaveNet_Ensemble_NoEvent_results.xlsx
+  Summary\Waveforms\{dataset}_{window}_full\   one figure per held-out subject:
+      30 s of the ground truth (black) and the ensemble prediction (red),
+      both z-normalized, from its scored minute with the median FFT error
+      (waveform_excerpts.csv lists the excerpts)
 
 Run (GPU):                       python 261007_RRWaveNet_Ensemble_NoEvent.py
 Resume after an interruption:    python 261007_RRWaveNet_Ensemble_NoEvent.py --resume
@@ -194,7 +198,7 @@ from torch.utils.data import DataLoader, Dataset
 # Paths, datasets, v16 constants, and requested experiment order
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261007_Ensemble_NoEvent")
+PROJECT_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1")
 # Every result of this script is written under PROJECT_ROOT.
 DEFAULT_RESULTS_ROOT = PROJECT_ROOT
 
@@ -402,6 +406,14 @@ MODEL_CONFIG = {
 # these training settings; the ablation study reverts each changed one.
 A_SETTINGS = {"dropout": 0.20, "decoder_dilations": (12, 24), "epochs": 120}
 ENSEMBLE_MEMBERS = 3
+# Waveform figures (Summary\Waveforms): one 30 s excerpt per held-out subject,
+# the ground truth in black and the ensemble prediction in red, both
+# z-normalized over the excerpt. The excerpt is the first 30 s of the scored
+# minute with the median FFT error of that subject.
+WAVEFORM_FIGURE_VARIANTS = ("full",)
+WAVEFORM_EXCERPT_SEC = 30.0
+WAVEFORM_TRUE_COLOR = "#111111"
+WAVEFORM_PRED_COLOR = "#d62728"
 # Post-fusion representation diagnostics written per member.
 FEATURE_METRICS = (
     "Feature_OffDiag_SignedMean",
@@ -4321,6 +4333,87 @@ def read_minutes(paths: Sequence[Path]) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+def zscore(signal: np.ndarray) -> np.ndarray:
+    values = np.asarray(signal, dtype=np.float64)
+    sd = np.nanstd(values)
+    if not np.isfinite(sd) or sd <= 1e-12:
+        return np.full_like(values, np.nan)
+    return (values - np.nanmean(values)) / sd
+
+
+def save_waveform_figures(
+    summary_root: Path,
+    root: Path,
+    variant: Variant,
+    spec: WindowSpec,
+    dataset_label: str,
+    ensemble_minutes: pd.DataFrame,
+) -> List[dict]:
+    """Ground truth (black) and ensemble prediction (red), z-normalized, over
+    a WAVEFORM_EXCERPT_SEC excerpt of every held-out subject: the start of
+    its scored minute with the median FFT error."""
+    figure_root = summary_root / "Waveforms" / f"{dataset_label}_{spec.name}_{variant.name}"
+    figure_root.mkdir(parents=True, exist_ok=True)
+    length = int(round(WAVEFORM_EXCERPT_SEC * TARGET_FS))
+    rows = []
+    for subject, minutes in ensemble_minutes.groupby("Subject", sort=True):
+        minutes = minutes[np.isfinite(minutes["FFT_AE"])].sort_values(
+            ["FFT_AE", "Segment_ID", "RR_Window_Start_Sec"]
+        )
+        prediction_path = ensemble_paths(root, subject)[2]
+        if minutes.empty or not prediction_path.exists():
+            continue
+        chosen = minutes.iloc[(len(minutes) - 1) // 2]
+        arrays = np.load(prediction_path, allow_pickle=False)
+        metadata = [
+            {"segment_id": int(segment), "start": int(start)}
+            for segment, start in zip(arrays["segment_ids"], arrays["window_starts"])
+        ]
+        pred, true, _ = reconstruct_segment(
+            arrays["predictions"], arrays["targets"], metadata, int(chosen["Segment_ID"]), TARGET_FS
+        )
+        start = int(round(float(chosen["RR_Window_Start_Sec"]) * TARGET_FS))
+        pred, true = pred[start : start + length], true[start : start + length]
+        if pred.size < 2 or not np.isfinite(true).any():
+            continue
+        time = np.arange(pred.size) / float(TARGET_FS)
+        fig, axis = plt.subplots(figsize=(10.0, 5.4))
+        axis.plot(time, zscore(true), color=WAVEFORM_TRUE_COLOR, linewidth=2.6, label="Ground truth")
+        axis.plot(time, zscore(pred), color=WAVEFORM_PRED_COLOR, linewidth=2.6,
+                  label=f"Predicted (ensemble of {len(np.atleast_1d(arrays['seeds']))})")
+        axis.set_xlim(0, WAVEFORM_EXCERPT_SEC)
+        axis.set_xlabel("Time (s)", fontsize=12)
+        axis.set_ylabel("z-normalized respiratory waveform", fontsize=12)
+        axis.grid(True, color="#e6e6e6")
+        axis.legend(loc="upper right", fontsize=9)
+        axis.set_title(
+            f"{dataset_label} {subject}, {spec.label}: segment {int(chosen['Segment_ID'])}, "
+            f"{float(chosen['RR_Window_Start_Sec']):.0f} s; reference {float(chosen['GT_RR']):.1f}, "
+            f"predicted {float(chosen['FFT_RR']):.1f} breaths/min",
+            fontsize=9,
+        )
+        fig.tight_layout()
+        fig.savefig(figure_root / f"{safe_tag(subject)}_waveform.png", dpi=150)
+        plt.close(fig)
+        rows.append(
+            {
+                "Dataset": dataset_label,
+                "Window_Config": spec.name,
+                "Variant": variant.name,
+                "Subject": subject,
+                "Segment_ID": int(chosen["Segment_ID"]),
+                "Excerpt_Start_Sec": float(chosen["RR_Window_Start_Sec"]),
+                "Excerpt_Sec": float(pred.size / TARGET_FS),
+                "GT_RR": float(chosen["GT_RR"]),
+                "FFT_RR": float(chosen["FFT_RR"]),
+                "FFT_AE": float(chosen["FFT_AE"]),
+                "Minute_Wave_PCC": float(chosen.get("Wave_PCC", np.nan)),
+                "Figure": str(figure_root / f"{safe_tag(subject)}_waveform.png"),
+            }
+        )
+    return rows
+
+
 def summarize_results(
     args: argparse.Namespace,
     results_root: Path,
@@ -4333,6 +4426,7 @@ def summarize_results(
     summary_root.mkdir(parents=True, exist_ok=True)
     overall_rows, single_rows, comparison_rows, subject_tables = [], [], [], []
     ensemble_frames, member_frames, missing_rows = [], [], []
+    waveform_rows = []
     for spec in window_specs:
         for dataset_key in dataset_keys:
             dataset_label = DATASET_CONFIGS[dataset_key]["label"]
@@ -4376,6 +4470,10 @@ def summarize_results(
                         )
                 ensemble = scored_minutes(read_minutes(ensemble_paths_done))
                 members = scored_minutes(read_minutes(member_paths_done))
+                if variant.name in WAVEFORM_FIGURE_VARIANTS and not ensemble.empty:
+                    waveform_rows += save_waveform_figures(
+                        summary_root, root, variant, spec, dataset_label, ensemble
+                    )
                 if not ensemble.empty:
                     ensemble["Window_Config"] = spec.name
                 if not members.empty:
@@ -4496,6 +4594,10 @@ def summarize_results(
     }
     for name, frame in tables.items():
         frame.to_csv(summary_root / f"{name}.csv", index=False, encoding="utf-8-sig")
+    if waveform_rows:
+        pd.DataFrame(waveform_rows).to_csv(
+            summary_root / "Waveforms" / "waveform_excerpts.csv", index=False, encoding="utf-8-sig"
+        )
     excel_path = write_results_excel(
         summary_root / "261007_RRWaveNet_Ensemble_NoEvent_results.xlsx",
         {
