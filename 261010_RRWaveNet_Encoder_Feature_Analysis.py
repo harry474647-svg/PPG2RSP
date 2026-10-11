@@ -18,8 +18,9 @@ trained on it (min-max to [-1, 1]).
    channel. Reported per stage: the mean |r| over the 24 channels (PCC),
    its change against Stem (mean delta |r|), and the number of channels
    (of 24) whose |r| is higher than at Stem ("better"). Figures: heatmap of
-   the mean delta |r| per channel and block, and the mean |channel r| per
-   stage with delta, better and the p value.
+   the mean delta |r| per channel and block (channels in their own order,
+   23 at the top to 0), and the mean |channel r| per stage with delta,
+   better and the p value.
 2. PC1 power in the respiratory band (frequency analysis, right)
    PCA over the 24 channels: the channels are standardized over all
    samples of the subject, PC1 is the first principal component (the share
@@ -393,7 +394,8 @@ def analyse(args: argparse.Namespace) -> None:
                     })
                 corr_rows.append(row)
             channel_delta = delta.groupby(level="Channel").mean()
-            order = channel_delta[STAGES[-1]].sort_values(ascending=False).index
+            # Rows in channel order, 23 (top) to 0 (bottom); no sorting by value.
+            order = sorted(channel_delta.index, reverse=True)
             fig, axis = plt.subplots(figsize=(6.0, 6.5))
             matrix = channel_delta.loc[order, list(STAGES[1:])].to_numpy()
             limit = max(float(np.nanmax(np.abs(matrix))), 1e-6)
