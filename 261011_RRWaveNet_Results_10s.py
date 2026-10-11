@@ -7,6 +7,11 @@ windows only) it writes:
    FFT and Davies & Mandic metrics of every dataset and variant, the
    ablation comparison (paired Wilcoxon against the full model), the
    per-subject table, the per-minute tables, figures and the workbook;
+   every mean comes with its SD (ddof=1): MAE and waveform PCC (SD over
+   minutes), bias (SD over minutes), subject MAE (SD over subjects), and in
+   the ablation comparison the subject and minute MAE of both models and
+   their difference; fft_davies_overall_mean_sd.csv lists them as
+   "mean ± SD" (see add_standard_deviations);
 2. waveform figures of the full model: for every held-out subject, 30 s of
    the ground truth (black) and the ensemble prediction (red), z-normalized,
    drawn twice: the unfiltered prediction, and the prediction after the
@@ -72,6 +77,164 @@ WAVEFORM_VARIANT = "full"
 WAVEFORM_EXCERPT_SEC = 30.0
 WAVEFORM_TRUE_COLOR = "#111111"  # ground truth: black
 WAVEFORM_PRED_COLOR = "#d62728"  # prediction: red
+
+
+def sd(values) -> float:
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    return float(np.std(values, ddof=1)) if values.size > 1 else np.nan
+
+
+def insert_after(row: dict, extra: Dict[str, Tuple[str, float]]) -> dict:
+    """Copy of row with extra[key] = (anchor, value) placed right after anchor."""
+    out = {}
+    for key, value in row.items():
+        out[key] = value
+        for name, (anchor, extra_value) in extra.items():
+            if anchor == key:
+                out[name] = extra_value
+    for name, (anchor, extra_value) in extra.items():
+        out.setdefault(name, extra_value)
+    return out
+
+
+def add_standard_deviations(backbone) -> None:
+    """Report the SD (ddof=1) next to every mean in the 261007 summary.
+
+    The 261007 file is not changed; its summary functions are wrapped here:
+    * fft_davies_overall: FFT_MAE_SD (SD of the per-minute absolute errors),
+      FFT_Bias_SD (SD of the per-minute errors; LoA = Bias +- 1.96 SD) and
+      Wave_PCC_SD (SD of the per-minute waveform PCC), next to FFT_MAE,
+      FFT_Bias and Wave_PCC_Mean (FFT_Subject_MAE_SD, the SD over subjects,
+      is already there). Rows of single models (no_ensemble): each model's
+      SD, averaged over the models, as for every other metric of that row.
+    * ablation_comparison: SD of the per-subject MAE of both models and of
+      their difference, SD of the per-minute absolute errors of both.
+    * per_subject_fft: SD over the subject's minutes of the absolute error,
+      the error and the waveform PCC.
+    RMSE, Pearson r and the within-1/2 bpm percentages are not means of
+    per-minute values; the Davies mAE / mMAE are medians (with IQR)."""
+    base_metrics = backbone.fft_davies_metrics
+    base_comparison = backbone.paired_comparison
+    base_subject_table = backbone.per_subject_table
+
+    def fft_davies_metrics(minutes: pd.DataFrame) -> dict:
+        result = base_metrics(minutes)
+        mae_sd = bias_sd = pcc_sd = np.nan
+        if not minutes.empty:
+            pcc_sd = sd(pd.to_numeric(minutes["Wave_PCC"], errors="coerce"))
+            errors = minutes.loc[np.isfinite(minutes["FFT_AE"]), "FFT_Error"].to_numpy(float)
+            mae_sd, bias_sd = sd(np.abs(errors)), sd(errors)
+        return insert_after(result, {
+            "FFT_MAE_SD": ("FFT_MAE", mae_sd),
+            "FFT_Bias_SD": ("FFT_Bias", bias_sd),
+            "Wave_PCC_SD": ("Wave_PCC_Mean", pcc_sd),
+        })
+
+    def paired_comparison(full: pd.DataFrame, other: pd.DataFrame) -> dict:
+        result = base_comparison(full, other)
+        a, b = backbone.subject_errors(full), backbone.subject_errors(other)
+        subjects = a.index.intersection(b.index)
+        sa, sb = a.loc[subjects].to_numpy(float), b.loc[subjects].to_numpy(float)
+        ma, mb = backbone.minute_errors(full), backbone.minute_errors(other)
+        keys = ma.index.intersection(mb.index)
+        return insert_after(result, {
+            "Subject_MAE_Full_SD": ("Subject_MAE_Full", sd(sa)),
+            "Subject_MAE_Variant_SD": ("Subject_MAE_Variant", sd(sb)),
+            "Subject_MAE_Diff_SD": ("Subject_MAE_Diff_Variant_minus_Full", sd(sb - sa)),
+            "Minute_MAE_Full_SD": ("Minute_MAE_Full", sd(ma.loc[keys])),
+            "Minute_MAE_Variant_SD": ("Minute_MAE_Variant", sd(mb.loc[keys])),
+        })
+
+    def per_subject_table(minutes: pd.DataFrame) -> pd.DataFrame:
+        table = base_subject_table(minutes)
+        if table.empty:
+            return table
+        have = minutes[np.isfinite(minutes["FFT_AE"])]
+        if "Member" in have.columns:
+            have = have.groupby(["Subject", *backbone.MINUTE_KEY[1:]], as_index=False).agg(
+                FFT_Error=("FFT_Error", "mean"), FFT_AE=("FFT_AE", "mean"), Wave_PCC=("Wave_PCC", "mean"),
+            )
+        spread = have.groupby("Subject").agg(
+            FFT_MAE_SD=("FFT_AE", "std"), FFT_Bias_SD=("FFT_Error", "std"), Wave_PCC_SD=("Wave_PCC", "std"),
+        ).reset_index()
+        table = table.merge(spread, on="Subject", how="left")
+        order = []
+        for column in table.columns:
+            if column.endswith("_SD") and column in spread.columns:
+                continue
+            order.append(column)
+            partner = {"FFT_MAE": "FFT_MAE_SD", "FFT_Bias": "FFT_Bias_SD", "Wave_PCC_Mean": "Wave_PCC_SD"}.get(column)
+            if partner:
+                order.append(partner)
+        return table[order]
+
+    def with_sd(metrics: Sequence[str]) -> tuple:
+        partners = {"FFT_MAE": "FFT_MAE_SD", "FFT_Bias": "FFT_Bias_SD", "Wave_PCC_Mean": "Wave_PCC_SD"}
+        out = []
+        for metric in metrics:
+            out.append(metric)
+            if metric in partners and partners[metric] not in metrics:
+                out.append(partners[metric])
+        return tuple(out)
+
+    backbone.fft_davies_metrics = fft_davies_metrics
+    backbone.paired_comparison = paired_comparison
+    backbone.per_subject_table = per_subject_table
+    # Single-model rows average every metric of SUMMARY_METRICS over the models.
+    backbone.SUMMARY_METRICS = with_sd(backbone.SUMMARY_METRICS)
+
+
+def mean_sd_text(mean: float, spread: float, digits: int = 3) -> str:
+    if not np.isfinite(mean):
+        return "n/a"
+    return f"{mean:.{digits}f} ± {spread:.{digits}f}" if np.isfinite(spread) else f"{mean:.{digits}f}"
+
+
+def write_mean_sd_tables(out_root: Path) -> None:
+    """Readable mean ± SD tables of the final performance (and the console)."""
+    overall_path = out_root / "fft_davies_overall.csv"
+    if not overall_path.exists():
+        return
+    overall = pd.read_csv(overall_path, encoding="utf-8-sig")
+    rows = []
+    for _, r in overall.iterrows():
+        rows.append({
+            "Dataset": r["Dataset"], "Window_Config": r["Window_Config"], "Row": r["Row"], "Model": r["Model"],
+            "N_Subjects": int(r["N_Subjects"]), "N_Minutes": int(r["N_Minutes"]),
+            "MAE (mean ± SD over minutes)": mean_sd_text(r["FFT_MAE"], r.get("FFT_MAE_SD", np.nan)),
+            "Subject MAE (mean ± SD over subjects)": mean_sd_text(r["FFT_Subject_MAE_Mean"], r["FFT_Subject_MAE_SD"]),
+            "Bias (mean ± SD)": mean_sd_text(r["FFT_Bias"], r.get("FFT_Bias_SD", np.nan)),
+            "LoA": f"{r['FFT_LoA_Lower']:.2f} to {r['FFT_LoA_Upper']:.2f}",
+            "RMSE": f"{r['FFT_RMSE']:.3f}",
+            "Pearson r": f"{r['FFT_Pearson_r']:.3f}",
+            "Within 1 / 2 bpm (%)": f"{r['FFT_Within_1_BPM_Pct']:.1f} / {r['FFT_Within_2_BPM_Pct']:.1f}",
+            "mAE [IQR]": f"{r['Davies_mAE']:.3f} [{r['Davies_mAE_Q1']:.3f}-{r['Davies_mAE_Q3']:.3f}]",
+            "mMAE [IQR]": f"{r['Davies_mMAE']:.3f} [{r['Davies_mMAE_Q1']:.3f}-{r['Davies_mMAE_Q3']:.3f}]",
+            "Wave PCC (mean ± SD over minutes)": mean_sd_text(r["Wave_PCC_Mean"], r.get("Wave_PCC_SD", np.nan)),
+        })
+    table = pd.DataFrame(rows)
+    table.to_csv(out_root / "fft_davies_overall_mean_sd.csv", index=False, encoding="utf-8-sig")
+    print("\nFinal performance, mean ± SD (MAE and PCC: SD over minutes; subject MAE: SD over subjects; "
+          "mAE / mMAE: median [IQR]):")
+    for _, r in table.iterrows():
+        print(f"  {r['Dataset']:<10s} {str(r['Model'])[:42]:<42s} MAE {r['MAE (mean ± SD over minutes)']:<15s} "
+              f"subject MAE {r['Subject MAE (mean ± SD over subjects)']:<15s} "
+              f"bias {r['Bias (mean ± SD)']:<16s} PCC {r['Wave PCC (mean ± SD over minutes)']:<15s} "
+              f"mAE {r['mAE [IQR]']}  mMAE {r['mMAE [IQR]']}")
+    comparison_path = out_root / "ablation_comparison.csv"
+    if comparison_path.exists():
+        comparison = pd.read_csv(comparison_path, encoding="utf-8-sig")
+        if not comparison.empty and "Subject_MAE_Full_SD" in comparison.columns:
+            print("\nAblation (subject MAE, mean ± SD over subjects; minute MAE, mean ± SD over minutes):")
+            for _, r in comparison.iterrows():
+                print(f"  {r['Dataset']:<10s} {r['Comparison'][:58]:<58s} subject "
+                      f"{mean_sd_text(r['Subject_MAE_Full'], r['Subject_MAE_Full_SD'])} vs "
+                      f"{mean_sd_text(r['Subject_MAE_Variant'], r['Subject_MAE_Variant_SD'])} "
+                      f"(diff {mean_sd_text(r['Subject_MAE_Diff_Variant_minus_Full'], r['Subject_MAE_Diff_SD'])}, "
+                      f"p={r['Subject_Wilcoxon_p']:.3g}); minute "
+                      f"{mean_sd_text(r['Minute_MAE_Full'], r['Minute_MAE_Full_SD'])} vs "
+                      f"{mean_sd_text(r['Minute_MAE_Variant'], r['Minute_MAE_Variant_SD'])}")
 
 
 def load_script(path: Path, name: str):
@@ -274,8 +437,10 @@ def waveform_results(backbone, results_root: Path, window_specs, dataset_keys, s
     table.to_csv(waveform_root / "prediction_filter_comparison.csv", index=False, encoding="utf-8-sig")
     print("\nFFT rate of the filtered (reported) vs the unfiltered prediction (ensembles):")
     for _, row in table.iterrows():
-        print(f"  {row['Dataset']:<10s} {row['Prediction'][:28]:<28s} MAE {row['FFT_MAE']:.3f}, "
-              f"mAE {row['Davies_mAE']:.3f}, mMAE {row['Davies_mMAE']:.3f}, PCC {row['Wave_PCC_Mean']:.3f}; "
+        print(f"  {row['Dataset']:<10s} {row['Prediction'][:28]:<28s} "
+              f"MAE {mean_sd_text(row['FFT_MAE'], row['FFT_MAE_SD'])}, "
+              f"mAE {row['Davies_mAE']:.3f}, mMAE {row['Davies_mMAE']:.3f}, "
+              f"PCC {mean_sd_text(row['Wave_PCC_Mean'], row['Wave_PCC_SD'])}; "
               f"rate differs in {row['N_Minutes_FFT_Rate_Differs']}/{row['N_Minutes']} minutes, "
               f"subject p={row['Subject_MAE_Wilcoxon_p']:.3g}")
     print(f"Waveforms saved under: {waveform_root}")
@@ -296,6 +461,7 @@ def data_path_arguments(args: argparse.Namespace):
 
 def main(args: argparse.Namespace) -> None:
     backbone = load_script(Path(args.backbone), "rrwavenet_261007_results")
+    add_standard_deviations(backbone)
     paths = data_path_arguments(args)
     summary_args = backbone.parse_args(
         ["--summary-only", "--windows", WINDOW, "--datasets", *args.datasets, *paths]
@@ -331,6 +497,7 @@ def main(args: argparse.Namespace) -> None:
             shutil.copytree(item, target, dirs_exist_ok=True)
         else:
             shutil.copy2(item, target)
+    write_mean_sd_tables(out_root)
 
     # 2. Waveform figures (unfiltered and filtered prediction) and the
     #    filtered / unfiltered FFT rate comparison.
