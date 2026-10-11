@@ -137,15 +137,6 @@ All results go to D:\PPG2RSP_RRWaveNet_Inspired\261007_Ensemble_NoEvent
   Summary\   fft_davies_overall.csv, fft_davies_single_models.csv,
       ablation_comparison.csv, window_comparison.csv, per_subject_fft.csv,
       per-minute tables, figures and 261007_RRWaveNet_Ensemble_NoEvent_results.xlsx
-  Summary\Waveforms\{dataset}_{window}_full\   two figures per held-out subject:
-      30 s of the ground truth (black) and the ensemble prediction (red),
-      unfiltered and after the respiratory filter of the evaluation, all
-      z-normalized, from its scored minute with the median FFT error
-      (waveform_excerpts.csv lists the excerpts)
-  Summary\Waveforms\prediction_filter_comparison.csv   FFT and Davies metrics
-      with the rate of the filtered prediction (the reported rates) and of
-      the unfiltered prediction, and the minutes where they differ
-      (prediction_filter_minutes.csv: every minute)
 
 Run (GPU):                       python 261007_RRWaveNet_Ensemble_NoEvent.py
 Resume after an interruption:    python 261007_RRWaveNet_Ensemble_NoEvent.py --resume
@@ -411,15 +402,6 @@ MODEL_CONFIG = {
 # these training settings; the ablation study reverts each changed one.
 A_SETTINGS = {"dropout": 0.20, "decoder_dilations": (12, 24), "epochs": 120}
 ENSEMBLE_MEMBERS = 3
-# Waveform figures (Summary\Waveforms): one 30 s excerpt per held-out subject,
-# the ground truth in black and the ensemble prediction in red (unfiltered,
-# and after the respiratory filter used before the FFT), z-normalized over
-# the excerpt. The excerpt is the first 30 s of the scored minute with the
-# median FFT error of that subject.
-WAVEFORM_FIGURE_VARIANTS = ("full",)
-WAVEFORM_EXCERPT_SEC = 30.0
-WAVEFORM_TRUE_COLOR = "#111111"
-WAVEFORM_PRED_COLOR = "#d62728"
 # Post-fusion representation diagnostics written per member.
 FEATURE_METRICS = (
     "Feature_OffDiag_SignedMean",
@@ -4339,206 +4321,6 @@ def read_minutes(paths: Sequence[Path]) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def zscore(signal: np.ndarray) -> np.ndarray:
-    values = np.asarray(signal, dtype=np.float64)
-    sd = np.nanstd(values)
-    if not np.isfinite(sd) or sd <= 1e-12:
-        return np.full_like(values, np.nan)
-    return (values - np.nanmean(values)) / sd
-
-
-def draw_waveform(path: Path, time: np.ndarray, true: np.ndarray, pred: np.ndarray,
-                  label: str, title: str) -> None:
-    fig, axis = plt.subplots(figsize=(10.0, 5.4))
-    axis.plot(time, zscore(true), color=WAVEFORM_TRUE_COLOR, linewidth=2.6, label="Ground truth")
-    axis.plot(time, zscore(pred), color=WAVEFORM_PRED_COLOR, linewidth=2.6, label=label)
-    axis.set_xlim(0, WAVEFORM_EXCERPT_SEC)
-    axis.set_xlabel("Time (s)", fontsize=12)
-    axis.set_ylabel("z-normalized respiratory waveform", fontsize=12)
-    axis.grid(True, color="#e6e6e6")
-    axis.legend(loc="upper right", fontsize=9)
-    axis.set_title(title, fontsize=9)
-    fig.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-
-
-def save_waveform_figures(
-    summary_root: Path,
-    root: Path,
-    variant: Variant,
-    spec: WindowSpec,
-    dataset_label: str,
-    ensemble_minutes: pd.DataFrame,
-    subject_data: Dict[str, dict],
-) -> Tuple[List[dict], List[dict]]:
-    """Waveform figures and the filtered / unfiltered rate of every minute.
-
-    For every held-out subject, WAVEFORM_EXCERPT_SEC of its scored minute
-    with the median FFT error is drawn twice: the ground truth (black) with
-    the unfiltered ensemble prediction (red), and with the prediction after
-    the respiratory filter of the evaluation (red), all z-normalized over
-    the excerpt. The evaluation filters each contiguous run of the
-    prediction with the profile's respiratory band before its FFT rate;
-    for every scored minute the FFT rate is also taken from the unfiltered
-    prediction, and the waveform Pearson r from both, so the two can be
-    compared. Returns (excerpt rows, minute rows).
-    """
-    figure_root = summary_root / "Waveforms" / f"{dataset_label}_{spec.name}_{variant.name}"
-    figure_root.mkdir(parents=True, exist_ok=True)
-    length = int(round(WAVEFORM_EXCERPT_SEC * TARGET_FS))
-    eval_len = int(round(EVAL_WINDOW_SEC * TARGET_FS))
-    excerpt_rows, minute_rows = [], []
-    for subject, minutes in ensemble_minutes.groupby("Subject", sort=True):
-        prediction_path = ensemble_paths(root, subject)[2]
-        if subject not in subject_data or not prediction_path.exists():
-            continue
-        arrays = np.load(prediction_path, allow_pickle=False)
-        metadata = [
-            {"segment_id": int(segment), "start": int(start)}
-            for segment, start in zip(arrays["segment_ids"], arrays["window_starts"])
-        ]
-        references = subject_data[subject]["references"]
-        series = {}
-        for segment_id in sorted({int(value) for value in minutes["Segment_ID"]}):
-            pred, true, coverage = reconstruct_segment(
-                arrays["predictions"], arrays["targets"], metadata, segment_id, TARGET_FS
-            )
-            reference = references[segment_id]
-            filtered = np.full_like(pred, np.nan)
-            for run_start, run_end in contiguous_runs(coverage):
-                if run_end - run_start >= eval_len:
-                    filtered[run_start:run_end] = respiratory_filter(
-                        pred[run_start:run_end], TARGET_FS, reference["band_hz"], reference["profile"]
-                    )
-            series[segment_id] = (pred, true, filtered, reference["profile"]["rr_band_bpm"])
-        rows = []
-        for _, minute in minutes.iterrows():
-            pred, true, filtered, rr_band = series[int(minute["Segment_ID"])]
-            start = int(round(float(minute["RR_Window_Start_Sec"]) * TARGET_FS))
-            end = start + eval_len
-            gt = float(minute["GT_RR"])
-            fft_unfiltered = fft_rr_bpm(pred[start:end], TARGET_FS, rr_band, False)
-            fft_filtered = fft_rr_bpm(filtered[start:end], TARGET_FS, rr_band, False)
-            rows.append(
-                {
-                    "Dataset": dataset_label,
-                    "Window_Config": spec.name,
-                    "Variant": variant.name,
-                    "Subject": subject,
-                    "Segment_ID": int(minute["Segment_ID"]),
-                    "RR_Window_Start_Sec": float(minute["RR_Window_Start_Sec"]),
-                    "GT_RR": gt,
-                    "FFT_RR_Reported": float(minute["FFT_RR"]),
-                    "FFT_RR_Filtered": fft_filtered,
-                    "FFT_RR_Unfiltered": fft_unfiltered,
-                    "AE_Filtered": abs(fft_filtered - gt) if np.isfinite(fft_filtered) else np.nan,
-                    "AE_Unfiltered": abs(fft_unfiltered - gt) if np.isfinite(fft_unfiltered) else np.nan,
-                    "FFT_RR_Differs": bool(
-                        not np.isclose(fft_filtered, fft_unfiltered, equal_nan=True)
-                    ),
-                    "Wave_PCC_Unfiltered": safe_pcc(true[start:end], pred[start:end]),
-                    "Wave_PCC_Filtered": safe_pcc(true[start:end], filtered[start:end]),
-                }
-            )
-        minute_rows += rows
-        frame = pd.DataFrame(rows)
-        frame = frame[np.isfinite(frame["AE_Filtered"])].sort_values(
-            ["AE_Filtered", "Segment_ID", "RR_Window_Start_Sec"]
-        )
-        if frame.empty:
-            continue
-        chosen = frame.iloc[(len(frame) - 1) // 2]
-        pred, true, filtered, _ = series[int(chosen["Segment_ID"])]
-        start = int(round(float(chosen["RR_Window_Start_Sec"]) * TARGET_FS))
-        excerpt = slice(start, start + length)
-        time = np.arange(pred[excerpt].size) / float(TARGET_FS)
-        members = len(np.atleast_1d(arrays["seeds"]))
-        head = (
-            f"{dataset_label} {subject}, {spec.label}: segment {int(chosen['Segment_ID'])}, "
-            f"{float(chosen['RR_Window_Start_Sec']):.0f} s; reference {chosen['GT_RR']:.1f} breaths/min"
-        )
-        figures = {}
-        for version, prediction, rate, label in (
-            ("unfiltered", pred, chosen["FFT_RR_Unfiltered"], f"Predicted (ensemble of {members})"),
-            ("filtered", filtered, chosen["FFT_RR_Filtered"],
-             f"Predicted, respiratory filter (ensemble of {members})"),
-        ):
-            path = figure_root / f"{safe_tag(subject)}_waveform_{version}.png"
-            draw_waveform(path, time, true[excerpt], prediction[excerpt], label,
-                          f"{head}, predicted {rate:.1f} ({version} prediction)")
-            figures[version] = str(path)
-        excerpt_rows.append(
-            {
-                **{key: chosen[key] for key in (
-                    "Dataset", "Window_Config", "Variant", "Subject", "Segment_ID",
-                    "GT_RR", "FFT_RR_Filtered", "FFT_RR_Unfiltered", "AE_Filtered",
-                    "AE_Unfiltered", "Wave_PCC_Unfiltered", "Wave_PCC_Filtered")},
-                "Excerpt_Start_Sec": float(chosen["RR_Window_Start_Sec"]),
-                "Excerpt_Sec": float(time.size / TARGET_FS),
-                "Figure_Unfiltered": figures["unfiltered"],
-                "Figure_Filtered": figures["filtered"],
-            }
-        )
-    return excerpt_rows, minute_rows
-
-
-def prediction_filter_comparison(minute_rows: List[dict]) -> pd.DataFrame:
-    """FFT and Davies metrics with the rate (and waveform r) of the filtered
-    and of the unfiltered prediction, per dataset, window and variant."""
-    rows = []
-    frame = pd.DataFrame(minute_rows)
-    if frame.empty:
-        return pd.DataFrame()
-    for (dataset, window, variant), group in frame.groupby(
-        ["Dataset", "Window_Config", "Variant"], sort=False
-    ):
-        per_version = {}
-        for version in ("Filtered", "Unfiltered"):
-            minutes = pd.DataFrame(
-                {
-                    "Subject": group["Subject"],
-                    "GT_RR": group["GT_RR"],
-                    "FFT_RR": group[f"FFT_RR_{version}"],
-                    "FFT_Error": group[f"FFT_RR_{version}"] - group["GT_RR"],
-                    "FFT_AE": group[f"AE_{version}"],
-                    "Wave_PCC": group[f"Wave_PCC_{version}"],
-                }
-            )
-            per_version[version] = minutes
-            metrics = fft_davies_metrics(minutes)
-            metrics.update(
-                {
-                    "Dataset": dataset,
-                    "Window_Config": window,
-                    "Variant": variant,
-                    "Prediction": (
-                        "respiratory filter before the FFT (reported rates)"
-                        if version == "Filtered"
-                        else "no filter"
-                    ),
-                    "N_Minutes_FFT_Rate_Differs": int(group["FFT_RR_Differs"].sum()),
-                }
-            )
-            rows.append(metrics)
-        a = per_version["Filtered"].groupby("Subject")["FFT_AE"].mean()
-        b = per_version["Unfiltered"].groupby("Subject")["FFT_AE"].mean()
-        subjects = a.index.intersection(b.index)
-        p_subject = safe_pvalue(stats.wilcoxon, a.loc[subjects].to_numpy(float), b.loc[subjects].to_numpy(float))
-        keep = np.isfinite(group["AE_Filtered"]) & np.isfinite(group["AE_Unfiltered"])
-        p_minute = safe_pvalue(
-            stats.wilcoxon,
-            group.loc[keep, "AE_Filtered"].to_numpy(float),
-            group.loc[keep, "AE_Unfiltered"].to_numpy(float),
-        )
-        for row in rows[-2:]:
-            row["Subject_MAE_Wilcoxon_p"] = p_subject
-            row["Minute_AE_Wilcoxon_p"] = p_minute
-    table = pd.DataFrame(rows)
-    first = ["Dataset", "Window_Config", "Variant", "Prediction", "N_Minutes_FFT_Rate_Differs"]
-    return table[first + [c for c in table.columns if c not in first]]
-
-
 def summarize_results(
     args: argparse.Namespace,
     results_root: Path,
@@ -4551,7 +4333,6 @@ def summarize_results(
     summary_root.mkdir(parents=True, exist_ok=True)
     overall_rows, single_rows, comparison_rows, subject_tables = [], [], [], []
     ensemble_frames, member_frames, missing_rows = [], [], []
-    waveform_rows, filter_minute_rows = [], []
     for spec in window_specs:
         for dataset_key in dataset_keys:
             dataset_label = DATASET_CONFIGS[dataset_key]["label"]
@@ -4595,12 +4376,6 @@ def summarize_results(
                         )
                 ensemble = scored_minutes(read_minutes(ensemble_paths_done))
                 members = scored_minutes(read_minutes(member_paths_done))
-                if variant.name in WAVEFORM_FIGURE_VARIANTS and not ensemble.empty:
-                    excerpts, filter_minutes = save_waveform_figures(
-                        summary_root, root, variant, spec, dataset_label, ensemble, subject_data
-                    )
-                    waveform_rows += excerpts
-                    filter_minute_rows += filter_minutes
                 if not ensemble.empty:
                     ensemble["Window_Config"] = spec.name
                 if not members.empty:
@@ -4721,18 +4496,6 @@ def summarize_results(
     }
     for name, frame in tables.items():
         frame.to_csv(summary_root / f"{name}.csv", index=False, encoding="utf-8-sig")
-    filter_table = prediction_filter_comparison(filter_minute_rows)
-    if waveform_rows:
-        pd.DataFrame(waveform_rows).to_csv(
-            summary_root / "Waveforms" / "waveform_excerpts.csv", index=False, encoding="utf-8-sig"
-        )
-    if filter_minute_rows:
-        pd.DataFrame(filter_minute_rows).to_csv(
-            summary_root / "Waveforms" / "prediction_filter_minutes.csv", index=False, encoding="utf-8-sig"
-        )
-        filter_table.to_csv(
-            summary_root / "Waveforms" / "prediction_filter_comparison.csv", index=False, encoding="utf-8-sig"
-        )
     excel_path = write_results_excel(
         summary_root / "261007_RRWaveNet_Ensemble_NoEvent_results.xlsx",
         {
@@ -4790,16 +4553,6 @@ def summarize_results(
                 f"mMAE {row[f'Davies_mMAE_{ref}']:.3f} vs {row[f'Davies_mMAE_{cmp_}']:.3f}; "
                 f"{cmp_[:4]} better in {row['N_Subjects_Compared_Better']}/"
                 f"{row['N_Subjects_Paired']} subjects, p={row['Subject_Wilcoxon_p']:.3g}"
-            )
-    if not filter_table.empty:
-        print("\nFFT rate of the filtered (reported) vs the unfiltered prediction (ensembles):")
-        for _, row in filter_table.iterrows():
-            print(
-                f"  {row['Dataset']:<10s} {row['Window_Config'][1:4]:<4s} {row['Variant']:<6s} "
-                f"{row['Prediction'][:28]:<28s} MAE {row['FFT_MAE']:.3f}, mAE {row['Davies_mAE']:.3f}, "
-                f"mMAE {row['Davies_mMAE']:.3f}, PCC {row['Wave_PCC_Mean']:.3f}; rate differs in "
-                f"{row['N_Minutes_FFT_Rate_Differs']}/{row['N_Minutes']} minutes, "
-                f"subject p={row['Subject_MAE_Wilcoxon_p']:.3g}"
             )
     if not missing.empty:
         print(f"\n{len(missing)} fold(s) incomplete; see {summary_root / 'incomplete_folds.csv'}")

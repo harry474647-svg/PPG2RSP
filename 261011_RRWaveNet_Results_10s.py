@@ -7,22 +7,38 @@ windows only) it writes:
    FFT and Davies & Mandic metrics of every dataset and variant, the
    ablation comparison (paired Wilcoxon against the full model), the
    per-subject table, the per-minute tables, figures and the workbook;
-2. the stem fusion feature analysis, Stem Fusion O (full) vs X
+2. waveform figures of the full model: for every held-out subject, 30 s of
+   the ground truth (black) and the ensemble prediction (red), z-normalized,
+   drawn twice: the unfiltered prediction, and the prediction after the
+   respiratory filter that 261007 applies before the FFT rate. The excerpt is
+   the first 30 s of the subject's scored minute with the median FFT error;
+3. the FFT rate of every scored minute from the unfiltered prediction next
+   to the filtered one (the reported rate): FFT and Davies metrics of both,
+   the minutes whose rate differs and paired Wilcoxon tests;
+4. the stem fusion feature analysis, Stem Fusion O (full) vs X
    (no_stem_fusion): 261010_RRWaveNet_StemFusion_Feature_Analysis;
-3. the residual encoder feature analysis of the full model:
+5. the residual encoder feature analysis of the full model:
    261010_RRWaveNet_Encoder_Feature_Analysis.
 Folds whose 3 members are not all stored yet are left out and listed in
 incomplete_folds.csv, so the script can be run at any time and again later.
 
 Outputs: <261007 results root>\Summary_10s\
-  (the 261007 summary files, Stem_Fusion_OX\ and Encoder_Feature_Analysis\)
+  the 261007 summary files (10 s),
+  Waveforms\<dataset>_w10s_nonoverlap_full\<subject>_waveform_unfiltered.png
+                                          \<subject>_waveform_filtered.png
+  Waveforms\waveform_excerpts.csv, prediction_filter_comparison.csv,
+           prediction_filter_minutes.csv
+  Stem_Fusion_OX\ and Encoder_Feature_Analysis\
 The 261007 run itself writes its own Summary\ (both windows) when it ends;
 Summary_10s\ is not touched by it.
 
-Run next to the three scripts (Spyder: just run the file):
+It uses the 261007 file as it is (no change to it is needed). Run next to
+the 261007 and the two 261010 scripts (Spyder: just run the file):
   python 261011_RRWaveNet_Results_10s.py
 Options: --results-root <261007 results>, --datasets capnobase bidmc,
-  --skip-feature-analyses, --force-cpu, and the data path options of 261007.
+  --skip-feature-analyses (steps 4-5), --force-cpu, and the data path
+  options of 261007. Colours, excerpt length and variant of the waveform
+  figures: WAVEFORM_* constants below.
 The data paths, model and results root default to those in the 261007 file.
 """
 
@@ -31,9 +47,17 @@ import importlib.util
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 sys.dont_write_bytecode = True
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from scipy import stats
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 BACKBONE = SCRIPT_DIR / "261007_RRWaveNet_Ensemble_NoEvent.py"
@@ -41,8 +65,13 @@ STEM_ANALYSIS = SCRIPT_DIR / "261010_RRWaveNet_StemFusion_Feature_Analysis.py"
 ENCODER_ANALYSIS = SCRIPT_DIR / "261010_RRWaveNet_Encoder_Feature_Analysis.py"
 WINDOW = "w10s_nonoverlap"
 OUTPUT_FOLDER = "Summary_10s"
-# Set to False to write only the performance summary (faster).
+# Set to False to write only the performance summary and the waveforms.
 RUN_FEATURE_ANALYSES = True
+# Waveform figures: model variant, excerpt length and colours.
+WAVEFORM_VARIANT = "full"
+WAVEFORM_EXCERPT_SEC = 30.0
+WAVEFORM_TRUE_COLOR = "#111111"  # ground truth: black
+WAVEFORM_PRED_COLOR = "#d62728"  # prediction: red
 
 
 def load_script(path: Path, name: str):
@@ -51,6 +80,205 @@ def load_script(path: Path, name: str):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def zscore(signal: np.ndarray) -> np.ndarray:
+    values = np.asarray(signal, dtype=np.float64)
+    sd = np.nanstd(values)
+    if not np.isfinite(sd) or sd <= 1e-12:
+        return np.full_like(values, np.nan)
+    return (values - np.nanmean(values)) / sd
+
+
+def draw_waveform(path: Path, time: np.ndarray, true: np.ndarray, pred: np.ndarray,
+                  label: str, title: str) -> None:
+    fig, axis = plt.subplots(figsize=(10.0, 5.4))
+    axis.plot(time, zscore(true), color=WAVEFORM_TRUE_COLOR, linewidth=2.6, label="Ground truth")
+    axis.plot(time, zscore(pred), color=WAVEFORM_PRED_COLOR, linewidth=2.6, label=label)
+    axis.set_xlim(0, WAVEFORM_EXCERPT_SEC)
+    axis.set_xlabel("Time (s)", fontsize=12)
+    axis.set_ylabel("z-normalized respiratory waveform", fontsize=12)
+    axis.grid(True, color="#e6e6e6")
+    axis.legend(loc="upper right", fontsize=9)
+    axis.set_title(title, fontsize=9)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def subject_waveforms(backbone, root: Path, spec, dataset_label: str, subject: str,
+                      minutes: pd.DataFrame, references: Dict[int, dict], figure_root: Path):
+    """Both waveform figures of one held-out subject and the filtered and
+    unfiltered FFT rate of each of its scored minutes."""
+    fs = backbone.TARGET_FS
+    eval_len = int(round(backbone.EVAL_WINDOW_SEC * fs))
+    arrays = np.load(backbone.ensemble_paths(root, subject)[2], allow_pickle=False)
+    metadata = [
+        {"segment_id": int(segment), "start": int(start)}
+        for segment, start in zip(arrays["segment_ids"], arrays["window_starts"])
+    ]
+    series = {}
+    for segment_id in sorted({int(value) for value in minutes["Segment_ID"]}):
+        pred, true, coverage = backbone.reconstruct_segment(
+            arrays["predictions"], arrays["targets"], metadata, segment_id, fs
+        )
+        reference = references[segment_id]
+        filtered = np.full_like(pred, np.nan)
+        # As in the 261007 evaluation: every contiguous run of at least one
+        # minute is filtered with the profile's respiratory band.
+        for run_start, run_end in backbone.contiguous_runs(coverage):
+            if run_end - run_start >= eval_len:
+                filtered[run_start:run_end] = backbone.respiratory_filter(
+                    pred[run_start:run_end], fs, reference["band_hz"], reference["profile"]
+                )
+        series[segment_id] = (pred, true, filtered, reference["profile"]["rr_band_bpm"])
+    rows = []
+    for _, minute in minutes.iterrows():
+        pred, true, filtered, rr_band = series[int(minute["Segment_ID"])]
+        start = int(round(float(minute["RR_Window_Start_Sec"]) * fs))
+        end = start + eval_len
+        gt = float(minute["GT_RR"])
+        rate_unfiltered = backbone.fft_rr_bpm(pred[start:end], fs, rr_band, False)
+        rate_filtered = backbone.fft_rr_bpm(filtered[start:end], fs, rr_band, False)
+        rows.append({
+            "Dataset": dataset_label, "Window_Config": spec.name, "Variant": WAVEFORM_VARIANT,
+            "Subject": subject, "Segment_ID": int(minute["Segment_ID"]),
+            "RR_Window_Start_Sec": float(minute["RR_Window_Start_Sec"]), "GT_RR": gt,
+            "FFT_RR_Reported": float(minute["FFT_RR"]),
+            "FFT_RR_Filtered": rate_filtered, "FFT_RR_Unfiltered": rate_unfiltered,
+            "AE_Filtered": abs(rate_filtered - gt) if np.isfinite(rate_filtered) else np.nan,
+            "AE_Unfiltered": abs(rate_unfiltered - gt) if np.isfinite(rate_unfiltered) else np.nan,
+            "FFT_RR_Differs": bool(not np.isclose(rate_filtered, rate_unfiltered, equal_nan=True)),
+            "Wave_PCC_Unfiltered": backbone.safe_pcc(true[start:end], pred[start:end]),
+            "Wave_PCC_Filtered": backbone.safe_pcc(true[start:end], filtered[start:end]),
+        })
+    frame = pd.DataFrame(rows)
+    ranked = frame[np.isfinite(frame["AE_Filtered"])].sort_values(
+        ["AE_Filtered", "Segment_ID", "RR_Window_Start_Sec"]
+    )
+    if ranked.empty:
+        return rows, None
+    chosen = ranked.iloc[(len(ranked) - 1) // 2]
+    pred, true, filtered, _ = series[int(chosen["Segment_ID"])]
+    start = int(round(float(chosen["RR_Window_Start_Sec"]) * fs))
+    excerpt = slice(start, start + int(round(WAVEFORM_EXCERPT_SEC * fs)))
+    time = np.arange(pred[excerpt].size) / float(fs)
+    members = len(np.atleast_1d(arrays["seeds"]))
+    head = (f"{dataset_label} {subject}, {spec.label}: segment {int(chosen['Segment_ID'])}, "
+            f"{float(chosen['RR_Window_Start_Sec']):.0f} s; reference {chosen['GT_RR']:.1f} breaths/min")
+    figures = {}
+    for version, prediction, rate, label in (
+        ("unfiltered", pred, chosen["FFT_RR_Unfiltered"], f"Predicted (ensemble of {members})"),
+        ("filtered", filtered, chosen["FFT_RR_Filtered"],
+         f"Predicted, respiratory filter (ensemble of {members})"),
+    ):
+        path = figure_root / f"{backbone.safe_tag(subject)}_waveform_{version}.png"
+        draw_waveform(path, time, true[excerpt], prediction[excerpt], label,
+                      f"{head}, predicted {rate:.1f} ({version} prediction)")
+        figures[version] = str(path)
+    excerpt_row = {key: chosen[key] for key in (
+        "Dataset", "Window_Config", "Variant", "Subject", "Segment_ID", "GT_RR",
+        "FFT_RR_Filtered", "FFT_RR_Unfiltered", "AE_Filtered", "AE_Unfiltered",
+        "Wave_PCC_Unfiltered", "Wave_PCC_Filtered")}
+    excerpt_row.update({
+        "Excerpt_Start_Sec": float(chosen["RR_Window_Start_Sec"]),
+        "Excerpt_Sec": float(time.size / fs),
+        "Figure_Unfiltered": figures["unfiltered"], "Figure_Filtered": figures["filtered"],
+    })
+    return rows, excerpt_row
+
+
+def filter_comparison(backbone, minute_rows: List[dict]) -> pd.DataFrame:
+    """FFT and Davies metrics with the filtered and the unfiltered rate."""
+    frame = pd.DataFrame(minute_rows)
+    rows = []
+    for (dataset, window, variant), group in frame.groupby(["Dataset", "Window_Config", "Variant"], sort=False):
+        per_version = {}
+        for version in ("Filtered", "Unfiltered"):
+            minutes = pd.DataFrame({
+                "Subject": group["Subject"], "GT_RR": group["GT_RR"],
+                "FFT_RR": group[f"FFT_RR_{version}"],
+                "FFT_Error": group[f"FFT_RR_{version}"] - group["GT_RR"],
+                "FFT_AE": group[f"AE_{version}"], "Wave_PCC": group[f"Wave_PCC_{version}"],
+            })
+            per_version[version] = minutes
+            metrics = backbone.fft_davies_metrics(minutes)
+            metrics.update({
+                "Dataset": dataset, "Window_Config": window, "Variant": variant,
+                "Prediction": ("respiratory filter before the FFT (reported rates)"
+                               if version == "Filtered" else "no filter"),
+                "N_Minutes_FFT_Rate_Differs": int(group["FFT_RR_Differs"].sum()),
+            })
+            rows.append(metrics)
+        a = per_version["Filtered"].groupby("Subject")["FFT_AE"].mean()
+        b = per_version["Unfiltered"].groupby("Subject")["FFT_AE"].mean()
+        subjects = a.index.intersection(b.index)
+        keep = np.isfinite(group["AE_Filtered"]) & np.isfinite(group["AE_Unfiltered"])
+        p_subject = backbone.safe_pvalue(stats.wilcoxon, a.loc[subjects].to_numpy(float),
+                                         b.loc[subjects].to_numpy(float))
+        p_minute = backbone.safe_pvalue(stats.wilcoxon, group.loc[keep, "AE_Filtered"].to_numpy(float),
+                                        group.loc[keep, "AE_Unfiltered"].to_numpy(float))
+        for row in rows[-2:]:
+            row["Subject_MAE_Wilcoxon_p"] = p_subject
+            row["Minute_AE_Wilcoxon_p"] = p_minute
+    table = pd.DataFrame(rows)
+    first = ["Dataset", "Window_Config", "Variant", "Prediction", "N_Minutes_FFT_Rate_Differs"]
+    return table[first + [c for c in table.columns if c not in first]] if not table.empty else table
+
+
+def waveform_results(backbone, results_root: Path, window_specs, dataset_keys, subjects_filter,
+                     out_root: Path) -> None:
+    """Waveform figures and the filtered / unfiltered rate comparison."""
+    waveform_root = out_root / "Waveforms"
+    waveform_root.mkdir(parents=True, exist_ok=True)
+    excerpt_rows, minute_rows = [], []
+    variant = backbone.VARIANTS[WAVEFORM_VARIANT]
+    for spec in window_specs:
+        for dataset_key in dataset_keys:
+            label = backbone.DATASET_CONFIGS[dataset_key]["label"]
+            root = backbone.condition_root(results_root, variant.name, spec, dataset_key)
+            if not (root / "Ensemble_Predictions").exists():
+                print(f"{label} {spec.name}: no ensemble predictions, skipped")
+                continue
+            subject_data = backbone.load_dataset(dataset_key, spec)
+            figure_root = waveform_root / f"{label}_{spec.name}_{variant.name}"
+            figure_root.mkdir(parents=True, exist_ok=True)
+            done = 0
+            for subject in sorted(subject_data):
+                if subjects_filter and subject not in subjects_filter:
+                    continue
+                summary_path, window_path, prediction_path = backbone.ensemble_paths(root, subject)
+                if not (summary_path.exists() and window_path.exists() and prediction_path.exists()):
+                    continue
+                minutes = backbone.scored_minutes(backbone.read_minutes([window_path]))
+                if minutes.empty:
+                    continue
+                rows, excerpt = subject_waveforms(
+                    backbone, root, spec, label, subject, minutes,
+                    subject_data[subject]["references"], figure_root,
+                )
+                minute_rows += rows
+                if excerpt is not None:
+                    excerpt_rows.append(excerpt)
+                    done += 1
+            print(f"{label} {spec.name}: waveform figures of {done} subjects")
+            del subject_data
+            backbone.release_memory()
+    if not minute_rows:
+        print("No ensemble result to draw yet.")
+        return
+    pd.DataFrame(excerpt_rows).to_csv(waveform_root / "waveform_excerpts.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(minute_rows).to_csv(waveform_root / "prediction_filter_minutes.csv", index=False,
+                                     encoding="utf-8-sig")
+    table = filter_comparison(backbone, minute_rows)
+    table.to_csv(waveform_root / "prediction_filter_comparison.csv", index=False, encoding="utf-8-sig")
+    print("\nFFT rate of the filtered (reported) vs the unfiltered prediction (ensembles):")
+    for _, row in table.iterrows():
+        print(f"  {row['Dataset']:<10s} {row['Prediction'][:28]:<28s} MAE {row['FFT_MAE']:.3f}, "
+              f"mAE {row['Davies_mAE']:.3f}, mMAE {row['Davies_mMAE']:.3f}, PCC {row['Wave_PCC_Mean']:.3f}; "
+              f"rate differs in {row['N_Minutes_FFT_Rate_Differs']}/{row['N_Minutes']} minutes, "
+              f"subject p={row['Subject_MAE_Wilcoxon_p']:.3g}")
+    print(f"Waveforms saved under: {waveform_root}")
 
 
 def data_path_arguments(args: argparse.Namespace):
@@ -96,13 +324,18 @@ def main(args: argparse.Namespace) -> None:
     backbone.summarize_results(summary_args, results_root, variants, window_specs, dataset_keys)
     summary_root = results_root / "Summary"
     for item in summary_root.iterdir():
-        if item.is_dir() and item.name in ("Stem_Fusion_OX", "Encoder_Feature_Analysis"):
+        if item.is_dir() and item.name in ("Stem_Fusion_OX", "Encoder_Feature_Analysis", "Waveforms"):
             continue
         target = out_root / item.name
         if item.is_dir():
             shutil.copytree(item, target, dirs_exist_ok=True)
         else:
             shutil.copy2(item, target)
+
+    # 2. Waveform figures (unfiltered and filtered prediction) and the
+    #    filtered / unfiltered FFT rate comparison.
+    print("\n=== 2. Waveform figures and filtered vs unfiltered rate, 10 s ===")
+    waveform_results(backbone, results_root, window_specs, dataset_keys, None, out_root)
 
     if args.skip_feature_analyses or not RUN_FEATURE_ANALYSES:
         print(f"\nSaved under: {out_root}")
@@ -112,13 +345,13 @@ def main(args: argparse.Namespace) -> None:
     if args.force_cpu:
         common.append("--force-cpu")
 
-    # 2. Stem Fusion O vs X.
-    print("\n=== 2. Stem fusion feature analysis (O = full, X = no_stem_fusion), 10 s ===")
+    # 3. Stem Fusion O vs X.
+    print("\n=== 3. Stem fusion feature analysis (O = full, X = no_stem_fusion), 10 s ===")
     stem = load_script(STEM_ANALYSIS, "stem_fusion_analysis_10s")
     stem.analyse(stem.parse_args(common + ["--output", str(out_root / "Stem_Fusion_OX")]))
 
-    # 3. Residual encoder blocks of the full model.
-    print("\n=== 3. Residual encoder feature analysis (full model), 10 s ===")
+    # 4. Residual encoder blocks of the full model.
+    print("\n=== 4. Residual encoder feature analysis (full model), 10 s ===")
     encoder = load_script(ENCODER_ANALYSIS, "encoder_feature_analysis_10s")
     encoder.analyse(encoder.parse_args(common + ["--output", str(out_root / "Encoder_Feature_Analysis")]))
     print(f"\nAll 10 s results saved under: {out_root}")
