@@ -34,8 +34,10 @@ trained on it (min-max to [-1, 1]).
    the target for lags 0-12 s in every run of at least 24 s, averaged over
    the runs (weighted by length). Similarity to the target = Pearson r
    between the PC1 ACF and the target ACF over lags 2-10 s (breathing at
-   0.1-0.5 Hz). Figure: mean ACF of the target, DeepEnc (B4) and Stem Fuse
-   with their r.
+   0.1-0.5 Hz), for every stage; each block is tested against Stem and
+   against the block before it. Figures: mean ACF of the target, DeepEnc
+   (B4) and Stem Fuse with their r; the mean ACF of every stage; and the
+   similarity r per stage with its changes and p values.
 Every value is computed per model and averaged over the 3 models of a
 subject. Statistics are over subjects: each block against Stem with the
 paired Wilcoxon signed-rank test (two-sided), per dataset and over all
@@ -44,7 +46,8 @@ datasets together, separately for each window condition (10 s, 20 s).
 Outputs (default: <results root>\Summary\Encoder_Feature_Analysis)
   encoder_channel_corr_tests.csv   per stage: PCC, mean delta |r|, better, p
   encoder_psd_tests.csv            per stage: resp-band ratio, p vs Stem
-  encoder_acf_tests.csv            per stage: ACF similarity r, p vs Stem
+  encoder_acf_tests.csv            per stage: ACF similarity r, p vs Stem and
+                                   vs the previous block
   encoder_subjects.csv             per subject and stage: all metrics
   encoder_channels.csv             per subject, stage and channel: |r|
   encoder_members.csv              per model (member)
@@ -445,7 +448,7 @@ def analyse(args: argparse.Namespace) -> None:
             target_ratio = frame["Target_RespBand_Ratio"].to_numpy(float)
             stem_ratio = frame["Stem_RespBand_Ratio"].to_numpy(float)
             stem_acf = frame["Stem_ACF_r"].to_numpy(float)
-            for stage, stage_label in zip(STAGES, labels):
+            for position, (stage, stage_label) in enumerate(zip(STAGES, labels)):
                 ratio = frame[f"{stage}_RespBand_Ratio"].to_numpy(float)
                 acf_r = frame[f"{stage}_ACF_r"].to_numpy(float)
                 psd_rows.append({
@@ -457,12 +460,18 @@ def analyse(args: argparse.Namespace) -> None:
                     "N_Subjects_Higher_than_Stem": int(np.sum(ratio > stem_ratio)) if stage != "Stem" else np.nan,
                     "Wilcoxon_p_vs_Stem": wilcoxon_p(ratio, stem_ratio) if stage != "Stem" else np.nan,
                 })
+                previous = frame[f"{STAGES[position - 1]}_ACF_r"].to_numpy(float) if position else None
                 acf_rows.append({
                     "Window_Config": window, "Dataset": dataset, "Stage": stage_label, "N_Subjects": n,
                     "ACF_r_Mean": float(np.nanmean(acf_r)),
                     "ACF_r_SD": float(np.nanstd(acf_r, ddof=1)) if n > 1 else np.nan,
-                    "N_Subjects_Higher_than_Stem": int(np.sum(acf_r > stem_acf)) if stage != "Stem" else np.nan,
-                    "Wilcoxon_p_vs_Stem": wilcoxon_p(acf_r, stem_acf) if stage != "Stem" else np.nan,
+                    "ACF_r_Median": float(np.nanmedian(acf_r)),
+                    "Delta_vs_Stem": float(np.nanmean(acf_r - stem_acf)) if position else np.nan,
+                    "N_Subjects_Higher_than_Stem": int(np.sum(acf_r > stem_acf)) if position else np.nan,
+                    "Wilcoxon_p_vs_Stem": wilcoxon_p(acf_r, stem_acf) if position else np.nan,
+                    "Delta_vs_Previous": float(np.nanmean(acf_r - previous)) if position else np.nan,
+                    "N_Subjects_Higher_than_Previous": int(np.sum(acf_r > previous)) if position else np.nan,
+                    "Wilcoxon_p_vs_Previous": wilcoxon_p(acf_r, previous) if position else np.nan,
                 })
             psd_curves = {name: mean_curve(f"{name}_PSD") for name in ("Target",) + STAGES}
             acf_curves = {name: mean_curve(f"{name}_ACF") for name in ("Target",) + STAGES}
@@ -519,6 +528,55 @@ def analyse(args: argparse.Namespace) -> None:
             fig.savefig(figure_root / f"{tag}_pc1_acf.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
 
+            # The same autocorrelation for every block.
+            fig, axis = plt.subplots(figsize=(7.6, 4.6))
+            axis.axvspan(*ACF_BAND_SEC, color="#e15759", alpha=0.06, label="Resp lag band")
+            lines = []
+            for name, stage_label in zip(("Target",) + STAGES, ["Target RSP"] + labels):
+                axis.plot(lags, acf_curves[name], color=STAGE_COLORS[name],
+                          linewidth=2.2 if name == "Target" else 1.4, label=stage_label)
+            for row in deep:
+                stars = "" if row["Stage"] == labels[0] else f" ({p_text(row['Wilcoxon_p_vs_Stem'])})"
+                lines.append(f"{row['Stage']}: r = {row['ACF_r_Mean']:.3f}{stars}")
+            axis.text(1.02, 1.0, "Auto-correlation vs target\n(lags 2-10 s; p vs Stem)\n" + "\n".join(lines),
+                      transform=axis.transAxes, va="top", fontsize=8,
+                      bbox={"facecolor": "white", "edgecolor": "#cc0000"})
+            axis.set_xlabel("Lag (s)")
+            axis.set_ylabel("Normalized autocorrelation")
+            axis.set_xlim(0, ACF_MAX_LAG_SEC)
+            axis.grid(True, color="#eeeeee")
+            axis.legend(fontsize=7, loc="upper right")
+            axis.set_title(f"Mean readout autocorrelation per block (PC1): {dataset}, {window} (n = {n})",
+                           fontsize=10)
+            fig.tight_layout()
+            fig.savefig(figure_root / f"{tag}_pc1_acf_blocks.png", dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
+            # Similarity of the PC1 autocorrelation to the target's, per stage.
+            values = [row["ACF_r_Mean"] for row in deep]
+            fig, axis = plt.subplots(figsize=(6.4, 4.4))
+            axis.plot(range(len(STAGES)), values, "o-", color="#1f77b4")
+            for i, value in enumerate(values):
+                axis.annotate(f"{value:.3f}", (i, value), textcoords="offset points", xytext=(0, 7),
+                              ha="center", fontsize=8, color="#1f77b4", fontweight="bold")
+            bottom = min(values)
+            for i, row in enumerate(deep[1:], start=1):
+                axis.annotate(f"vs Stem {row['Delta_vs_Stem']:+.3f}\n"
+                              f"higher {row['N_Subjects_Higher_than_Stem']}/{n}, {p_text(row['Wilcoxon_p_vs_Stem'])}\n"
+                              f"vs prev. {row['Delta_vs_Previous']:+.3f}, {p_text(row['Wilcoxon_p_vs_Previous'])}",
+                              (i, bottom), textcoords="offset points", xytext=(0, -46), ha="center",
+                              fontsize=6, bbox={"facecolor": "white", "edgecolor": "#999999", "pad": 1.5})
+            axis.set_xticks(range(len(STAGES)))
+            axis.set_xticklabels([l.replace(" ", "\n") for l in labels])
+            axis.set_ylabel("ACF similarity to the target (r, lags 2-10 s)")
+            span = max(max(values) - bottom, 0.05)
+            axis.set_ylim(bottom - 0.7 * span, max(values) + 0.15 * span)
+            axis.grid(True, color="#e6e6e6")
+            axis.set_title(f"PC1 autocorrelation similarity per block: {dataset}, {window} (n = {n})", fontsize=10)
+            fig.tight_layout()
+            fig.savefig(figure_root / f"{tag}_pc1_acf_summary.png", dpi=150)
+            plt.close(fig)
+
     corr = pd.DataFrame(corr_rows)
     psd = pd.DataFrame(psd_rows)
     acf = pd.DataFrame(acf_rows)
@@ -545,7 +603,7 @@ def analyse(args: argparse.Namespace) -> None:
         stem = p["Stage"] == "Stem"
         print(f"  {p['Window_Config'][1:4]:<4s} {p['Dataset']:<13s} {p['Stage']:<10s} ratio {p['RespBand_Ratio_Mean']:.3f} "
               f"(target {p['Target_RespBand_Ratio_Mean']:.3f}{'' if stem else ', ' + p_text(p['Wilcoxon_p_vs_Stem'])})  "
-              f"ACF r {a['ACF_r_Mean']:.3f}{'' if stem else ' (' + p_text(a['Wilcoxon_p_vs_Stem']) + ')'}")
+              f"ACF r {a['ACF_r_Mean']:.3f}{'' if stem else ' (vs Stem ' + p_text(a['Wilcoxon_p_vs_Stem']) + ', vs previous ' + p_text(a['Wilcoxon_p_vs_Previous']) + ')'}")
     print(f"Saved under: {out_root}")
 
 
