@@ -1,76 +1,100 @@
-r"""261011_RRWaveNet_Encoder_Feature_Results_10s: feature-level analysis of the
-four residual encoder blocks of the 261007 full model, 10 s windows, for
-every dataset (CapnoBase, BIDMC, STEAM2) and for all datasets together, in
-one script.
+r"""261011_RRWaveNet_Feature_Results_10s: feature-level analyses of the
+261007_RRWaveNet_Ensemble_NoEvent results, 10 s windows, for every dataset
+(CapnoBase, BIDMC, STEAM2) and for all datasets together, in one script:
+  1. stem fusion: effective rank and off-diagonal correlation of the
+     encoder input, Stem Fusion O (full) vs X (no_stem_fusion);
+  2. the four residual encoder blocks of the full model: channel
+     correlation with the target, PC1 respiratory-band power, PC1
+     autocorrelation.
 
-Nothing is trained. Every stored model of the full model of
-261007_RRWaveNet_Ensemble_NoEvent (3 members per held-out subject) is
-reloaded and run on the test windows of its held-out subject. The
-24-channel feature map is taken at five stages:
-  Stem = the stem fusion output (encoder input),
-  B1 (d=1), B2 (d=2), B3 (d=4), B4 (d=8) = the output of each depthwise
-  residual block (B4 = encoder output, "DeepEnc").
-The blocks are depthwise, so channel c is the same channel at every stage.
-The target is the respiratory waveform of each window as the model was
-trained on it (min-max to [-1, 1]).
+Nothing is trained. Every stored model (3 members per held-out subject) is
+reloaded and run on the test windows of its held-out subject, so the
+windows are exactly the ones the models were tested on. Every value is
+computed per model and averaged over the 3 models of a subject. Statistics
+are over subjects with the paired Wilcoxon signed-rank test (two-sided),
+for each dataset and for all datasets together (every subject of the three
+datasets once). Subjects whose 3 models are not all stored yet are left out
+and listed.
 
-1. Channel correlation with the target
-   For every window, channel and stage: Pearson r between the channel and
-   the target over time. |r| is averaged over the windows -> |r| per
-   channel. Per stage: the mean |r| over the 24 channels, its change
-   against Stem (mean delta |r|) and the number of channels (of 24) whose
-   |r| is higher than at Stem ("better"). Figures: heatmap of the mean
-   delta |r| per channel and block (channels in their own order, 23 at the
-   top to 0), and the mean |channel r| per stage with delta, better and
-   the p value.
-2. PC1 power in the respiratory band
-   PCA over the 24 channels (channels standardized over all samples of the
-   subject); PC1 = first principal component (its share of the variance is
-   reported). PSD of PC1 in every window (periodogram, Hann window over the
-   whole window), averaged over the windows. Respiratory-band power ratio =
-   power in 0.1-0.5 Hz / power above 0 Hz; the same ratio for the target.
-   Figure: mean PSD (0-1 Hz, each curve scaled to its maximum).
-3. PC1 periodicity
-   Consecutive test windows of a recording segment are joined into runs
-   (windows do not overlap). Normalized autocorrelation (ACF) of PC1 and of
-   the target for lags 0-12 s in every run of at least 24 s, averaged over
-   the runs (weighted by length). Similarity to the target = Pearson r
-   between the PC1 ACF and the target ACF over lags 2-10 s. Figures: mean
-   ACF of the target, DeepEnc (B4) and Stem Fuse; the mean ACF of every
-   stage; the similarity r per stage with its changes and p values.
-Every value is computed per model and averaged over the 3 models of a
-subject. Statistics are over subjects: each block against Stem (and, for
-the ACF, against the block before it) with the paired Wilcoxon
-signed-rank test (two-sided), for each dataset and for all datasets
-together (every subject of the three datasets). Subjects whose 3 models
-are not all stored yet are left out and listed in encoder_coverage.csv.
+1. Stem fusion O vs X (encoder input)
+   Stem Fusion O = the full model (three stem branches -> 1x1 conv +
+   GroupNorm -> encoder): the 24 channels after the 1x1 conv + GroupNorm.
+   Stem Fusion X = its no_stem_fusion ablation (same folds and seeds): the
+   24 concatenated branch channels (k32 / k64 / k128, 8 each).
+   Per test window, on its 24 x T feature map:
+   * Effective rank (Roy & Vetterli, 2007): centre every channel over time,
+     take the eigenvalues of the 24 x 24 channel covariance, normalize them
+     to a distribution p and compute exp(-sum p log p) (1 to 24; also
+     reported divided by 24).
+   * Off-diagonal correlation: Pearson correlation of every pair of
+     channels over time; the mean over the 24 x 23 off-diagonal entries as
+     mean |r| and as signed mean. Pairs with a channel that is constant in
+     the window are left out (their share is reported).
+   The window values are averaged over the test windows of the subject,
+   then over the 3 models. O and X are paired by subject: mean +- SD,
+   median [IQR], number of subjects with a higher value in O, Wilcoxon
+   p (**** p < 1e-4, *** < 1e-3, ** < 1e-2, * < 0.05, ns). Box plots: Stem
+   Fusion X (left, red) vs Stem Fusion O (right, blue) with the
+   significance bracket, per dataset and for all datasets, and one overview
+   figure per metric. Skipped when the no_stem_fusion models are not stored.
+2. Residual encoder blocks (full model)
+   The 24-channel feature map at five stages: Stem = the stem fusion output
+   (encoder input), B1 (d=1), B2 (d=2), B3 (d=4), B4 (d=8) = the output of
+   each depthwise residual block (B4 = encoder output, "DeepEnc"). The
+   blocks are depthwise, so channel c is the same channel at every stage.
+   The target is the respiratory waveform of each window as the model was
+   trained on it (min-max to [-1, 1]).
+   * Channel correlation with the target: Pearson r between every channel
+     and the target in every window, |r| averaged over the windows. Per
+     stage: the mean |r| over the 24 channels, its change against Stem
+     (mean delta |r|) and the number of channels (of 24) whose |r| is
+     higher than at Stem. Figures: heatmap of the mean delta |r| per
+     channel and block (channels in their own order, 23 at the top to 0)
+     and the mean |channel r| per stage with delta, better and p.
+   * PC1 respiratory-band power: PCA over the 24 channels (standardized over
+     all samples of the subject); PSD of PC1 in every window (periodogram,
+     Hann window), averaged over the windows. Ratio = power in 0.1-0.5 Hz /
+     power above 0 Hz; the same for the target. Figure: mean PSD (0-1 Hz,
+     each curve scaled to its maximum).
+   * PC1 periodicity: consecutive test windows of a segment are joined into
+     runs; normalized autocorrelation (ACF) of PC1 and of the target for
+     lags 0-12 s in every run of at least 24 s, averaged over the runs
+     (weighted by length). Similarity = Pearson r between the PC1 ACF and
+     the target ACF over lags 2-10 s; each block against Stem and against
+     the block before it. Figures: ACF of the target, DeepEnc (B4) and Stem
+     Fuse; the ACF of every stage; the similarity r per stage.
 
-Outputs: <261007 results root>\Summary_10s\Encoder_Feature_Analysis\
-  encoder_channel_corr_tests.csv   per dataset and stage: mean |r|, delta, better, p
-  encoder_psd_tests.csv            per dataset and stage: resp-band ratio, p vs Stem
-  encoder_acf_tests.csv            per dataset and stage: ACF similarity r, p vs
-                                   Stem and vs the previous block
-  encoder_subjects.csv             per subject and stage: all metrics
-  encoder_channels.csv             per subject, stage and channel: |r|
-  encoder_members.csv              per model (member)
-  encoder_coverage.csv             subjects analysed / left out per dataset
-  encoder_curves.npz               mean PSD and ACF curves
-  encoder_feature_analysis.xlsx    all tables
-  Figures\<Dataset>_10s_channel_delta_heatmap.png
-         \<Dataset>_10s_channel_r_summary.png
-         \<Dataset>_10s_pc1_psd.png
-         \<Dataset>_10s_pc1_acf.png          (Target, DeepEnc, Stem Fuse)
-         \<Dataset>_10s_pc1_acf_blocks.png   (every block)
-         \<Dataset>_10s_pc1_acf_summary.png  (similarity r per block)
+Outputs: <261007 results root>\Summary_10s\
+  Stem_Fusion_OX\
+    stem_fusion_ox_members.csv    per model type, subject and member (the
+                                  Pooled_* columns: the same metrics on all
+                                  windows pooled, as in 261007 training)
+    stem_fusion_ox_subjects.csv   per subject: O and X side by side
+    stem_fusion_ox_tests.csv      per dataset / all datasets and metric
+    stem_fusion_ox_table_<metric>.csv   mean +- SD table as in the slides
+    stem_fusion_ox_skipped.csv    subjects left out
+    stem_fusion_ox.xlsx           all tables
+    Figures\<Dataset>_10s_<metric>.png, overview_10s_<metric>.png
+  Encoder_Feature_Analysis\
+    encoder_channel_corr_tests.csv, encoder_psd_tests.csv,
+    encoder_acf_tests.csv, encoder_subjects.csv, encoder_channels.csv,
+    encoder_members.csv, encoder_coverage.csv, encoder_curves.npz,
+    encoder_feature_analysis.xlsx
+    Figures\<Dataset>_10s_channel_delta_heatmap.png, _channel_r_summary.png,
+            _pc1_psd.png, _pc1_acf.png, _pc1_acf_blocks.png,
+            _pc1_acf_summary.png
   with <Dataset> = CapnoBase, BIDMC, STEAM2 and All_datasets.
 
 It uses the 261007 file as it is (data paths, model and results root are
 taken from it; default results root
 D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1). Run next to
 261007_RRWaveNet_Ensemble_NoEvent.py (Spyder: just run the file):
-  python 261011_RRWaveNet_Encoder_Feature_Results_10s.py
+  python 261011_RRWaveNet_Feature_Results_10s.py
 Options: --results-root <261007 results>, --datasets capnobase bidmc steam2,
   --force-cpu, --gpu, and the data path options of 261007.
+
+Reference: Roy O, Vetterli M. The effective rank: a measure of effective
+dimensionality. EUSIPCO 2007.
 """
 
 import argparse
@@ -96,11 +120,28 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 BACKBONE = SCRIPT_DIR / "261007_RRWaveNet_Ensemble_NoEvent.py"
 WINDOW = "w10s_nonoverlap"
 WINDOW_TAG = "10s"
-VARIANT = "full"
 MEMBERS = 3
 OUTPUT_FOLDER = "Summary_10s"
-ANALYSIS_FOLDER = "Encoder_Feature_Analysis"
 ALL_DATASETS = "All datasets"
+
+# 1. Stem fusion O vs X
+STEM_FOLDER = "Stem_Fusion_OX"
+STEM_O_VARIANT = "full"
+STEM_X_VARIANT = "no_stem_fusion"
+# Box order and colours: X (left, red), O (right, blue).
+MODEL_TYPES = (("Stem Fusion X", "#e8968c"), ("Stem Fusion O", "#5b8db8"))
+STEM_METRICS = (
+    # (column, axis label, drawn)
+    ("EffectiveRank", "Effective rank", True),
+    ("EffectiveRank_Normalized", "Effective rank / channels", False),
+    ("OffDiag_AbsMean", "Off-diagonal correlation (mean |r|)", True),
+    ("OffDiag_SignedMean", "Off-diagonal correlation (signed mean)", True),
+)
+CONSTANT_CHANNEL_SD = 1e-6
+
+# 2. Residual encoder blocks
+ENCODER_FOLDER = "Encoder_Feature_Analysis"
+ENCODER_VARIANT = "full"
 STAGES = ("Stem", "B1", "B2", "B3", "B4")
 STAGE_COLORS = {
     "Target": "#111111",
@@ -119,9 +160,9 @@ PSD_PLOT_MAX_HZ = 1.0
 
 def load_backbone(path: Path):
     """Import the 261007 script as a module (no training is started)."""
-    spec = importlib.util.spec_from_file_location("rrwavenet_261007_encoder_10s", str(path))
+    spec = importlib.util.spec_from_file_location("rrwavenet_261007_features_10s", str(path))
     module = importlib.util.module_from_spec(spec)
-    sys.modules["rrwavenet_261007_encoder_10s"] = module
+    sys.modules["rrwavenet_261007_features_10s"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -131,9 +172,47 @@ def stage_labels(backbone) -> List[str]:
     return ["Stem"] + [f"B{i + 1} (d={d})" for i, d in enumerate(dilations)]
 
 
+def wilcoxon_p(a: np.ndarray, b: np.ndarray) -> float:
+    keep = np.isfinite(a) & np.isfinite(b)
+    a, b = a[keep], b[keep]
+    if len(a) < 2:
+        return np.nan
+    if np.allclose(a, b):
+        return 1.0
+    try:
+        return float(stats.wilcoxon(a, b).pvalue)
+    except ValueError:
+        return np.nan
+
+
+def p_text(p_value: float) -> str:
+    if not np.isfinite(p_value):
+        return "p=n/a"
+    return "p<1e-4" if p_value < 1e-4 else f"p={p_value:.2g}"
+
+
+def significance_stars(p_value: float) -> str:
+    if not np.isfinite(p_value):
+        return "n/a"
+    for threshold, stars in ((1e-4, "****"), (1e-3, "***"), (1e-2, "**"), (0.05, "*")):
+        if p_value < threshold:
+            return stars
+    return "ns"
+
+
 # ---------------------------------------------------------------------------
 # Feature extraction and metrics
 # ---------------------------------------------------------------------------
+
+def encoder_input_features(model, loader, device) -> np.ndarray:
+    """The feature map that enters the encoder, for every test window."""
+    model.eval()
+    chunks = []
+    with torch.no_grad():
+        for x, _, _, _ in loader:
+            chunks.append(model.fused_representation(x.to(device)).cpu().numpy().astype(np.float32))
+    return np.concatenate(chunks)
+
 
 def stage_features(model, loader, device) -> Tuple[List[np.ndarray], np.ndarray]:
     """Feature maps at Stem and after every encoder block, and the targets."""
@@ -149,6 +228,58 @@ def stage_features(model, loader, device) -> Tuple[List[np.ndarray], np.ndarray]
                 stages[index].append(features.cpu().numpy().astype(np.float32))
             targets.append(y.squeeze(1).numpy().astype(np.float32))
     return [np.concatenate(chunks) for chunks in stages], np.concatenate(targets)
+
+
+def window_metrics(features: np.ndarray) -> Dict[str, np.ndarray]:
+    """Effective rank and off-diagonal correlation of every window.
+
+    features: (windows, channels, samples). Returns per-window arrays.
+    """
+    x = np.asarray(features, dtype=np.float64)
+    windows, channels, samples = x.shape
+    x = x - x.mean(axis=2, keepdims=True)
+    covariance = np.einsum("wct,wdt->wcd", x, x) / max(1, samples - 1)
+    covariance = (covariance + np.transpose(covariance, (0, 2, 1))) / 2.0
+    eigenvalues = np.clip(np.linalg.eigvalsh(covariance), 0.0, None)
+    total = eigenvalues.sum(axis=1, keepdims=True)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        p = np.where(total > 1e-12, eigenvalues / total, 0.0)
+        entropy = -np.sum(np.where(p > 0, p * np.log(np.where(p > 0, p, 1.0)), 0.0), axis=1)
+    effective_rank = np.where(total[:, 0] > 1e-12, np.exp(entropy), np.nan)
+    sd = np.sqrt(np.clip(np.einsum("wcc->wc", covariance), 0.0, None))
+    active = sd > CONSTANT_CHANNEL_SD
+    pairs = active[:, :, None] & active[:, None, :] & ~np.eye(channels, dtype=bool)[None]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        correlation = covariance / (sd[:, :, None] * sd[:, None, :])
+    correlation = np.where(pairs, correlation, 0.0)
+    n_pairs = pairs.sum(axis=(1, 2))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        abs_mean = np.where(n_pairs > 0, np.abs(correlation).sum(axis=(1, 2)) / n_pairs, np.nan)
+        signed_mean = np.where(n_pairs > 0, correlation.sum(axis=(1, 2)) / n_pairs, np.nan)
+    return {
+        "EffectiveRank": effective_rank,
+        "EffectiveRank_Normalized": effective_rank / channels,
+        "OffDiag_AbsMean": abs_mean,
+        "OffDiag_SignedMean": signed_mean,
+        "Undefined_Pair_Share": 1.0 - n_pairs / float(channels * (channels - 1)),
+    }
+
+
+def stem_row(backbone, features: np.ndarray, model_type: str, variant: str, dataset: str,
+             subject: str, member: int) -> dict:
+    """Window-averaged stem metrics of one model on its held-out subject."""
+    row = {
+        "Model_Type": model_type, "Variant": variant, "Window_Config": WINDOW, "Dataset": dataset,
+        "Subject": subject, "Member": member, "N_Windows": int(features.shape[0]),
+        "Channels": int(features.shape[1]),
+    }
+    for key, array in window_metrics(features).items():
+        row[key] = float(np.nanmean(array)) if np.isfinite(array).any() else np.nan
+    pooled = backbone.feature_representation_summary(features)
+    row["Pooled_EffectiveRank"] = pooled["Feature_EffectiveRank"]
+    row["Pooled_OffDiag_AbsMean"] = pooled["Feature_OffDiag_AbsMean"]
+    row["Pooled_OffDiag_SignedMean"] = pooled["Feature_OffDiag_SignedMean"]
+    return row
 
 
 def channel_abs_r(features: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -231,35 +362,29 @@ def acf_similarity(acf: np.ndarray, target_acf: np.ndarray, fs: float) -> float:
     return float(np.corrcoef(a, b)[0, 1])
 
 
-def wilcoxon_p(a: np.ndarray, b: np.ndarray) -> float:
-    keep = np.isfinite(a) & np.isfinite(b)
-    a, b = a[keep], b[keep]
-    if len(a) < 2:
-        return np.nan
-    if np.allclose(a, b):
-        return 1.0
-    try:
-        return float(stats.wilcoxon(a, b).pvalue)
-    except ValueError:
-        return np.nan
-
-
-def p_text(p_value: float) -> str:
-    if not np.isfinite(p_value):
-        return "p=n/a"
-    return "p<1e-4" if p_value < 1e-4 else f"p={p_value:.2g}"
-
-
 # ---------------------------------------------------------------------------
-# 1. Run every stored model of the full model on its held-out subject
+# Run every stored model on its held-out subject
 # ---------------------------------------------------------------------------
 
-def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, args):
+def checkpoints_of(backbone, root: Path, subject: str) -> Optional[List[Path]]:
+    """The 3 member checkpoints of a subject, or None if not all are stored."""
+    tag = backbone.safe_tag(subject)
+    paths = [root / "Members" / f"m{member}" / "Models" / f"{tag}_best.pth" for member in range(MEMBERS)]
+    complete = all(
+        backbone.member_paths(root, subject, member)[0].exists() and paths[member].exists()
+        for member in range(MEMBERS)
+    )
+    return paths if complete else None
+
+
+def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, args) -> dict:
     configs = backbone.DATASET_CONFIGS
     spec = next(s for s in backbone.WINDOW_SPECS if s.name == WINDOW)
     fs = float(backbone.TARGET_FS)
     max_lag = int(round(ACF_MAX_LAG_SEC * fs))
     min_length = int(round(ACF_MIN_RUN_SEC * fs))
+    stem_rows: List[dict] = []
+    stem_skipped: List[dict] = []
     member_rows: List[dict] = []
     channel_rows: List[dict] = []
     coverage_rows: List[dict] = []
@@ -267,10 +392,15 @@ def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, a
     frequencies = None
     for dataset_key in dataset_keys:
         label = configs[dataset_key]["label"]
-        root = backbone.condition_root(results_root, VARIANT, spec, dataset_key)
-        if not (root / "Members").exists():
-            print(f"{label}: no {VARIANT} results under {root}, skipped")
+        root_o = backbone.condition_root(results_root, ENCODER_VARIANT, spec, dataset_key)
+        root_x = backbone.condition_root(results_root, STEM_X_VARIANT, spec, dataset_key)
+        has_o = (root_o / "Members").exists()
+        has_x = (root_x / "Members").exists()
+        if not has_o:
+            print(f"{label}: no {ENCODER_VARIANT} results under {root_o}, skipped")
             continue
+        if not has_x:
+            print(f"{label}: no {STEM_X_VARIANT} results under {root_x}; stem fusion O vs X skipped")
         try:
             subject_data = backbone.load_dataset(dataset_key, spec)
         except Exception as exc:
@@ -279,17 +409,18 @@ def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, a
         subjects = sorted(subject_data)
         if args.subjects:
             subjects = [s for s in subjects if s in set(args.subjects)]
-        model = backbone.VARIANTS[VARIANT].options.build().to(device)
-        analysed, left_out = [], []
+        model_o = backbone.VARIANTS[ENCODER_VARIANT].options.build().to(device)
+        model_x = backbone.VARIANTS[STEM_X_VARIANT].options.build().to(device) if has_x else None
+        analysed, left_out, paired = [], [], 0
         for subject in subjects:
-            tag = backbone.safe_tag(subject)
-            checkpoints = [
-                root / "Members" / f"m{member}" / "Models" / f"{tag}_best.pth" for member in range(MEMBERS)
-            ]
-            if not all(
-                backbone.member_paths(root, subject, member)[0].exists() and checkpoints[member].exists()
-                for member in range(MEMBERS)
-            ):
+            checkpoints_o = checkpoints_of(backbone, root_o, subject)
+            checkpoints_x = checkpoints_of(backbone, root_x, subject) if has_x else None
+            if has_x:
+                for name, found in (("Stem Fusion O", checkpoints_o), ("Stem Fusion X", checkpoints_x)):
+                    if found is None:
+                        stem_skipped.append({"Model_Type": name, "Window_Config": WINDOW, "Dataset": label,
+                                             "Subject": subject, "Reason": "not all members stored"})
+            if checkpoints_o is None:
                 left_out.append(subject)
                 continue
             loader = backbone.make_eval_loader(
@@ -297,9 +428,13 @@ def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, a
             )
             metadata = backbone.test_metadata(subject_data, subject)
             store = curves.setdefault((label, subject), {})
-            for member, checkpoint in enumerate(checkpoints):
-                model.load_state_dict(torch.load(checkpoint, map_location=device))
-                stages, target = stage_features(model, loader, device)
+            for member, checkpoint in enumerate(checkpoints_o):
+                model_o.load_state_dict(torch.load(checkpoint, map_location=device))
+                stages, target = stage_features(model_o, loader, device)
+                # Stem Fusion O: the encoder input of the full model (= stage Stem).
+                if checkpoints_x is not None:
+                    stem_rows.append(stem_row(backbone, stages[0], "Stem Fusion O", STEM_O_VARIANT,
+                                              label, subject, member))
                 runs = contiguous_runs(metadata, target.shape[1])
                 frequencies, target_psd = mean_psd(target, fs)
                 target_acf = mean_acf(target, runs, max_lag, min_length)
@@ -330,6 +465,14 @@ def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, a
                     row[f"{stage}_RespBand_Ratio"] = band_ratio(frequencies, psd)
                     row[f"{stage}_ACF_r"] = acf_similarity(acf, target_acf, fs)
                 member_rows.append(row)
+            # Stem Fusion X: the 24 concatenated branch channels of no_stem_fusion.
+            if checkpoints_x is not None:
+                for member, checkpoint in enumerate(checkpoints_x):
+                    model_x.load_state_dict(torch.load(checkpoint, map_location=device))
+                    features = encoder_input_features(model_x, loader, device)
+                    stem_rows.append(stem_row(backbone, features, "Stem Fusion X", STEM_X_VARIANT,
+                                              label, subject, member))
+                paired += 1
             analysed.append(subject)
             del loader
         coverage_rows.append({
@@ -338,17 +481,151 @@ def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, a
             "N_Subjects_Analysed": len(analysed),
             "N_Subjects_Left_Out": len(left_out),
             "Left_Out_Subjects": " ".join(left_out),
+            "N_Subjects_Stem_Fusion_OX": paired,
         })
-        print(f"{label}: {len(analysed)} of {len(subjects)} subjects analysed"
-              + (f" (models not all stored: {' '.join(left_out)})" if left_out else ""))
-        del subject_data, model
+        print(f"{label}: encoder blocks {len(analysed)} of {len(subjects)} subjects"
+              + (f" (models not all stored: {' '.join(left_out)})" if left_out else "")
+              + (f"; stem fusion O vs X {paired} subjects" if has_x else ""))
+        del subject_data, model_o, model_x
         backbone.release_memory(device)
-    return (pd.DataFrame(member_rows), pd.DataFrame(channel_rows), pd.DataFrame(coverage_rows),
-            curves, frequencies)
+    return {
+        "stem": pd.DataFrame(stem_rows),
+        "stem_skipped": pd.DataFrame(stem_skipped,
+                                     columns=["Model_Type", "Window_Config", "Dataset", "Subject", "Reason"]),
+        "members": pd.DataFrame(member_rows),
+        "channels": pd.DataFrame(channel_rows),
+        "coverage": pd.DataFrame(coverage_rows),
+        "curves": curves,
+        "frequencies": frequencies,
+    }
 
 
 # ---------------------------------------------------------------------------
-# 2. Statistics over the subjects of one group (a dataset or all datasets)
+# 1. Stem fusion O vs X: statistics, tables and box plots
+# ---------------------------------------------------------------------------
+
+def draw_box(axis, values_x: np.ndarray, values_o: np.ndarray, label: str, p_value: float) -> None:
+    """Stem Fusion X vs O box plot with the significance bracket."""
+    boxes = axis.boxplot(
+        [values_x, values_o],
+        widths=0.55,
+        patch_artist=True,
+        showfliers=False,
+        medianprops={"color": "#ff7f0e", "linewidth": 1.5},
+        whiskerprops={"color": "#222222"},
+        capprops={"color": "#222222"},
+    )
+    for patch, (_, color) in zip(boxes["boxes"], MODEL_TYPES):
+        patch.set_facecolor(color)
+        patch.set_edgecolor("#333333")
+    axis.set_xticks([1, 2])
+    axis.set_xticklabels([name for name, _ in MODEL_TYPES], fontweight="bold")
+    axis.set_ylabel(label)
+    axis.yaxis.grid(True, color="#e6e6e6")
+    axis.set_axisbelow(True)
+    top = max(float(np.max(line.get_ydata())) for line in boxes["caps"])
+    bottom = min(float(np.min(line.get_ydata())) for line in boxes["caps"])
+    span = max(top - bottom, 1e-6)
+    level, tick = top + 0.08 * span, 0.03 * span
+    axis.plot([1, 1, 2, 2], [level - tick, level, level, level - tick], color="#111111", linewidth=1.5)
+    axis.text(1.5, level + 0.01 * span, significance_stars(p_value), ha="center", va="bottom",
+              fontsize=14, fontweight="bold")
+    axis.set_ylim(bottom - 0.08 * span, level + 0.18 * span)
+
+
+def stem_fusion_outputs(backbone, members: pd.DataFrame, skipped: pd.DataFrame, datasets: List[str],
+                        out_root: Path) -> None:
+    figure_root = out_root / "Figures"
+    figure_root.mkdir(parents=True, exist_ok=True)
+    skipped.to_csv(out_root / "stem_fusion_ox_skipped.csv", index=False, encoding="utf-8-sig")
+    if members.empty:
+        print("Stem fusion O vs X: no subject with the models of both types stored.")
+        return
+    metric_columns = [metric for metric, _, _ in STEM_METRICS] + ["Undefined_Pair_Share"]
+    keys = ["Window_Config", "Dataset", "Subject"]
+    per_type = members.groupby(["Model_Type"] + keys, sort=False)[metric_columns].mean().reset_index()
+    wide = per_type.pivot_table(index=keys, columns="Model_Type", values=metric_columns, sort=False)
+    wide.columns = [f"{metric}_{name.replace('Stem Fusion ', '')}" for metric, name in wide.columns]
+    # Subjects analysed with both model types.
+    subjects_table = wide.dropna(subset=["EffectiveRank_O", "EffectiveRank_X"]).reset_index()
+
+    groups = [(d, subjects_table[subjects_table["Dataset"] == d]) for d in datasets]
+    groups = [(d, f) for d, f in groups if not f.empty] + [(ALL_DATASETS, subjects_table)]
+    test_rows = []
+    for metric, axis_label, drawn in STEM_METRICS:
+        overview = []
+        for dataset, frame in groups:
+            o = frame[f"{metric}_O"].to_numpy(float)
+            x = frame[f"{metric}_X"].to_numpy(float)
+            keep = np.isfinite(o) & np.isfinite(x)
+            o, x = o[keep], x[keep]
+            p_value = wilcoxon_p(o, x)
+            test_rows.append({
+                "Window_Config": WINDOW, "Dataset": dataset, "Metric": metric, "N_Subjects": int(len(o)),
+                "O_Mean": float(np.mean(o)), "O_SD": float(np.std(o, ddof=1)) if len(o) > 1 else np.nan,
+                "X_Mean": float(np.mean(x)), "X_SD": float(np.std(x, ddof=1)) if len(x) > 1 else np.nan,
+                "O_Median": float(np.median(o)), "O_Q1": float(np.percentile(o, 25)),
+                "O_Q3": float(np.percentile(o, 75)),
+                "X_Median": float(np.median(x)), "X_Q1": float(np.percentile(x, 25)),
+                "X_Q3": float(np.percentile(x, 75)),
+                "Diff_O_minus_X_Mean": float(np.mean(o - x)),
+                "N_Subjects_O_Higher": int(np.sum(o > x)), "N_Subjects_O_Lower": int(np.sum(o < x)),
+                "Wilcoxon_p": p_value, "Significance": significance_stars(p_value),
+            })
+            overview.append((dataset, x, o, p_value))
+            if drawn and len(o) >= 2:
+                fig, axis = plt.subplots(figsize=(6.2, 4.0))
+                draw_box(axis, x, o, axis_label, p_value)
+                axis.set_title(f"{dataset}, {WINDOW_TAG}: n = {len(o)} subjects "
+                               f"(mean of {MEMBERS} models), Wilcoxon p = {p_value:.2g}", fontsize=9)
+                fig.tight_layout()
+                fig.savefig(figure_root / f"{dataset.replace(' ', '_')}_{WINDOW_TAG}_{metric}.png", dpi=150)
+                plt.close(fig)
+        if drawn and overview:
+            fig, axes = plt.subplots(1, len(overview), figsize=(4.2 * len(overview), 4.0), squeeze=False)
+            for axis, (dataset, x, o, p_value) in zip(axes[0], overview):
+                if len(o) >= 2:
+                    draw_box(axis, x, o, axis_label, p_value)
+                axis.set_title(f"{dataset} (n = {len(o)})", fontsize=10)
+            fig.suptitle(f"{WINDOW_TAG}: {axis_label}", fontsize=11)
+            fig.tight_layout()
+            fig.savefig(figure_root / f"overview_{WINDOW_TAG}_{metric}.png", dpi=150)
+            plt.close(fig)
+    tests = pd.DataFrame(test_rows)
+
+    # Tables as in the slides: mean +- SD, O starred when p < 0.05.
+    tables = {}
+    for metric, _, _ in STEM_METRICS:
+        rows = tests[tests["Metric"] == metric]
+        table_rows = []
+        for name, prefix in (("Stem Fusion O", "O"), ("Stem Fusion X", "X")):
+            for _, row in rows.iterrows():
+                star = "*" if prefix == "O" and np.isfinite(row["Wilcoxon_p"]) and row["Wilcoxon_p"] < 0.05 else ""
+                table_rows.append({
+                    "Window_Config": WINDOW, "Model_Type": name, "Dataset": row["Dataset"],
+                    metric: f"{row[f'{prefix}_Mean']:.3f} ± {row[f'{prefix}_SD']:.3f}{star}",
+                    "Wilcoxon_p": row["Wilcoxon_p"], "N_Subjects": row["N_Subjects"],
+                })
+        tables[metric] = pd.DataFrame(table_rows)
+        tables[metric].to_csv(out_root / f"stem_fusion_ox_table_{metric}.csv", index=False, encoding="utf-8-sig")
+    members.to_csv(out_root / "stem_fusion_ox_members.csv", index=False, encoding="utf-8-sig")
+    subjects_table.to_csv(out_root / "stem_fusion_ox_subjects.csv", index=False, encoding="utf-8-sig")
+    tests.to_csv(out_root / "stem_fusion_ox_tests.csv", index=False, encoding="utf-8-sig")
+    sheets = {"Tests": tests, "Subjects": subjects_table, "Members": members, "Skipped": skipped}
+    sheets.update({f"Table_{metric}"[:31]: frame for metric, frame in tables.items()})
+    backbone.write_results_excel(out_root / "stem_fusion_ox.xlsx", sheets)
+
+    print("\n1. Stem Fusion O vs X (per subject, mean of the models; mean +- SD; Wilcoxon signed-rank):")
+    for _, row in tests.iterrows():
+        print(f"  {row['Dataset']:<13s} {row['Metric']:<25s} "
+              f"O {row['O_Mean']:.3f} +- {row['O_SD']:.3f}  X {row['X_Mean']:.3f} +- {row['X_SD']:.3f}  "
+              f"O higher {row['N_Subjects_O_Higher']}/{row['N_Subjects']}  p={row['Wilcoxon_p']:.2g} "
+              f"{row['Significance']}")
+    print(f"Saved under: {out_root}")
+
+
+# ---------------------------------------------------------------------------
+# 2. Residual encoder blocks: statistics over the subjects of one group
 # ---------------------------------------------------------------------------
 
 def group_statistics(frame: pd.DataFrame, channel_subject: pd.DataFrame, dataset: str,
@@ -419,10 +696,6 @@ def group_curves(frame: pd.DataFrame, curves: dict) -> Tuple[Dict[str, np.ndarra
     return ({name: mean_curve(f"{name}_PSD") for name in names},
             {name: mean_curve(f"{name}_ACF") for name in names})
 
-
-# ---------------------------------------------------------------------------
-# 3. Figures
-# ---------------------------------------------------------------------------
 
 def figure_channel_heatmap(path: Path, stats_: dict, labels: List[str], title: str) -> None:
     delta, better = stats_["delta"], stats_["better"]
@@ -577,43 +850,18 @@ def figure_pc1_acf_summary(path: Path, acf_rows: List[dict], labels: List[str], 
     plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def main(args: argparse.Namespace) -> None:
-    backbone = load_backbone(Path(args.backbone).resolve())
-    configs = backbone.DATASET_CONFIGS
-    if args.capnobase_path:
-        configs["capnobase"]["data_path"] = str(args.capnobase_path)
-    if args.bidmc_path:
-        configs["bidmc"]["data_path"] = str(args.bidmc_path)
-    if args.steam2_ppg_dir:
-        configs["steam2"]["ppg_dir"] = str(args.steam2_ppg_dir)
-    if args.steam2_rsp_dir:
-        configs["steam2"]["rsp_dir"] = str(args.steam2_rsp_dir)
-    if args.threads:
-        torch.set_num_threads(int(args.threads))
-    results_root = Path(args.results_root or backbone.DEFAULT_RESULTS_ROOT).resolve()
-    out_root = results_root / OUTPUT_FOLDER / ANALYSIS_FOLDER
+def encoder_outputs(backbone, collected: dict, datasets: List[str], out_root: Path) -> None:
+    members, channels = collected["members"], collected["channels"]
+    curves, frequencies = collected["curves"], collected["frequencies"]
     figure_root = out_root / "Figures"
     figure_root.mkdir(parents=True, exist_ok=True)
-    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() and not args.force_cpu else "cpu")
     fs = float(backbone.TARGET_FS)
     labels = stage_labels(backbone)
-    dataset_keys = [key for key in backbone.DATASET_ORDER if key in args.datasets]
-    print(f"Results: {results_root}\nModel: {VARIANT}, {WINDOW}, {MEMBERS} members; device: {device}")
-
-    members, channels, coverage, curves, frequencies = collect(backbone, results_root, dataset_keys, device, args)
-    if members.empty:
-        print("No subject with all members stored.")
-        return
     keys = ["Window_Config", "Dataset", "Subject"]
     value_columns = [c for c in members.columns if c not in keys + ["Member", "N_Windows"]]
     subjects_table = members.groupby(keys, sort=False)[value_columns].mean().reset_index()
     channel_subject = channels.groupby(keys + ["Stage", "Channel"], sort=False)["Abs_r"].mean().reset_index()
 
-    datasets = [configs[key]["label"] for key in dataset_keys]
     groups = [(d, subjects_table[subjects_table["Dataset"] == d]) for d in datasets]
     groups = [(d, f) for d, f in groups if not f.empty] + [(ALL_DATASETS, subjects_table)]
     lags = np.arange(int(round(ACF_MAX_LAG_SEC * fs)) + 1) / fs
@@ -642,6 +890,7 @@ def main(args: argparse.Namespace) -> None:
     corr = pd.DataFrame(corr_rows)
     psd = pd.DataFrame(psd_rows)
     acf = pd.DataFrame(acf_rows)
+    coverage = collected["coverage"]
     corr.to_csv(out_root / "encoder_channel_corr_tests.csv", index=False, encoding="utf-8-sig")
     psd.to_csv(out_root / "encoder_psd_tests.csv", index=False, encoding="utf-8-sig")
     acf.to_csv(out_root / "encoder_acf_tests.csv", index=False, encoding="utf-8-sig")
@@ -656,13 +905,13 @@ def main(args: argparse.Namespace) -> None:
          "Members": members, "Coverage": coverage},
     )
 
-    print("\nChannel |r| with the target (mean over subjects; vs Stem, Wilcoxon over subjects):")
+    print("\n2. Channel |r| with the target (mean over subjects; vs Stem, Wilcoxon over subjects):")
     for _, r in corr.iterrows():
         extra = "" if r["Stage"] == "Stem" else (
             f"  delta {r['Mean_Delta_Abs_r']:+.3f}, better {r['Better_Channels_of_24']:.1f}/24, "
             f"{p_text(r['Wilcoxon_p_vs_Stem'])}")
         print(f"  {r['Dataset']:<13s} {r['Stage']:<10s} mean |r| {r['PCC_Mean_Abs_r']:.3f}{extra}")
-    print("\nPC1 respiratory-band power ratio (0.1-0.5 Hz) and ACF similarity to the target (2-10 s):")
+    print("\n   PC1 respiratory-band power ratio (0.1-0.5 Hz) and ACF similarity to the target (2-10 s):")
     for (_, p), (_, a) in zip(psd.iterrows(), acf.iterrows()):
         stem = p["Stage"] == "Stem"
         print(f"  {p['Dataset']:<13s} {p['Stage']:<10s} ratio {p['RespBand_Ratio_Mean']:.3f} "
@@ -670,7 +919,40 @@ def main(args: argparse.Namespace) -> None:
               f"  ACF r {a['ACF_r_Mean']:.3f}"
               + ("" if stem else f" (vs Stem {p_text(a['Wilcoxon_p_vs_Stem'])}, "
                                  f"vs previous {p_text(a['Wilcoxon_p_vs_Previous'])})"))
-    print(f"\nSaved under: {out_root}")
+    print(f"Saved under: {out_root}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main(args: argparse.Namespace) -> None:
+    backbone = load_backbone(Path(args.backbone).resolve())
+    configs = backbone.DATASET_CONFIGS
+    if args.capnobase_path:
+        configs["capnobase"]["data_path"] = str(args.capnobase_path)
+    if args.bidmc_path:
+        configs["bidmc"]["data_path"] = str(args.bidmc_path)
+    if args.steam2_ppg_dir:
+        configs["steam2"]["ppg_dir"] = str(args.steam2_ppg_dir)
+    if args.steam2_rsp_dir:
+        configs["steam2"]["rsp_dir"] = str(args.steam2_rsp_dir)
+    if args.threads:
+        torch.set_num_threads(int(args.threads))
+    results_root = Path(args.results_root or backbone.DEFAULT_RESULTS_ROOT).resolve()
+    out_root = results_root / OUTPUT_FOLDER
+    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() and not args.force_cpu else "cpu")
+    dataset_keys = [key for key in backbone.DATASET_ORDER if key in args.datasets]
+    datasets = [configs[key]["label"] for key in dataset_keys]
+    print(f"Results: {results_root}\n{WINDOW}, {MEMBERS} members per subject; "
+          f"stem fusion O = {STEM_O_VARIANT}, X = {STEM_X_VARIANT}; encoder: {ENCODER_VARIANT}; device: {device}")
+
+    collected = collect(backbone, results_root, dataset_keys, device, args)
+    if collected["members"].empty:
+        print("No subject with all members of the full model stored.")
+        return
+    stem_fusion_outputs(backbone, collected["stem"], collected["stem_skipped"], datasets, out_root / STEM_FOLDER)
+    encoder_outputs(backbone, collected, datasets, out_root / ENCODER_FOLDER)
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
