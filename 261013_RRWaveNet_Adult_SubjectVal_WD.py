@@ -33,6 +33,16 @@ Differences from 261007_RRWaveNet_Ensemble_NoEvent (nothing else changes):
 * only the full model (stem fusion), only 10 s windows, only BIDMC and
   STEAM2 (CapnoBase keeps its 261007 results);
 * STEAM2 reading and target polarity (see "STEAM2 data" below);
+* sliding-window inference on the held-out subject: besides the stored
+  10 s windows (stride 10 s), the windows halfway between two adjacent ones
+  are predicted (stride 5 s) and the outputs are combined with Hann weights,
+  so every sample is taken mostly from windows in which it lies near the
+  centre. The receptive field of the network (about 9 s) is nearly the window
+  length, so outputs near a window edge are computed partly from zero
+  padding; sliding-window inference with centre weighting is the usual way
+  to avoid this (e.g. nnU-Net). Training is unchanged; the extra windows lie
+  inside two windows that passed the quality rules. The summary also scores
+  the final ensemble the 261007 way (stored windows, plain mean);
 * every mean in the summary comes with its SD (ddof=1).
 The network is exactly the 261007 full model (same layers, shapes, 9,377
 parameters and the same initial weights for a seed). The input, loss,
@@ -94,6 +104,9 @@ patience 25; v16 jitter of training windows. Every member's learning curve
 
 Evaluation (Davies & Mandic 2022 style; no subject is excluded)
 -----------------------------------------------------------------
+Results are per subject: all sessions of a subject (STEAM2) form one LOSOCV
+fold, minutes are scored inside each session (never across sessions), and
+the subject MAE pools the subject's minutes over its sessions.
 As in 261007: every complete 60 s minute with a valid reference of the
 held-out subject; rate = largest FFT peak of the predicted waveform (6-30
 breaths/min); FFT metrics (MAE +- SD, RMSE, bias +- SD, LoA, Pearson r,
@@ -105,7 +118,8 @@ Summary
 * fft_davies_overall.csv / fft_davies_overall_mean_sd.csv: the final
   model (ensemble of 3), its single models, and member m0 of every weight
   decay candidate (single models);
-* ablation_comparison.csv: final ensemble vs its single models (paired
+* ablation_comparison.csv: final ensemble vs its single models, and
+  sliding-window vs stored-window inference of the final ensemble (paired
   Wilcoxon on the subject MAE and the minute AE);
 * reference_comparison.csv: final ensemble vs the 261007 full ensemble
   (temporal validation, weight decay 5e-5) on the same subjects, when the
@@ -278,6 +292,14 @@ SELECTION_MEMBER = 0
 LOSS_WEIGHTS = (0.45, 0.45, 0.10)
 # Share of the training subjects held out whole as validation subjects.
 VAL_SUBJECT_RATIO = 0.20
+# Inference on the held-out subject (sliding window): the stored 10 s windows
+# (stride 10 s) and the windows halfway between two adjacent ones are
+# predicted (stride 5 s); the outputs are combined with Hann weights, so that
+# every sample is taken mostly from the windows in which it lies near the
+# centre. The network's receptive field (about 9 s) is nearly as long as the
+# window, so outputs near a window edge are computed partly from zero padding.
+TEST_EXTRA_OFFSET_FRACTION = 0.5
+INFERENCE_PROTOCOL = "sliding_50pct_hann"
 
 
 # Breath detection and reference quality (RRest / Charlton et al. 2016).
@@ -2755,6 +2777,81 @@ class SubjectWindowDataset(Dataset):
         )
 
 
+class ArrayWindowDataset(Dataset):
+    """Given windows (inputs and targets) in the format of SubjectWindowDataset
+    (test split: no jitter), used for the extra windows of sliding inference."""
+
+    def __init__(self, inputs: Sequence[np.ndarray], targets: Sequence[np.ndarray]):
+        self.inputs = list(inputs)
+        self.targets = list(targets)
+
+    def __len__(self) -> int:
+        return len(self.inputs)
+
+    def __getitem__(self, index: int):
+        x = instance_minmax_normalize(np.asarray(self.inputs[index], dtype=np.float32)[None, :], (0.0, 1.0))
+        y = instance_minmax_normalize(np.asarray(self.targets[index], dtype=np.float32)[None, :], (-1.0, 1.0))[0]
+        return (
+            torch.from_numpy(np.asarray(x, dtype=np.float32).copy()),
+            torch.from_numpy(np.asarray(y, dtype=np.float32).copy()).unsqueeze(0),
+            torch.zeros(1, len(y), dtype=torch.float32),
+            torch.tensor(0.0, dtype=torch.float32),
+        )
+
+
+def shifted_test_windows(
+    record: dict, metadata: Sequence[dict], window_len: int
+) -> Tuple[List[np.ndarray], List[np.ndarray], List[dict]]:
+    """Windows halfway between two adjacent stored test windows of a segment.
+
+    Each lies inside two windows that passed the quality rules, so it needs no
+    rule of its own; inputs and targets are cut from the same segment signals
+    as the stored windows.
+    """
+    offset = int(round(window_len * TEST_EXTRA_OFFSET_FRACTION))
+    inputs, targets, extra = [], [], []
+    for first, second in zip(metadata[:-1], metadata[1:]):
+        if first["segment_id"] != second["segment_id"] or second["start"] != first["start"] + window_len:
+            continue
+        reference = record["references"][int(first["segment_id"])]
+        start = int(first["start"]) + offset
+        x = np.asarray(reference["model_input"][start:start + window_len], dtype=np.float32)
+        y = np.asarray(reference["target_signal"][start:start + window_len], dtype=np.float32)
+        if x.size == window_len and y.size == window_len:
+            inputs.append(x)
+            targets.append(y)
+            extra.append({"segment_id": int(first["segment_id"]), "start": start})
+    return inputs, targets, extra
+
+
+def dense_predictions(
+    model: "DeepOnlyV16Decoder",
+    outputs: Dict[str, np.ndarray],
+    metadata: Sequence[dict],
+    record: dict,
+    batch_size: int,
+    device: torch.device,
+) -> Tuple[np.ndarray, List[dict]]:
+    """Predictions of the stored test windows and of the windows halfway
+    between them, ordered by segment and start (sliding-window inference)."""
+    window_len = int(outputs["predictions"].shape[1]) if outputs["predictions"].size else 0
+    predictions = list(outputs["predictions"])
+    dense_meta = [{"segment_id": int(m["segment_id"]), "start": int(m["start"])} for m in metadata]
+    if window_len:
+        inputs, targets, extra = shifted_test_windows(record, metadata, window_len)
+        if extra:
+            loader = make_eval_loader(ArrayWindowDataset(inputs, targets), batch_size, device)
+            predictions += list(predict_with_diagnostics(model, loader, device)["predictions"])
+            dense_meta += extra
+    order = sorted(range(len(dense_meta)), key=lambda i: (dense_meta[i]["segment_id"], dense_meta[i]["start"]))
+    stacked = (
+        np.stack([predictions[i] for i in order]).astype(np.float32)
+        if predictions
+        else np.empty((0, 0), dtype=np.float32)
+    )
+    return stacked, [dense_meta[i] for i in order]
+
+
 def make_train_loader(
     dataset: SubjectWindowDataset,
     batch_size: int,
@@ -3478,6 +3575,11 @@ def train_one(
     model.load_state_dict(torch.load(checkpoint, map_location=device))
     outputs = predict_with_diagnostics(model, test_loader, device)
     features = outputs.pop("features")
+    dense, dense_meta = dense_predictions(
+        model, outputs, metadata, subject_data[test_subject], batch_size, device
+    )
+    outputs["dense_predictions"] = dense
+    outputs["dense_metadata"] = dense_meta
     best_row = history_frame.loc[history_frame["Epoch"] == audit["Best_Epoch"]].iloc[0]
     diagnostics = {
         "N_Params": count_parameters(model),
@@ -3506,6 +3608,10 @@ def train_one(
         "input_stride_sec": np.asarray(spec.stride_sec, dtype=np.float32),
         "model_key": np.asarray(model_options.key),
         "seed": np.asarray(seed, dtype=np.int64),
+        "dense_predictions": dense,
+        "dense_segment_ids": np.asarray([m["segment_id"] for m in dense_meta], dtype=np.int64),
+        "dense_window_starts": np.asarray([m["start"] for m in dense_meta], dtype=np.int64),
+        "inference": np.asarray(INFERENCE_PROTOCOL),
     }
     if save_features:
         arrays["feature_representation"] = features.astype(np.float32)
@@ -3580,6 +3686,37 @@ def reconstruct_segment(
     return pred_out, true_out, valid
 
 
+def reconstruct_weighted(
+    predictions: np.ndarray,
+    metadata: Sequence[dict],
+    segment_id: int,
+    length: int,
+) -> np.ndarray:
+    """Sliding-window combination of one segment: weighted mean of the window
+    outputs with a Hann taper (plus a small floor, so that a sample covered by
+    one window only keeps that window's value)."""
+    out = np.full(length, np.nan, dtype=np.float64)
+    if len(predictions) == 0:
+        return out
+    window_len = int(predictions.shape[1])
+    taper = np.hanning(window_len) + 1e-3
+    total = np.zeros(length, dtype=np.float64)
+    weight = np.zeros(length, dtype=np.float64)
+    for index, item in enumerate(metadata):
+        if int(item["segment_id"]) != int(segment_id):
+            continue
+        start = int(item["start"])
+        end = min(start + window_len, length)
+        if end <= start:
+            continue
+        values, _ = sanitize_signal(np.asarray(predictions[index], dtype=np.float64))
+        total[start:end] += taper[: end - start] * values[: end - start]
+        weight[start:end] += taper[: end - start]
+    covered = weight > 0
+    out[covered] = total[covered] / weight[covered]
+    return out
+
+
 def contiguous_runs(mask: np.ndarray) -> List[Tuple[int, int]]:
     mask = np.asarray(mask, dtype=bool)
     if not mask.any():
@@ -3648,7 +3785,10 @@ def evaluate_subject_minutes(
     """Score every complete 60 s minute of one held-out subject (waveform only).
 
     Minutes are non-overlapping 60 s slices of each contiguous run of
-    reconstructed windows (overlap-add mean of the window outputs). Per minute:
+    reconstructed windows. The predicted waveform is the sliding-window
+    combination of the dense windows (Hann-weighted) when the outputs hold
+    them, otherwise the overlap-add mean of the stored windows (261007); the
+    target is always the stored windows. Per minute:
 
     * reference: with expert labels (CapnoBase) the labels are the ground
       truth and a minute needs a valid reference, two labelled breaths and a
@@ -3673,6 +3813,12 @@ def evaluate_subject_minutes(
         pred_series, true_series, coverage = reconstruct_segment(
             predictions, targets, metadata, segment_id, fs
         )
+        if outputs.get("dense_metadata"):
+            # Sliding-window inference: the waveform comes from the dense
+            # windows (same coverage); the target from the stored windows.
+            pred_series = reconstruct_weighted(
+                outputs["dense_predictions"], outputs["dense_metadata"], segment_id, len(coverage)
+            )
         reference = references[segment_id]
         ref_signal = reference["signal"]
         ref_breaths = reference["breaths"]
@@ -4260,6 +4406,11 @@ def ensemble_paths(root: Path, subject: str) -> Tuple[Path, Path, Path]:
     )
 
 
+def ensemble_standard_path(root: Path, subject: str) -> Path:
+    """Minutes of the ensemble scored with the stored windows only (261007 inference)."""
+    return root / "Fold_Summaries" / f"{safe_tag(subject)}_ensemble_standard_RR60s_windows.csv"
+
+
 def read_json(path: Path) -> Optional[dict]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -4276,8 +4427,9 @@ def expected_profile(dataset_label: str) -> Optional[str]:
 
 def member_done(root: Path, variant: Variant, subject: str, member: int, epochs: int) -> bool:
     """A member is reused only when it was trained with the same model, epochs
-    and analysis profile (target handling) of its dataset; summaries written
-    before the profile was recorded count as adult_fixed_band."""
+    and analysis profile (target handling) of its dataset and stored the
+    sliding-window predictions; summaries written before the profile was
+    recorded count as adult_fixed_band."""
     summary_path, window_path, prediction_path = member_paths(root, subject, member)
     summary = read_json(summary_path)
     return bool(
@@ -4285,6 +4437,7 @@ def member_done(root: Path, variant: Variant, subject: str, member: int, epochs:
         and summary.get("Model") == variant.options.key
         and int(summary.get("Max_Epochs", -1)) == int(epochs)
         and summary.get("Analysis_Profile", "adult_fixed_band") == expected_profile(summary.get("Dataset", ""))
+        and summary.get("Inference") == INFERENCE_PROTOCOL
         and window_path.exists()
         and prediction_path.exists()
     )
@@ -4351,6 +4504,7 @@ def run_member(
             "Model": variant.options.key,
             "Model_Label": variant.options.label,
             "Analysis_Profile": DATASET_CONFIGS[dataset_key]["profile"],
+            "Inference": INFERENCE_PROTOCOL,
             "Max_Epochs": int(epochs),
             "Best_Val_Loss": audit["Best_Val_Loss"],
             "Best_Epoch": audit["Best_Epoch"],
@@ -4403,7 +4557,9 @@ def evaluate_ensemble(
     if (
         stored is not None
         and stored.get("Members") == members
+        and stored.get("Inference") == INFERENCE_PROTOCOL
         and window_path.exists()
+        and ensemble_standard_path(root, test_subject).exists()
         and summary_path.stat().st_mtime >= newest_member
     ):
         return stored
@@ -4414,20 +4570,36 @@ def evaluate_ensemble(
             and np.array_equal(other["window_starts"], arrays[0]["window_starts"])
         ):
             raise RuntimeError(f"{test_subject}: members scored different windows")
-    outputs = {
+        if not (
+            np.array_equal(other["dense_segment_ids"], arrays[0]["dense_segment_ids"])
+            and np.array_equal(other["dense_window_starts"], arrays[0]["dense_window_starts"])
+        ):
+            raise RuntimeError(f"{test_subject}: members scored different dense windows")
+    standard = {
         "predictions": np.mean([a["predictions"] for a in arrays], axis=0).astype(np.float32),
         "targets": arrays[0]["targets"],
     }
+    outputs = dict(standard)
+    outputs["dense_predictions"] = np.mean([a["dense_predictions"] for a in arrays], axis=0).astype(np.float32)
+    outputs["dense_metadata"] = [
+        {"segment_id": int(segment), "start": int(start)}
+        for segment, start in zip(arrays[0]["dense_segment_ids"], arrays[0]["dense_window_starts"])
+    ]
+    metadata = test_metadata(subject_data, test_subject)
     summary, window_frame = evaluate_subject_minutes(
-        outputs,
-        test_metadata(subject_data, test_subject),
-        subject_data[test_subject]["references"],
-        TARGET_FS,
+        outputs, metadata, subject_data[test_subject]["references"], TARGET_FS
+    )
+    _, standard_frame = evaluate_subject_minutes(
+        standard, metadata, subject_data[test_subject]["references"], TARGET_FS
     )
     prediction_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         prediction_path,
-        **outputs,
+        predictions=outputs["predictions"],
+        targets=outputs["targets"],
+        dense_predictions=outputs["dense_predictions"],
+        dense_segment_ids=arrays[0]["dense_segment_ids"],
+        dense_window_starts=arrays[0]["dense_window_starts"],
         segment_ids=arrays[0]["segment_ids"],
         window_starts=arrays[0]["window_starts"],
         seeds=np.asarray([int(a["seed"]) for a in arrays], dtype=np.int64),
@@ -4440,6 +4612,7 @@ def evaluate_ensemble(
             "Subject": str(test_subject),
             "Variant": variant.name,
             "Members": members,
+            "Inference": INFERENCE_PROTOCOL,
             "Seeds": [int(a["seed"]) for a in arrays],
             "Window_Config": spec.name,
             "Model": variant.options.key,
@@ -4447,11 +4620,12 @@ def evaluate_ensemble(
         }
     )
     summary.update(subject_data[test_subject]["reference_diagnostics"])
-    if not window_frame.empty:
-        window_frame.insert(0, "Variant", variant.name)
-        window_frame.insert(0, "Subject", str(test_subject))
-        window_frame.insert(0, "Dataset", dataset_label)
-    window_frame.to_csv(window_path, index=False, encoding="utf-8-sig")
+    for frame, path in ((window_frame, window_path), (standard_frame, ensemble_standard_path(root, test_subject))):
+        if not frame.empty:
+            frame.insert(0, "Variant", variant.name)
+            frame.insert(0, "Subject", str(test_subject))
+            frame.insert(0, "Dataset", dataset_label)
+        frame.to_csv(path, index=False, encoding="utf-8-sig")
     summary_path.write_text(
         json.dumps(summary, indent=2, default=_json_default),
         encoding="utf-8",
@@ -4717,7 +4891,7 @@ def summarize_results(
                 print(f"{dataset_label}: not summarized ({exc})")
                 continue
             subjects = selected_subjects(args, subject_data)
-            final_paths, member_paths_done, final_subjects = [], [], []
+            final_paths, standard_paths, member_paths_done, final_subjects = [], [], [], []
             curves: Dict[int, List[pd.DataFrame]] = {}
             for subject in subjects:
                 found = stored_selection(results_root, variants, spec, dataset_key, subject)
@@ -4748,6 +4922,7 @@ def summarize_results(
                     continue
                 evaluate_ensemble(args, results_root, chosen, spec, dataset_key, subject_data, subject)
                 final_paths.append(ensemble_paths(root, subject)[1])
+                standard_paths.append(ensemble_standard_path(root, subject))
                 final_subjects.append(subject)
                 for member in range(args.members):
                     summary_path, window_path, _ = member_paths(root, subject, member)
@@ -4769,12 +4944,16 @@ def summarize_results(
 
             rows: List[Tuple[str, str, pd.DataFrame]] = []
             final = scored_minutes(read_minutes(final_paths))
+            stored_windows = scored_minutes(read_minutes(standard_paths))
             members = scored_minutes(read_minutes(member_paths_done))
             if not final.empty:
                 final["Window_Config"] = spec.name
                 ensemble_frames.append(final)
-                rows.append((f"Final: subject-wise validation, selected weight decay (ensemble of {args.members})",
-                             "final", final))
+                rows.append((f"Final: subject-wise validation, selected weight decay, sliding-window inference "
+                             f"(ensemble of {args.members})", "final", final))
+            if not stored_windows.empty:
+                rows.append(("Final ensemble, 261007 inference (stored 10 s windows only, plain mean)",
+                             "final_stored_windows", stored_windows))
             if not members.empty:
                 members["Window_Config"] = spec.name
                 member_frames.append(members)
@@ -4812,6 +4991,11 @@ def summarize_results(
                     result = paired_comparison(final, members)
                     result.update({"Dataset": dataset_label, "Window_Config": spec.name,
                                    "Comparison": "Final ensemble vs its single models"})
+                    comparison_rows.append(result)
+                if not stored_windows.empty:
+                    result = paired_comparison(final, stored_windows)
+                    result.update({"Dataset": dataset_label, "Window_Config": spec.name,
+                                   "Comparison": "Sliding-window vs stored-window inference (final ensemble)"})
                     comparison_rows.append(result)
                 if not reference.empty:
                     result = paired_comparison(final, reference)
@@ -4894,13 +5078,14 @@ def summarize_results(
         for dataset, frame in selection_counts.groupby("Dataset", sort=False):
             print("  " + dataset + ": " + ", ".join(
                 f"{row['Selected_Weight_Decay']:g} in {row['N_Folds']} folds" for _, row in frame.iterrows()))
-    for title, table in (("Final ensemble vs its single models", comparison),
+    for title, table in (("Final ensemble vs its single models / stored-window inference", comparison),
                          ("Final ensemble vs 261007 full ensemble", reference_table)):
         if table.empty:
             continue
         print(f"\n{title} (per-subject MAE, mean ± SD; Wilcoxon):")
         for _, row in table.iterrows():
-            print(f"  {row['Dataset']:<8s} final {mean_sd_text(row['Subject_MAE_Final'], row['Subject_MAE_Final_SD'])}"
+            print(f"  {row['Dataset']:<8s} {row['Comparison']}: final "
+                  f"{mean_sd_text(row['Subject_MAE_Final'], row['Subject_MAE_Final_SD'])}"
                   f" vs {mean_sd_text(row['Subject_MAE_Other'], row['Subject_MAE_Other_SD'])}, diff (other - final) "
                   f"{mean_sd_text(row['Subject_MAE_Diff_Other_minus_Final'], row['Subject_MAE_Diff_SD'])}; final "
                   f"better in {row['N_Subjects_Final_Better']}/{row['N_Subjects_Paired']}, "
