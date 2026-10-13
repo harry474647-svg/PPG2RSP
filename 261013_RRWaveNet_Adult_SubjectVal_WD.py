@@ -32,9 +32,46 @@ Differences from 261007_RRWaveNet_Ensemble_NoEvent (nothing else changes):
   are trained with it. The ensemble is m0-m2 of the selected candidate;
 * only the full model (stem fusion), only 10 s windows, only BIDMC and
   STEAM2 (CapnoBase keeps its 261007 results);
+* STEAM2 reading and target polarity (see "STEAM2 data" below);
 * every mean in the summary comes with its SD (ddof=1).
-The model, input, target, loss, learning rate schedule, epochs, jitter,
-seeds of the members and the 60 s evaluation are those of 261007.
+The network is exactly the 261007 full model (same layers, shapes, 9,377
+parameters and the same initial weights for a seed). The input, loss,
+learning rate schedule, epochs, jitter, seeds of the members and the 60 s
+evaluation are those of 261007.
+
+STEAM2 data
+-----------
+Every STEAM2 session (one 2-back block, about 203 s) is an EEGLAB structure
+saved as .mat (EEG.data, EEG.srate = 200 Hz, EEG.chanlocs, EEG.event) with
+one channel: the PPG file and the RSP (belt) file of a session have the same
+name in the PPG and RSP folders (PPG\<subject>\<subject>_Session<k>.mat)
+and the same length. Reading:
+* the channel is taken by its label (PPG / RSP); a file whose label names
+  the other signal is rejected (swapped files), and the sampling rate is
+  EEG.srate of each file;
+* PPG and RSP files are paired by identical names only (a file without a
+  partner is reported and left out, never paired by position); the sessions
+  of a subject are ordered by their number and all stay in that subject, so
+  a person is never in the training and the test data of one fold. A flat
+  folder (<subject>_Session<k>.mat without subject folders) is grouped by the
+  subject part of the name;
+* EEGLAB "boundary" events inside a recording (removed data) split the
+  session into separate pieces, so no window or filter spans a gap; the
+  markers at the start (0.5, "New Segment" at 1) and the end are not gaps.
+Target polarity: STEAM2 uses the profile adult_belt_as_recorded, i.e. the
+belt reference keeps the polarity it was recorded with (one belt type for
+every subject) and is not shifted. 261007 used the v16 rule for both adult
+datasets: the sign of the zero-lag correlation between the PPG and the
+reference in 0.1-0.5 Hz. For the belt this correlation is near zero (the
+PPG respiratory modulation lies a variable fraction of a cycle off the chest
+movement; in the session checked, r = -0.05 at zero lag and |r| = 0.33 only
+at a lag of 3.7 s), so the rule flipped the target at random between
+sessions. BIDMC keeps the v16 rule (adult_fixed_band). Breath counts and the
+FFT rate do not depend on the polarity. --inspect-steam2 reads every session
+without training and writes steam2_loading_check.csv (labels, sampling
+rates, lengths, gaps, zero-lag correlation and the sign the v16 rule would
+have chosen). Models stored by an earlier version for STEAM2 (without the
+recorded profile) are not reused by --resume.
 
 Model (the 260928 layout; no identity channel, no gating, no added module)
 ---------------------------------------------------------------------------
@@ -95,6 +132,7 @@ Parallel workers (e.g. 2):       --resume --shard 0/2, --resume --shard 1/2
                                  --resume --summary-only
 Summary of stored results only:  --summary-only
 Check the data without training: --dry-run --no-require-cuda
+Check how STEAM2 is read:        --inspect-steam2 --no-require-cuda
 """
 
 import argparse
@@ -188,8 +226,10 @@ DATASET_CONFIGS = {
             r"\RSP\2back_raw_v2"
         ),
         "target_fs": 128,
-        "default_fs": 128,
-        "profile": "adult_fixed_band",
+        # EEGLAB sessions (EEG.data, EEG.srate = 200 Hz, one channel labelled
+        # PPG or RSP); default_fs is used only when a file has no srate.
+        "default_fs": 200,
+        "profile": "adult_belt_as_recorded",
     },
 }
 
@@ -298,6 +338,27 @@ ANALYSIS_PROFILES = {
         "ppg_spectral_beat_distance": False,
         "max_target_lag_sec": 0.0,  # no lag search: v16 zero-lag sign alignment
         "fixed_target_polarity": False,
+        "target_polarity": "zero_lag_sign",
+        "fft_subharmonic_check": False,
+        "resampler": "fft",
+    },
+    # STEAM2 belt: as adult_fixed_band, but the reference keeps the polarity it
+    # was recorded with (one belt type for every subject). The v16 zero-lag
+    # sign rule picks the sign from the correlation of the PPG and the belt in
+    # the respiratory band at zero lag, which is near zero for the belt (the
+    # PPG respiratory modulation is a variable fraction of a cycle off the
+    # chest movement), so it flips the target at random between sessions.
+    "adult_belt_as_recorded": {
+        "description": "v16 processing: fixed 0.1-0.5 Hz, reference polarity as recorded",
+        "band_hz": RESP_BAND_HZ,
+        "adaptive_upper": False,
+        "rr_band_bpm": RR_BAND_BPM,
+        "min_breath_interval_sec": 1.5,
+        "ppg_hr_range_bpm": (PPG_HR_MIN_BPM, PPG_HR_MAX_BPM),
+        "ppg_spectral_beat_distance": False,
+        "max_target_lag_sec": 0.0,  # no lag search
+        "fixed_target_polarity": True,
+        "target_polarity": "as_recorded",
         "fft_subharmonic_check": False,
         "resampler": "fft",
     },
@@ -1388,6 +1449,13 @@ def preprocess_segment(
         rsp_low = target_signal if not use_phase_target else (
             sign * shift_signal(rsp_low, lag)
         ).astype(np.float32)
+    elif profile.get("target_polarity") == "as_recorded":
+        # Polarity as recorded, no lag: the zero-lag correlation is kept only
+        # as a diagnostic.
+        sign = 1.0
+        target_signal = rsp_low
+        lag = 0
+        alignment_corr = safe_pcc(ppg_low, rsp_low)
     else:
         centered = (ppg_low - np.mean(ppg_low)) * (rsp_low - np.mean(rsp_low))
         sign = -1.0 if float(np.mean(centered)) < 0.0 else 1.0
@@ -2359,48 +2427,217 @@ def _match_mat_file_pairs(
     return list(zip(ppg_files, rsp_files))
 
 
+# STEAM2 sessions are EEGLAB structures saved as .mat files (EEG.data,
+# EEG.srate, EEG.chanlocs.labels, EEG.event), one channel per file: the
+# PPG file and the RSP (belt) file of a session have the same name in the
+# PPG and RSP folders and come from the same recording (same length).
+STEAM2_CHANNELS = {"PPG": ("PPG", "PLETH", "BVP"), "RSP": ("RSP", "RESP", "RESPIRATION", "BELT")}
+STEAM2_SESSION_PATTERN = re.compile(r"^(?P<subject>.+?)[_\- ]*session[_\- ]*(?P<session>\d+)$", re.IGNORECASE)
+
+
+def steam2_session_key(stem: str) -> Tuple[str, int]:
+    """(subject, session number) from a file stem such as 13_LSB_Session2."""
+    match = STEAM2_SESSION_PATTERN.match(stem)
+    if match is None:
+        return stem, 0
+    return match.group("subject"), int(match.group("session"))
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, np.ndarray):
+        return list(value.ravel()) if value.size else []
+    return [value]
+
+
+def read_eeglab_channel(path: Path, kind: str, default_fs: float) -> dict:
+    """One channel of an EEGLAB .mat file.
+
+    The channel is chosen by its label (STEAM2_CHANNELS[kind]); a file with
+    one channel is accepted when it has no label, and rejected when its label
+    names the other signal (swapped files). EEGLAB "boundary" events inside
+    the recording mark discontinuities (removed data); their positions are
+    returned so that the session is split there. Files without an EEG
+    structure fall back to the generic reader (data and srate fields).
+    """
+    mat = sio.loadmat(path, squeeze_me=True, struct_as_record=False)
+    names = [key for key in mat if not key.startswith("_")]
+    payload = mat["EEG"] if "EEG" in mat else (mat[names[0]] if names else None)
+    if payload is None or not hasattr(payload, "data"):
+        signal, fs = _extract_signal_and_fs(_first_mat_payload(sio.loadmat(path)), default_fs)
+        return {"signal": signal, "fs": fs, "boundaries": [], "label": "", "channels": 1}
+    data = np.asarray(payload.data, dtype=np.float64)
+    data = data.reshape(1, -1) if data.ndim == 1 else data
+    labels = [str(getattr(item, "labels", "")).strip() for item in _as_list(getattr(payload, "chanlocs", None))]
+    wanted = {name.upper() for name in STEAM2_CHANNELS[kind]}
+    other = {name.upper() for key, names in STEAM2_CHANNELS.items() if key != kind for name in names}
+    index = next((i for i, label in enumerate(labels) if label.upper() in wanted), None)
+    if index is None:
+        if data.shape[0] != 1:
+            raise RuntimeError(f"{path.name}: no {kind} channel among {labels}")
+        if labels and labels[0].upper() in other:
+            raise RuntimeError(f"{path.name}: channel '{labels[0]}' found where {kind} was expected")
+        index = 0
+    signal = data[index].astype(np.float32)
+    try:
+        fs = float(np.asarray(payload.srate).squeeze())
+    except Exception:
+        fs = float(default_fs)
+    boundaries = []
+    for event in _as_list(getattr(payload, "event", None)):
+        if str(getattr(event, "type", "")).strip().lower() != "boundary":
+            continue
+        try:
+            latency = float(getattr(event, "latency"))
+        except (TypeError, ValueError):
+            continue
+        # EEGLAB latencies are 1-based and a boundary at k.5 lies between
+        # samples k and k + 1: the next piece starts at 0-based index k. The
+        # markers at the start (0.5, "New Segment" at 1) and at the end are
+        # not discontinuities inside the data.
+        position = int(np.ceil(latency - 1.0))
+        if 0 < position < signal.size:
+            boundaries.append(position)
+    label = labels[index] if index < len(labels) else ""
+    return {"signal": signal, "fs": fs, "boundaries": sorted(set(boundaries)), "label": label,
+            "channels": int(data.shape[0])}
+
+
+def steam2_session_files(ppg_root: Path, rsp_root: Path) -> Dict[str, List[Tuple[str, Path, Path]]]:
+    """Subject -> [(session name, PPG file, RSP file)], sessions in order.
+
+    Subject folders (PPG\\<subject>\\<session>.mat and RSP\\<subject>\\...) are
+    used when present; otherwise the files of one flat folder are grouped by
+    the subject part of their name (<subject>_Session<k>.mat). Every session
+    of a person stays in one subject, so a person is never in the training
+    and the test data of the same fold.
+    """
+    sessions: Dict[str, List[Tuple[str, Path, Path]]] = {}
+    subject_dirs = sorted(path for path in ppg_root.iterdir() if path.is_dir())
+    if subject_dirs:
+        for subject_dir in subject_dirs:
+            rsp_dir = rsp_root / subject_dir.name
+            if not rsp_dir.is_dir():
+                print(f"[STEAM2 {subject_dir.name}] no RSP folder, skipped")
+                continue
+            # PPG and RSP files of a session have the same name; files without
+            # a partner are reported and left out (never paired by position).
+            rsp_files = {path.stem: path for path in rsp_dir.glob("*.mat")}
+            for ppg_path in sorted(subject_dir.glob("*.mat")):
+                if ppg_path.stem not in rsp_files:
+                    print(f"[STEAM2 {subject_dir.name}] {ppg_path.name}: no RSP file of the same name, left out")
+                    continue
+                sessions.setdefault(subject_dir.name, []).append(
+                    (ppg_path.stem, ppg_path, rsp_files[ppg_path.stem])
+                )
+            for stem in sorted(set(rsp_files) - {path.stem for path in subject_dir.glob("*.mat")}):
+                print(f"[STEAM2 {subject_dir.name}] {stem}.mat: no PPG file of the same name, left out")
+    else:
+        rsp_files = {path.stem: path for path in rsp_root.glob("*.mat")}
+        for ppg_path in sorted(ppg_root.glob("*.mat")):
+            if ppg_path.stem not in rsp_files:
+                print(f"[STEAM2 {ppg_path.name}] no RSP file of the same name, skipped")
+                continue
+            subject, _ = steam2_session_key(ppg_path.stem)
+            sessions.setdefault(subject, []).append((ppg_path.stem, ppg_path, rsp_files[ppg_path.stem]))
+    for subject in sessions:
+        sessions[subject].sort(key=lambda item: (steam2_session_key(item[0])[1], item[0]))
+    return sessions
+
+
+def steam2_session_pieces(ppg: dict, rsp: dict) -> Tuple[List[Tuple[np.ndarray, np.ndarray, float, float]], dict]:
+    """The (PPG, RSP, fs, fs) pieces of one session, split at the boundary
+    events of either file, and a description of the session."""
+    ppg_sec = ppg["signal"].size / ppg["fs"]
+    rsp_sec = rsp["signal"].size / rsp["fs"]
+    cuts = sorted({b / ppg["fs"] for b in ppg["boundaries"]} | {b / rsp["fs"] for b in rsp["boundaries"]})
+    edges = [0.0] + [cut for cut in cuts if 0.0 < cut < min(ppg_sec, rsp_sec)] + [min(ppg_sec, rsp_sec)]
+    pieces = []
+    for start, end in zip(edges[:-1], edges[1:]):
+        p = ppg["signal"][int(round(start * ppg["fs"])):int(round(end * ppg["fs"]))]
+        r = rsp["signal"][int(round(start * rsp["fs"])):int(round(end * rsp["fs"]))]
+        if p.size and r.size:
+            pieces.append((p, r, ppg["fs"], rsp["fs"]))
+    info = {
+        "PPG_Label": ppg["label"], "RSP_Label": rsp["label"],
+        "PPG_FS": ppg["fs"], "RSP_FS": rsp["fs"],
+        "PPG_Sec": ppg_sec, "RSP_Sec": rsp_sec, "Length_Difference_Sec": ppg_sec - rsp_sec,
+        "Internal_Boundaries": len(edges) - 2, "Pieces": len(pieces),
+        "Piece_Sec": " ".join(f"{end - start:.1f}" for start, end in zip(edges[:-1], edges[1:])),
+    }
+    return pieces, info
+
+
 def load_steam2_subjects(spec: WindowSpec) -> Dict[str, dict]:
     cfg = DATASET_CONFIGS["steam2"]
+    profile = ANALYSIS_PROFILES[cfg["profile"]]
     data = {}
-    ppg_root = Path(cfg["ppg_dir"])
-    rsp_root = Path(cfg["rsp_dir"])
-    for subject_dir in sorted(
-        path for path in ppg_root.iterdir() if path.is_dir()
-    ):
-        rsp_subject_dir = rsp_root / subject_dir.name
-        if not rsp_subject_dir.is_dir():
-            continue
-        pairs = []
+    sessions = steam2_session_files(Path(cfg["ppg_dir"]), Path(cfg["rsp_dir"]))
+    for subject, items in sessions.items():
         try:
-            for ppg_name, rsp_name in _match_mat_file_pairs(
-                subject_dir,
-                rsp_subject_dir,
-            ):
-                p_payload = _first_mat_payload(
-                    sio.loadmat(subject_dir / ppg_name)
-                )
-                r_payload = _first_mat_payload(
-                    sio.loadmat(rsp_subject_dir / rsp_name)
-                )
-                ppg, ppg_fs = _extract_signal_and_fs(
-                    p_payload,
-                    cfg["default_fs"],
-                )
-                rsp, rsp_fs = _extract_signal_and_fs(
-                    r_payload,
-                    cfg["default_fs"],
-                )
-                pairs.append((ppg, rsp, ppg_fs, rsp_fs))
-            result = preprocess_subject_from_pairs(
-                pairs,
-                spec,
-                ANALYSIS_PROFILES[cfg["profile"]],
-            )
+            pairs = []
+            for name, ppg_path, rsp_path in items:
+                ppg = read_eeglab_channel(ppg_path, "PPG", cfg["default_fs"])
+                rsp = read_eeglab_channel(rsp_path, "RSP", cfg["default_fs"])
+                pieces, info = steam2_session_pieces(ppg, rsp)
+                if abs(info["Length_Difference_Sec"]) > 1.0:
+                    print(f"[STEAM2 {subject} {name}] PPG {info['PPG_Sec']:.1f} s vs RSP "
+                          f"{info['RSP_Sec']:.1f} s; the common part is used")
+                pairs += pieces
+            result = preprocess_subject_from_pairs(pairs, spec, profile)
             if result is not None:
-                data[subject_dir.name] = result
+                data[subject] = result
         except Exception as exc:
-            print(f"[STEAM2 {subject_dir.name}] skipped: {exc}")
+            print(f"[STEAM2 {subject}] skipped: {exc}")
     return data
+
+
+def inspect_steam2(results_root: Path) -> pd.DataFrame:
+    """Read every STEAM2 session, print how it was loaded and save
+    steam2_loading_check.csv (no training)."""
+    cfg = DATASET_CONFIGS["steam2"]
+    rows = []
+    sessions = steam2_session_files(Path(cfg["ppg_dir"]), Path(cfg["rsp_dir"]))
+    for subject, items in sessions.items():
+        for name, ppg_path, rsp_path in items:
+            row = {"Subject": subject, "Session": name, "PPG_File": str(ppg_path), "RSP_File": str(rsp_path)}
+            try:
+                ppg = read_eeglab_channel(ppg_path, "PPG", cfg["default_fs"])
+                rsp = read_eeglab_channel(rsp_path, "RSP", cfg["default_fs"])
+                pieces, info = steam2_session_pieces(ppg, rsp)
+                row.update(info)
+                # Zero-lag correlation of PPG and belt in 0.1-0.5 Hz: the sign
+                # the v16 rule would have given the target of this session.
+                p, r, ppg_fs, rsp_fs = max(pieces, key=lambda piece: piece[0].size)
+                if int(round(ppg_fs)) != int(round(rsp_fs)):
+                    r = resample_signal_poly(r, rsp_fs, ppg_fs)
+                length = min(p.size, r.size)
+                band = ANALYSIS_PROFILES[cfg["profile"]]["band_hz"]
+                corr = safe_pcc(bandpass_filter(p[:length], ppg_fs, *band)[0],
+                                bandpass_filter(r[:length], ppg_fs, *band)[0])
+                row.update({"ZeroLag_r_PPG_RSP": corr, "v16_Sign": -1.0 if corr < 0 else 1.0, "Error": ""})
+            except Exception as exc:
+                row["Error"] = repr(exc)
+            rows.append(row)
+    frame = pd.DataFrame(rows)
+    path = results_root / "steam2_loading_check.csv"
+    frame.to_csv(path, index=False, encoding="utf-8-sig")
+    if frame.empty:
+        print("No STEAM2 session found.")
+        return frame
+    ok = frame[frame["Error"] == ""]
+    print(f"STEAM2: {frame['Subject'].nunique()} subjects, {len(frame)} sessions ({len(frame) - len(ok)} unreadable)")
+    if not ok.empty:
+        print(f"  sampling rate PPG {sorted(ok['PPG_FS'].unique())}, RSP {sorted(ok['RSP_FS'].unique())} Hz; "
+              f"session length {ok['PPG_Sec'].median():.1f} s (median); sessions split at internal boundaries: "
+              f"{int((ok['Internal_Boundaries'] > 0).sum())}")
+        absolute = ok["ZeroLag_r_PPG_RSP"].abs()
+        print(f"  zero-lag |r| PPG vs belt: median {absolute.median():.3f}, below 0.2 in "
+              f"{int((absolute < 0.2).sum())}/{len(ok)} sessions; the v16 rule would flip "
+              f"{int((ok['v16_Sign'] < 0).sum())}/{len(ok)} sessions")
+    print(f"Saved: {path}")
+    return frame
 
 
 def load_dataset(dataset_key: str, spec: WindowSpec) -> Dict[str, dict]:
@@ -4030,13 +4267,24 @@ def read_json(path: Path) -> Optional[dict]:
         return None
 
 
+def expected_profile(dataset_label: str) -> Optional[str]:
+    for config in DATASET_CONFIGS.values():
+        if config["label"] == dataset_label:
+            return config["profile"]
+    return None
+
+
 def member_done(root: Path, variant: Variant, subject: str, member: int, epochs: int) -> bool:
+    """A member is reused only when it was trained with the same model, epochs
+    and analysis profile (target handling) of its dataset; summaries written
+    before the profile was recorded count as adult_fixed_band."""
     summary_path, window_path, prediction_path = member_paths(root, subject, member)
     summary = read_json(summary_path)
     return bool(
         summary is not None
         and summary.get("Model") == variant.options.key
         and int(summary.get("Max_Epochs", -1)) == int(epochs)
+        and summary.get("Analysis_Profile", "adult_fixed_band") == expected_profile(summary.get("Dataset", ""))
         and window_path.exists()
         and prediction_path.exists()
     )
@@ -4102,6 +4350,7 @@ def run_member(
             "Window_Config": spec.name,
             "Model": variant.options.key,
             "Model_Label": variant.options.label,
+            "Analysis_Profile": DATASET_CONFIGS[dataset_key]["profile"],
             "Max_Epochs": int(epochs),
             "Best_Val_Loss": audit["Best_Val_Loss"],
             "Best_Epoch": audit["Best_Epoch"],
@@ -4699,6 +4948,9 @@ def run_experiment(args: argparse.Namespace) -> None:
     if args.inspect_capnobase:
         inspect_capnobase(results_root)
         return
+    if args.inspect_steam2:
+        inspect_steam2(results_root)
+        return
     if args.threads:
         torch.set_num_threads(int(args.threads))
     if args.require_cuda and not torch.cuda.is_available() and not args.summary_only:
@@ -4910,6 +5162,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help=(
             "Only read every CapnoBase case, print how it was loaded and save "
             "capnobase_loading_check.csv (no training, no GPU needed)."
+        ),
+    )
+    parser.add_argument(
+        "--inspect-steam2",
+        action="store_true",
+        help=(
+            "Only read every STEAM2 session, print how it was loaded and save "
+            "steam2_loading_check.csv (no training, no GPU needed)."
         ),
     )
     parser.add_argument(
