@@ -1,13 +1,17 @@
-r"""261014_dilation_ablation: ablation of the dilations of the
-261007_RRWaveNet_Ensemble_NoEvent full model; 10 s non-overlapping input
-windows, a single model per fold (no ensemble), LOSOCV on every dataset.
+r"""261014_dilation_ablation: ablation of the dilations of the full model;
+10 s non-overlapping input windows, a single model per fold (no ensemble),
+LOSOCV on every dataset. CapnoBase is trained as in
+261007_RRWaveNet_Ensemble_NoEvent, BIDMC and STEAM2 with the settings tuned
+for them in 261013_RRWaveNet_Adult_SubjectVal_WD (see "Training settings
+per dataset").
 
-Differences from 261007_RRWaveNet_Ensemble_NoEvent (nothing else changes):
-* input windows: 10 s, non-overlapping (the 261007 10 s condition only);
+Differences from 261007 (CapnoBase) / 261013 (BIDMC, STEAM2):
+* input windows: 10 s, non-overlapping;
 * one model per LOSOCV fold, scored alone: no ensemble and no averaging
-  of models. Its seed is the seed of ensemble member m0 in 261007 at 10 s
+  of models. Its seed is the seed of member m0 in 261007 / 261013
   (stable_seed('261006-ensemble-member', 'w10s_nonoverlap', dataset,
-  subject, 0)), so "full" here is member m0 of 261007;
+  subject, 0)), so "full" here is member m0 of 261007 (CapnoBase) or member
+  m0 of the weight decay 261013 selected in the fold (BIDMC, STEAM2);
 * three models: the full model and two ablations that remove the
   dilations of the residual encoder and of the CNN decoder together (no
   encoder-only or decoder-only combinations);
@@ -15,7 +19,30 @@ Differences from 261007_RRWaveNet_Ensemble_NoEvent (nothing else changes):
 The stem, the 1x1 stem fusion, the channel widths, GroupNorm, GELU,
 dropout, the residual connections, the waveform head, the input
 normalization (min-max per window), the target, the loss, the training
-schedule and the 60 s evaluation are those of 261007 in all three models.
+schedule and the 60 s evaluation are the same in all three models.
+
+Training settings per dataset (the same for the three models of a fold)
+-------------------------------------------------------------------------
+* CapnoBase (261007): validation = the last 20% of every training
+  subject's windows; AdamW weight decay 5e-5 on every parameter; CapnoBase
+  read and processed as in 261007.
+* BIDMC and STEAM2 (261013, tuned for these datasets): subject-wise
+  validation, i.e. 20% of the training subjects of the fold held out whole
+  (the validation subjects 261013 drew for the fold), all windows of the
+  other training subjects for training; AdamW weight decay on the
+  convolution weights only, with the value 261013 selected in that fold
+  by the validation loss of these validation subjects (candidates 1e-2,
+  1e-1, 1). The value is read from the 261013 results
+  (--reference-261013-root, WD_Selection\01_w10s_nonoverlap\{dataset}\
+  {subject}_selection.json); a fold without a selection, or whose 261013
+  validation subjects differ (other data), is skipped and listed in
+  failed_members.csv and incomplete_folds.csv. STEAM2 is read with the
+  261013 reader (EEGLAB sessions at 200 Hz, channels by label, PPG and RSP
+  paired by identical file names, sessions split at internal boundary
+  events, all sessions of a person in one subject) and its belt reference
+  keeps the polarity it was recorded with (profile
+  adult_belt_as_recorded); BIDMC is read as in 261007 and 261013.
+The weight decay of every fold is in Summary/training_by_fold.csv.
 
 Models
 ------
@@ -59,10 +86,10 @@ Training
 Raw PPG input without a band-pass; target = respiratory-phase waveform
 from the expert CO2 breath labels (CapnoBase) or the respiratory-band
 reference (BIDMC, STEAM2); loss = the v16 waveform loss (SmoothL1 +
-Pearson + derivative). Validation is the last 20% of every training
-subject's windows; the epoch with the lowest validation loss is restored
-(AdamW, learning rate 2e-4 with cosine decay, up to 240 epochs, at least
-20, patience 25). Training windows keep the v16 jitter (random shift up to
+Pearson + derivative). The epoch with the lowest validation loss
+(validation and weight decay per dataset, above) is restored (AdamW,
+learning rate 2e-4 with cosine decay, up to 240 epochs, at least 20,
+patience 25). Training windows keep the v16 jitter (random shift up to
 0.094 s, gain 0.95-1.05, small noise); no speed augmentation, no
 rate-balanced sampling.
 
@@ -93,7 +120,9 @@ Data and outputs
 ----------------
 Datasets: CapnoBase, BIDMC and STEAM2 (paths in DATASET_CONFIGS, or
 --capnobase-path / --bidmc-path / --steam2-ppg-dir / --steam2-rsp-dir),
-read and quality-checked as in 261007.
+read and quality-checked as in 261007 (CapnoBase, BIDMC) and 261013
+(STEAM2). Results are per subject: all sessions of a STEAM2 subject form
+one LOSOCV fold.
 All results go to PROJECT_ROOT
 (D:\PPG2RSP_RRWaveNet_Inspired\261014_dilation_ablation); {model} is
 full, no_dilation or no_dilation_rf_matched:
@@ -104,7 +133,8 @@ full, no_dilation or no_dilation_rf_matched:
   Data_Quality\   window and subject quality of every dataset
   Summary\   fft_davies_overall.csv, fft_davies_overall_mean_sd.csv,
       model_comparison.csv, model_variants.csv, model_layers.csv,
-      per_subject_fft.csv, minutes.csv, incomplete_folds.csv, figures and
+      training_by_fold.csv, per_subject_fft.csv, minutes.csv,
+      incomplete_folds.csv, figures and
       261014_dilation_ablation_results.xlsx
 Order: CapnoBase, BIDMC, STEAM2; within a dataset full, no_dilation, then
 no_dilation_rf_matched.
@@ -114,13 +144,18 @@ Resume after an interruption:    python 261014_dilation_ablation.py --resume
                                  (finished folds are reused, an interrupted
                                  fold continues from its last epoch)
 Some datasets / models:          --datasets capnobase --variants no_dilation
-Reuse the 261007 10 s member m0 as "full" (same model, seed and training;
-copied, not retrained):          --resume --reuse-261007-full
+261013 results (weight decay per fold of BIDMC / STEAM2):
+                                 --reference-261013-root <261013 results>
+                                 (default REFERENCE_261013_ROOT)
+Reuse member m0 of "full" from 261007 (CapnoBase) and 261013 (BIDMC,
+STEAM2; same model, seed and training; copied, not retrained):
+                                 --resume --reuse-reference-full
                                  [--reference-261007-root <261007 results>]
 Parallel workers (e.g. 4):       --resume --shard 0/4 ... --shard 3/4, then
                                  --resume --summary-only
 Summary of stored results only:  --summary-only
 Check the data without training: --dry-run --no-require-cuda
+Check how STEAM2 is read:        --inspect-steam2 --no-require-cuda
 """
 
 import argparse
@@ -174,6 +209,10 @@ DEFAULT_RESULTS_ROOT = PROJECT_ROOT
 # 261007 results (10 s member m0 of the full model can be reused as "full"
 # with --reuse-261007-full).
 REFERENCE_261007_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1")
+# 261013_RRWaveNet_Adult_SubjectVal_WD results: the weight decay it selected in
+# every BIDMC / STEAM2 fold (WD_Selection) is read from here, and its member m0
+# of that weight decay can be reused as "full" with --reuse-reference-full.
+REFERENCE_261013_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWavNet_STEAM_BIDMC_v1")
 
 DATASET_CONFIGS = {
     "bidmc": {
@@ -215,8 +254,11 @@ DATASET_CONFIGS = {
             r"\RSP\2back_raw_v2"
         ),
         "target_fs": 128,
-        "default_fs": 128,
-        "profile": "adult_fixed_band",
+        # EEGLAB sessions (EEG.data, EEG.srate = 200 Hz, one channel labelled
+        # PPG or RSP); default_fs is used only when a file has no srate
+        # (261013).
+        "default_fs": 200,
+        "profile": "adult_belt_as_recorded",
     },
 }
 
@@ -253,6 +295,24 @@ LEARNING_RATE = 2e-4
 WEIGHT_DECAY = 5e-5
 LOSS_WEIGHTS = (0.45, 0.45, 0.10)
 VAL_WINDOW_RATIO = 0.20
+# Training settings per dataset. "261007" (CapnoBase): temporal validation
+# (last VAL_WINDOW_RATIO of every training subject's windows) and AdamW weight
+# decay WEIGHT_DECAY on every parameter. "261013" (BIDMC, STEAM2): the settings
+# tuned in 261013_RRWaveNet_Adult_SubjectVal_WD, i.e. subject-wise validation
+# (VAL_SUBJECT_RATIO of the training subjects held out whole, drawn as in
+# 261013) and, in every LOSOCV fold, the weight decay that 261013 selected for
+# that fold (read from its WD_Selection), on the convolution weights only.
+TRAINING_PROTOCOLS = {"capnobase": "261007", "bidmc": "261013", "steam2": "261013"}
+VAL_SUBJECT_RATIO = 0.20
+# Test windows of the held-out subject: 10 s without overlap, as in 261007
+# and 261013 (recorded in every summary).
+INFERENCE_PROTOCOL = "stored_windows"
+# Analysis profile of summaries written before it was recorded (261007).
+LEGACY_PROFILES = {
+    "CapnoBase": "capnography_wide_rr",
+    "BIDMC": "adult_fixed_band",
+    "STEAM2": "adult_fixed_band",
+}
 
 
 # Breath detection and reference quality (RRest / Charlton et al. 2016).
@@ -313,6 +373,27 @@ ANALYSIS_PROFILES = {
         "ppg_spectral_beat_distance": False,
         "max_target_lag_sec": 0.0,  # no lag search: v16 zero-lag sign alignment
         "fixed_target_polarity": False,
+        "target_polarity": "zero_lag_sign",
+        "fft_subharmonic_check": False,
+        "resampler": "fft",
+    },
+    # STEAM2 belt: as adult_fixed_band, but the reference keeps the polarity it
+    # was recorded with (one belt type for every subject). The v16 zero-lag
+    # sign rule picks the sign from the correlation of the PPG and the belt in
+    # the respiratory band at zero lag, which is near zero for the belt (the
+    # PPG respiratory modulation is a variable fraction of a cycle off the
+    # chest movement), so it flips the target at random between sessions.
+    "adult_belt_as_recorded": {
+        "description": "v16 processing: fixed 0.1-0.5 Hz, reference polarity as recorded",
+        "band_hz": RESP_BAND_HZ,
+        "adaptive_upper": False,
+        "rr_band_bpm": RR_BAND_BPM,
+        "min_breath_interval_sec": 1.5,
+        "ppg_hr_range_bpm": (PPG_HR_MIN_BPM, PPG_HR_MAX_BPM),
+        "ppg_spectral_beat_distance": False,
+        "max_target_lag_sec": 0.0,  # no lag search
+        "fixed_target_polarity": True,
+        "target_polarity": "as_recorded",
         "fft_subharmonic_check": False,
         "resampler": "fft",
     },
@@ -1491,6 +1572,13 @@ def preprocess_segment(
         rsp_low = target_signal if not use_phase_target else (
             sign * shift_signal(rsp_low, lag)
         ).astype(np.float32)
+    elif profile.get("target_polarity") == "as_recorded":
+        # Polarity as recorded, no lag: the zero-lag correlation is kept only
+        # as a diagnostic.
+        sign = 1.0
+        target_signal = rsp_low
+        lag = 0
+        alignment_corr = safe_pcc(ppg_low, rsp_low)
     else:
         centered = (ppg_low - np.mean(ppg_low)) * (rsp_low - np.mean(rsp_low))
         sign = -1.0 if float(np.mean(centered)) < 0.0 else 1.0
@@ -2462,48 +2550,217 @@ def _match_mat_file_pairs(
     return list(zip(ppg_files, rsp_files))
 
 
+# STEAM2 sessions are EEGLAB structures saved as .mat files (EEG.data,
+# EEG.srate, EEG.chanlocs.labels, EEG.event), one channel per file: the
+# PPG file and the RSP (belt) file of a session have the same name in the
+# PPG and RSP folders and come from the same recording (same length).
+STEAM2_CHANNELS = {"PPG": ("PPG", "PLETH", "BVP"), "RSP": ("RSP", "RESP", "RESPIRATION", "BELT")}
+STEAM2_SESSION_PATTERN = re.compile(r"^(?P<subject>.+?)[_\- ]*session[_\- ]*(?P<session>\d+)$", re.IGNORECASE)
+
+
+def steam2_session_key(stem: str) -> Tuple[str, int]:
+    """(subject, session number) from a file stem such as 13_LSB_Session2."""
+    match = STEAM2_SESSION_PATTERN.match(stem)
+    if match is None:
+        return stem, 0
+    return match.group("subject"), int(match.group("session"))
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, np.ndarray):
+        return list(value.ravel()) if value.size else []
+    return [value]
+
+
+def read_eeglab_channel(path: Path, kind: str, default_fs: float) -> dict:
+    """One channel of an EEGLAB .mat file.
+
+    The channel is chosen by its label (STEAM2_CHANNELS[kind]); a file with
+    one channel is accepted when it has no label, and rejected when its label
+    names the other signal (swapped files). EEGLAB "boundary" events inside
+    the recording mark discontinuities (removed data); their positions are
+    returned so that the session is split there. Files without an EEG
+    structure fall back to the generic reader (data and srate fields).
+    """
+    mat = sio.loadmat(path, squeeze_me=True, struct_as_record=False)
+    names = [key for key in mat if not key.startswith("_")]
+    payload = mat["EEG"] if "EEG" in mat else (mat[names[0]] if names else None)
+    if payload is None or not hasattr(payload, "data"):
+        signal, fs = _extract_signal_and_fs(_first_mat_payload(sio.loadmat(path)), default_fs)
+        return {"signal": signal, "fs": fs, "boundaries": [], "label": "", "channels": 1}
+    data = np.asarray(payload.data, dtype=np.float64)
+    data = data.reshape(1, -1) if data.ndim == 1 else data
+    labels = [str(getattr(item, "labels", "")).strip() for item in _as_list(getattr(payload, "chanlocs", None))]
+    wanted = {name.upper() for name in STEAM2_CHANNELS[kind]}
+    other = {name.upper() for key, names in STEAM2_CHANNELS.items() if key != kind for name in names}
+    index = next((i for i, label in enumerate(labels) if label.upper() in wanted), None)
+    if index is None:
+        if data.shape[0] != 1:
+            raise RuntimeError(f"{path.name}: no {kind} channel among {labels}")
+        if labels and labels[0].upper() in other:
+            raise RuntimeError(f"{path.name}: channel '{labels[0]}' found where {kind} was expected")
+        index = 0
+    signal = data[index].astype(np.float32)
+    try:
+        fs = float(np.asarray(payload.srate).squeeze())
+    except Exception:
+        fs = float(default_fs)
+    boundaries = []
+    for event in _as_list(getattr(payload, "event", None)):
+        if str(getattr(event, "type", "")).strip().lower() != "boundary":
+            continue
+        try:
+            latency = float(getattr(event, "latency"))
+        except (TypeError, ValueError):
+            continue
+        # EEGLAB latencies are 1-based and a boundary at k.5 lies between
+        # samples k and k + 1: the next piece starts at 0-based index k. The
+        # markers at the start (0.5, "New Segment" at 1) and at the end are
+        # not discontinuities inside the data.
+        position = int(np.ceil(latency - 1.0))
+        if 0 < position < signal.size:
+            boundaries.append(position)
+    label = labels[index] if index < len(labels) else ""
+    return {"signal": signal, "fs": fs, "boundaries": sorted(set(boundaries)), "label": label,
+            "channels": int(data.shape[0])}
+
+
+def steam2_session_files(ppg_root: Path, rsp_root: Path) -> Dict[str, List[Tuple[str, Path, Path]]]:
+    """Subject -> [(session name, PPG file, RSP file)], sessions in order.
+
+    Subject folders (PPG\\<subject>\\<session>.mat and RSP\\<subject>\\...) are
+    used when present; otherwise the files of one flat folder are grouped by
+    the subject part of their name (<subject>_Session<k>.mat). Every session
+    of a person stays in one subject, so a person is never in the training
+    and the test data of the same fold.
+    """
+    sessions: Dict[str, List[Tuple[str, Path, Path]]] = {}
+    subject_dirs = sorted(path for path in ppg_root.iterdir() if path.is_dir())
+    if subject_dirs:
+        for subject_dir in subject_dirs:
+            rsp_dir = rsp_root / subject_dir.name
+            if not rsp_dir.is_dir():
+                print(f"[STEAM2 {subject_dir.name}] no RSP folder, skipped")
+                continue
+            # PPG and RSP files of a session have the same name; files without
+            # a partner are reported and left out (never paired by position).
+            rsp_files = {path.stem: path for path in rsp_dir.glob("*.mat")}
+            for ppg_path in sorted(subject_dir.glob("*.mat")):
+                if ppg_path.stem not in rsp_files:
+                    print(f"[STEAM2 {subject_dir.name}] {ppg_path.name}: no RSP file of the same name, left out")
+                    continue
+                sessions.setdefault(subject_dir.name, []).append(
+                    (ppg_path.stem, ppg_path, rsp_files[ppg_path.stem])
+                )
+            for stem in sorted(set(rsp_files) - {path.stem for path in subject_dir.glob("*.mat")}):
+                print(f"[STEAM2 {subject_dir.name}] {stem}.mat: no PPG file of the same name, left out")
+    else:
+        rsp_files = {path.stem: path for path in rsp_root.glob("*.mat")}
+        for ppg_path in sorted(ppg_root.glob("*.mat")):
+            if ppg_path.stem not in rsp_files:
+                print(f"[STEAM2 {ppg_path.name}] no RSP file of the same name, skipped")
+                continue
+            subject, _ = steam2_session_key(ppg_path.stem)
+            sessions.setdefault(subject, []).append((ppg_path.stem, ppg_path, rsp_files[ppg_path.stem]))
+    for subject in sessions:
+        sessions[subject].sort(key=lambda item: (steam2_session_key(item[0])[1], item[0]))
+    return sessions
+
+
+def steam2_session_pieces(ppg: dict, rsp: dict) -> Tuple[List[Tuple[np.ndarray, np.ndarray, float, float]], dict]:
+    """The (PPG, RSP, fs, fs) pieces of one session, split at the boundary
+    events of either file, and a description of the session."""
+    ppg_sec = ppg["signal"].size / ppg["fs"]
+    rsp_sec = rsp["signal"].size / rsp["fs"]
+    cuts = sorted({b / ppg["fs"] for b in ppg["boundaries"]} | {b / rsp["fs"] for b in rsp["boundaries"]})
+    edges = [0.0] + [cut for cut in cuts if 0.0 < cut < min(ppg_sec, rsp_sec)] + [min(ppg_sec, rsp_sec)]
+    pieces = []
+    for start, end in zip(edges[:-1], edges[1:]):
+        p = ppg["signal"][int(round(start * ppg["fs"])):int(round(end * ppg["fs"]))]
+        r = rsp["signal"][int(round(start * rsp["fs"])):int(round(end * rsp["fs"]))]
+        if p.size and r.size:
+            pieces.append((p, r, ppg["fs"], rsp["fs"]))
+    info = {
+        "PPG_Label": ppg["label"], "RSP_Label": rsp["label"],
+        "PPG_FS": ppg["fs"], "RSP_FS": rsp["fs"],
+        "PPG_Sec": ppg_sec, "RSP_Sec": rsp_sec, "Length_Difference_Sec": ppg_sec - rsp_sec,
+        "Internal_Boundaries": len(edges) - 2, "Pieces": len(pieces),
+        "Piece_Sec": " ".join(f"{end - start:.1f}" for start, end in zip(edges[:-1], edges[1:])),
+    }
+    return pieces, info
+
+
 def load_steam2_subjects(spec: WindowSpec) -> Dict[str, dict]:
     cfg = DATASET_CONFIGS["steam2"]
+    profile = ANALYSIS_PROFILES[cfg["profile"]]
     data = {}
-    ppg_root = Path(cfg["ppg_dir"])
-    rsp_root = Path(cfg["rsp_dir"])
-    for subject_dir in sorted(
-        path for path in ppg_root.iterdir() if path.is_dir()
-    ):
-        rsp_subject_dir = rsp_root / subject_dir.name
-        if not rsp_subject_dir.is_dir():
-            continue
-        pairs = []
+    sessions = steam2_session_files(Path(cfg["ppg_dir"]), Path(cfg["rsp_dir"]))
+    for subject, items in sessions.items():
         try:
-            for ppg_name, rsp_name in _match_mat_file_pairs(
-                subject_dir,
-                rsp_subject_dir,
-            ):
-                p_payload = _first_mat_payload(
-                    sio.loadmat(subject_dir / ppg_name)
-                )
-                r_payload = _first_mat_payload(
-                    sio.loadmat(rsp_subject_dir / rsp_name)
-                )
-                ppg, ppg_fs = _extract_signal_and_fs(
-                    p_payload,
-                    cfg["default_fs"],
-                )
-                rsp, rsp_fs = _extract_signal_and_fs(
-                    r_payload,
-                    cfg["default_fs"],
-                )
-                pairs.append((ppg, rsp, ppg_fs, rsp_fs))
-            result = preprocess_subject_from_pairs(
-                pairs,
-                spec,
-                ANALYSIS_PROFILES[cfg["profile"]],
-            )
+            pairs = []
+            for name, ppg_path, rsp_path in items:
+                ppg = read_eeglab_channel(ppg_path, "PPG", cfg["default_fs"])
+                rsp = read_eeglab_channel(rsp_path, "RSP", cfg["default_fs"])
+                pieces, info = steam2_session_pieces(ppg, rsp)
+                if abs(info["Length_Difference_Sec"]) > 1.0:
+                    print(f"[STEAM2 {subject} {name}] PPG {info['PPG_Sec']:.1f} s vs RSP "
+                          f"{info['RSP_Sec']:.1f} s; the common part is used")
+                pairs += pieces
+            result = preprocess_subject_from_pairs(pairs, spec, profile)
             if result is not None:
-                data[subject_dir.name] = result
+                data[subject] = result
         except Exception as exc:
-            print(f"[STEAM2 {subject_dir.name}] skipped: {exc}")
+            print(f"[STEAM2 {subject}] skipped: {exc}")
     return data
+
+
+def inspect_steam2(results_root: Path) -> pd.DataFrame:
+    """Read every STEAM2 session, print how it was loaded and save
+    steam2_loading_check.csv (no training)."""
+    cfg = DATASET_CONFIGS["steam2"]
+    rows = []
+    sessions = steam2_session_files(Path(cfg["ppg_dir"]), Path(cfg["rsp_dir"]))
+    for subject, items in sessions.items():
+        for name, ppg_path, rsp_path in items:
+            row = {"Subject": subject, "Session": name, "PPG_File": str(ppg_path), "RSP_File": str(rsp_path)}
+            try:
+                ppg = read_eeglab_channel(ppg_path, "PPG", cfg["default_fs"])
+                rsp = read_eeglab_channel(rsp_path, "RSP", cfg["default_fs"])
+                pieces, info = steam2_session_pieces(ppg, rsp)
+                row.update(info)
+                # Zero-lag correlation of PPG and belt in 0.1-0.5 Hz: the sign
+                # the v16 rule would have given the target of this session.
+                p, r, ppg_fs, rsp_fs = max(pieces, key=lambda piece: piece[0].size)
+                if int(round(ppg_fs)) != int(round(rsp_fs)):
+                    r = resample_signal_poly(r, rsp_fs, ppg_fs)
+                length = min(p.size, r.size)
+                band = ANALYSIS_PROFILES[cfg["profile"]]["band_hz"]
+                corr = safe_pcc(bandpass_filter(p[:length], ppg_fs, *band)[0],
+                                bandpass_filter(r[:length], ppg_fs, *band)[0])
+                row.update({"ZeroLag_r_PPG_RSP": corr, "v16_Sign": -1.0 if corr < 0 else 1.0, "Error": ""})
+            except Exception as exc:
+                row["Error"] = repr(exc)
+            rows.append(row)
+    frame = pd.DataFrame(rows)
+    path = results_root / "steam2_loading_check.csv"
+    frame.to_csv(path, index=False, encoding="utf-8-sig")
+    if frame.empty:
+        print("No STEAM2 session found.")
+        return frame
+    ok = frame[frame["Error"] == ""]
+    print(f"STEAM2: {frame['Subject'].nunique()} subjects, {len(frame)} sessions ({len(frame) - len(ok)} unreadable)")
+    if not ok.empty:
+        print(f"  sampling rate PPG {sorted(ok['PPG_FS'].unique())}, RSP {sorted(ok['RSP_FS'].unique())} Hz; "
+              f"session length {ok['PPG_Sec'].median():.1f} s (median); sessions split at internal boundaries: "
+              f"{int((ok['Internal_Boundaries'] > 0).sum())}")
+        absolute = ok["ZeroLag_r_PPG_RSP"].abs()
+        print(f"  zero-lag |r| PPG vs belt: median {absolute.median():.3f}, below 0.2 in "
+              f"{int((absolute < 0.2).sum())}/{len(ok)} sessions; the v16 rule would flip "
+              f"{int((ok['v16_Sign'] < 0).sum())}/{len(ok)} sessions")
+    print(f"Saved: {path}")
+    return frame
 
 
 def load_dataset(dataset_key: str, spec: WindowSpec) -> Dict[str, dict]:
@@ -2543,6 +2800,21 @@ def select_subject_indices(
     raise ValueError(split)
 
 
+def validation_subjects(dataset_key: str, test_subject: str, train_subjects: Sequence[str]) -> List[str]:
+    """Training subjects held out whole as validation subjects in one fold.
+
+    VAL_SUBJECT_RATIO of the training subjects (rounded, at least one, at
+    most all but one), drawn once per fold with a seed of the dataset and the
+    held-out subject: every member and weight decay candidate of the fold
+    uses the same validation subjects, and the test subject is never one.
+    """
+    candidates = sorted(str(subject) for subject in train_subjects if str(subject) != str(test_subject))
+    count = int(round(VAL_SUBJECT_RATIO * len(candidates)))
+    count = min(max(1, count), max(1, len(candidates) - 1))
+    rng = np.random.default_rng(stable_seed("261013-validation-subjects", dataset_key, test_subject))
+    return sorted(rng.choice(candidates, size=count, replace=False).tolist())
+
+
 def test_metadata(
     subject_data: Dict[str, dict],
     test_subject: str,
@@ -2571,10 +2843,11 @@ class SubjectWindowDataset(Dataset):
     """Lazy window view that avoids train/validation/test array duplication.
 
     Splits: "train"/"val" are the temporal split of every subject (last 20%
-    of its kept windows for validation, Train_OK only); "test" is every kept
-    window (inference never depends on the reference). Training windows get
-    the v16 jitter (random shift up to SHIFT_AUG_SEC, gain 0.95-1.05, small
-    noise).
+    of its kept windows for validation, Train_OK only; 261007), or with
+    subject_wise every Train_OK window of the given subjects (training or
+    validation subjects of the fold; 261013); "test" is every kept window
+    (inference never depends on the reference). Training windows get the v16
+    jitter (random shift up to SHIFT_AUG_SEC, gain 0.95-1.05, small noise).
     """
 
     def __init__(
@@ -2583,12 +2856,17 @@ class SubjectWindowDataset(Dataset):
         subjects: Sequence[str],
         split: str,
         augment: bool,
+        subject_wise: bool = False,
     ):
         self.subject_data = subject_data
         self.samples = []
         for subject in subjects:
             record = subject_data[subject]
-            indices = select_subject_indices(len(record["low"]), split)
+            indices = (
+                np.arange(len(record["low"]), dtype=int)
+                if subject_wise
+                else select_subject_indices(len(record["low"]), split)
+            )
             if split in ("train", "val"):
                 indices = indices[record["train_ok"][indices]]
             self.samples.extend((subject, int(index)) for index in indices)
@@ -3168,12 +3446,26 @@ def feature_representation_summary(features: np.ndarray) -> dict:
 # One LOSOCV fold
 # ---------------------------------------------------------------------------
 
-def make_optimizer(model: DeepOnlyV16Decoder, epochs: int):
-    optimizer = torch.optim.AdamW(
-        [{"params": list(model.parameters())}],
-        lr=LEARNING_RATE,
-        weight_decay=WEIGHT_DECAY,
-    )
+def make_optimizer(model: DeepOnlyV16Decoder, epochs: int, weight_decay: Optional[float] = None):
+    """AdamW. Without weight_decay (261007): WEIGHT_DECAY on every parameter.
+    With weight_decay (261013): the decay on the convolution weights only;
+    biases and GroupNorm scale / shift are not decayed."""
+    if weight_decay is None:
+        optimizer = torch.optim.AdamW(
+            [{"params": list(model.parameters())}],
+            lr=LEARNING_RATE,
+            weight_decay=WEIGHT_DECAY,
+        )
+    else:
+        decay = [p for p in model.parameters() if p.ndim >= 2]
+        no_decay = [p for p in model.parameters() if p.ndim < 2]
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": decay, "weight_decay": float(weight_decay)},
+                {"params": no_decay, "weight_decay": 0.0},
+            ],
+            lr=LEARNING_RATE,
+        )
     return optimizer, CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
 
@@ -3187,6 +3479,7 @@ def fit_model(
     patience: int,
     checkpoint: Path,
     state_path: Optional[Path] = None,
+    weight_decay: Optional[float] = None,
 ) -> List[dict]:
     """Train with early stopping on the validation loss.
 
@@ -3197,7 +3490,7 @@ def fit_model(
     continued from, so an interrupted run resumes exactly where it stopped.
     """
     criterion = WaveformLoss()
-    optimizer, scheduler = make_optimizer(model, epochs)
+    optimizer, scheduler = make_optimizer(model, epochs, weight_decay)
     best_val = np.inf
     patience_counter = 0
     history = []
@@ -3291,11 +3584,18 @@ def train_one(
     model_options: ModelOptions,
     save_features: bool = False,
     resume: bool = False,
+    val_subjects: Optional[Sequence[str]] = None,
+    weight_decay: Optional[float] = None,
+    model_key: Optional[str] = None,
 ) -> Tuple[Dict[str, np.ndarray], List[dict], dict, Path, dict]:
     """Train the model of one LOSOCV fold and predict the held-out subject.
 
-    Validation: the last 20% of each training subject's windows (v16); the
-    best validation state is restored before testing. The training state is
+    Validation: without val_subjects the last 20% of each training subject's
+    windows (v16, 261007); with val_subjects every window of those subjects,
+    trained on every window of the other training subjects (subject-wise,
+    261013). weight_decay: None = 261007 (WEIGHT_DECAY on every parameter),
+    else that decay on the convolution weights (261013). The best validation
+    state is restored before testing. The training state is
     saved after every epoch; with `resume` an interrupted member continues
     from it, otherwise it starts over.
     """
@@ -3316,8 +3616,21 @@ def train_one(
     if not resume and state_path.exists():
         state_path.unlink()
 
-    train_dataset = SubjectWindowDataset(subject_data, train_subjects, "train", True)
-    val_dataset = SubjectWindowDataset(subject_data, train_subjects, "val", False)
+    if val_subjects is None:
+        fit_subjects, held_out = list(train_subjects), set()
+        train_dataset = SubjectWindowDataset(subject_data, train_subjects, "train", True)
+        val_dataset = SubjectWindowDataset(subject_data, train_subjects, "val", False)
+        validation_mode = "temporal (last 20% of each training subject)"
+    else:
+        held_out = {str(subject) for subject in val_subjects}
+        fit_subjects = [subject for subject in train_subjects if str(subject) not in held_out]
+        if str(test_subject) in held_out or not fit_subjects:
+            raise RuntimeError(f"{test_subject}: invalid validation subjects {sorted(held_out)}")
+        train_dataset = SubjectWindowDataset(subject_data, fit_subjects, "train", True, subject_wise=True)
+        val_dataset = SubjectWindowDataset(subject_data, list(val_subjects), "val", False, subject_wise=True)
+        validation_mode = (
+            f"subject-wise ({len(held_out)} validation subjects, {len(fit_subjects)} training subjects)"
+        )
     test_dataset = SubjectWindowDataset(subject_data, [test_subject], "test", False)
     train_loader = make_train_loader(train_dataset, batch_size, device)
     val_loader = make_eval_loader(val_dataset, batch_size, device)
@@ -3335,6 +3648,7 @@ def train_one(
         patience,
         checkpoint,
         state_path,
+        weight_decay,
     )
     history_frame = pd.DataFrame(history)
     history_frame.to_csv(history_path, index=False, encoding="utf-8-sig")
@@ -3342,7 +3656,7 @@ def train_one(
     audit["Convergence_Epoch_95pct"] = convergence_epoch_95pct(history)
     if audit["Audit_Status"] != "PASS_BEST_VALIDATION_CHECKPOINT":
         raise RuntimeError(f"No valid checkpoint: {checkpoint}")
-    audit["Validation_Mode"] = "temporal (last 20% of each training subject)"
+    audit["Validation_Mode"] = validation_mode
     pd.DataFrame([audit]).to_csv(audit_path, index=False, encoding="utf-8-sig")
 
     model.load_state_dict(torch.load(checkpoint, map_location=device))
@@ -3351,6 +3665,11 @@ def train_one(
     best_row = history_frame.loc[history_frame["Epoch"] == audit["Best_Epoch"]].iloc[0]
     diagnostics = {
         "N_Params": count_parameters(model),
+        "Weight_Decay": float(WEIGHT_DECAY if weight_decay is None else weight_decay),
+        "Weight_Decay_Scope": "all parameters" if weight_decay is None else "convolution weights",
+        "Validation_Mode": validation_mode,
+        "N_Train_Subjects": len(fit_subjects),
+        "N_Val_Subjects": len(held_out),
         "Train_Windows": len(train_loader.dataset),
         "Val_Windows": len(val_loader.dataset),
         "Val_Wave_Loss_At_Best": float(best_row["Val_Wave_Loss"]),
@@ -3370,7 +3689,7 @@ def train_one(
         "fs": np.asarray(TARGET_FS, dtype=np.int32),
         "input_window_sec": np.asarray(spec.window_sec, dtype=np.float32),
         "input_stride_sec": np.asarray(spec.stride_sec, dtype=np.float32),
-        "model_key": np.asarray(model_options.key),
+        "model_key": np.asarray(model_key or model_options.key),
         "seed": np.asarray(seed, dtype=np.int64),
     }
     if save_features:
@@ -4125,9 +4444,26 @@ def build_manifest(
             }
             for variant in variants
         },
-        "full_from_261007": (
-            str(args.reference_261007_root) if args.reuse_261007_full else "trained here"
+        "full_model_from": (
+            {
+                "CapnoBase": str(args.reference_261007_root),
+                "BIDMC / STEAM2": str(args.reference_261013_root),
+            }
+            if args.reuse_reference_full
+            else "trained here"
         ),
+        "training_protocols": {
+            DATASET_CONFIGS[key]["label"]: (
+                "261007: temporal validation (last 20% of each training subject), "
+                f"weight decay {WEIGHT_DECAY:g} on every parameter"
+                if TRAINING_PROTOCOLS[key] == "261007"
+                else "261013: subject-wise validation "
+                f"({VAL_SUBJECT_RATIO:.0%} of the training subjects), weight decay "
+                "selected by 261013 in this fold (convolution weights), read from "
+                f"{args.reference_261013_root}"
+            )
+            for key in dataset_keys
+        },
         "models_per_fold": {
             "models": 1,
             "ensemble": False,
@@ -4142,10 +4478,10 @@ def build_manifest(
             "epoch_cap": args.epoch_cap,
             "batch_size": args.batch_size,
             "learning_rate": LEARNING_RATE,
-            "weight_decay": WEIGHT_DECAY,
+            "weight_decay": "per dataset (training_protocols)",
             "loss": "v16 hybrid waveform loss (SmoothL1, Pearson, derivative)",
             "loss_weights": list(LOSS_WEIGHTS),
-            "validation": "last 20% of each training subject's windows, best checkpoint",
+            "validation": "per dataset (training_protocols), best checkpoint",
             "window_jitter": f"shift up to {SHIFT_AUG_SEC} s, gain 0.95-1.05, noise 0.002-0.01",
             "speed_augmentation": False,
             "rate_balanced_sampling": False,
@@ -4214,64 +4550,192 @@ def read_json(path: Path) -> Optional[dict]:
         return None
 
 
-def member_done(root: Path, variant: Variant, subject: str, member: int, epochs: int) -> bool:
+def expected_profile(dataset_label: str) -> Optional[str]:
+    for config in DATASET_CONFIGS.values():
+        if config["label"] == dataset_label:
+            return config["profile"]
+    return None
+
+
+def epoch_limit(args: argparse.Namespace, variant: Variant) -> int:
+    return variant.epochs if args.epoch_cap is None else min(variant.epochs, args.epoch_cap)
+
+
+class SelectionMissing(RuntimeError):
+    """No usable 261013 weight decay selection for a BIDMC / STEAM2 fold."""
+
+
+def selection_path_261013(
+    args: argparse.Namespace, spec: WindowSpec, dataset_key: str, subject: str
+) -> Path:
+    return (
+        Path(args.reference_261013_root)
+        / "WD_Selection"
+        / f"{spec.order:02d}_{spec.name}"
+        / DATASET_CONFIGS[dataset_key]["label"]
+        / f"{safe_tag(subject)}_selection.json"
+    )
+
+
+def fold_training(
+    args: argparse.Namespace,
+    spec: WindowSpec,
+    dataset_key: str,
+    test_subject: str,
+    train_subjects: Sequence[str],
+) -> dict:
+    """Validation and weight decay of one LOSOCV fold (the same for all three
+    models). CapnoBase: 261007. BIDMC / STEAM2: the validation subjects of
+    261013 and the weight decay 261013 selected for this fold; raises
+    SelectionMissing when 261013 has no selection for the fold or its
+    validation subjects differ (other data)."""
+    if TRAINING_PROTOCOLS[dataset_key] == "261007":
+        return {
+            "Training_Protocol": "261007",
+            "Weight_Decay": float(WEIGHT_DECAY),
+            "Weight_Decay_Arg": None,
+            "Weight_Decay_Scope": "all parameters",
+            "Weight_Decay_Source": "261007 (fixed)",
+            "Validation": "temporal (last 20% of each training subject)",
+            "Val_Subjects": None,
+            "Model_Suffix": "",
+        }
+    val_subjects = validation_subjects(dataset_key, test_subject, train_subjects)
+    path = selection_path_261013(args, spec, dataset_key, test_subject)
+    record = read_json(path)
+    label = DATASET_CONFIGS[dataset_key]["label"]
+    if record is None or "Selected_Weight_Decay" not in record:
+        raise SelectionMissing(f"{label} {test_subject}: no 261013 weight decay selection ({path})")
+    if record.get("Window_Config") != spec.name or sorted(
+        str(subject) for subject in record.get("Validation_Subjects", [])
+    ) != sorted(val_subjects):
+        raise SelectionMissing(
+            f"{label} {test_subject}: the 261013 selection ({path}) was made with other "
+            "validation subjects or windows"
+        )
+    weight_decay = float(record["Selected_Weight_Decay"])
+    return {
+        "Training_Protocol": "261013",
+        "Weight_Decay": weight_decay,
+        "Weight_Decay_Arg": weight_decay,
+        "Weight_Decay_Scope": "convolution weights",
+        "Weight_Decay_Source": str(path),
+        "Validation": f"subject-wise ({len(val_subjects)} validation subjects)",
+        "Val_Subjects": val_subjects,
+        # The 261013 key suffix, so "full" here has the key of the 261013
+        # member of the selected weight decay.
+        "Model_Suffix": "_wd{:g}_subjval".format(weight_decay),
+    }
+
+
+def fold_model_key(variant: Variant, training: dict) -> str:
+    return variant.options.key + training["Model_Suffix"]
+
+
+def member_done(
+    root: Path,
+    variant: Variant,
+    subject: str,
+    member: int,
+    epochs: int,
+    model_key: str,
+    dataset_label: str,
+) -> bool:
+    """A member is reused only when it was trained with the same model and
+    training settings (key), epochs, analysis profile (target handling) and
+    test windows."""
     summary_path, window_path, prediction_path = member_paths(root, subject, member)
     summary = read_json(summary_path)
     return bool(
         summary is not None
-        and summary.get("Model") == variant.options.key
+        and summary.get("Model") == model_key
         and int(summary.get("Max_Epochs", -1)) == int(epochs)
+        and summary.get("Analysis_Profile", LEGACY_PROFILES.get(dataset_label))
+        == expected_profile(dataset_label)
+        and summary.get("Inference", INFERENCE_PROTOCOL) == INFERENCE_PROTOCOL
         and window_path.exists()
         and prediction_path.exists()
     )
 
 
-def in_261007(args: argparse.Namespace, spec: WindowSpec, dataset_key: str, subject: str) -> bool:
-    """True when --reuse-261007-full is set and 261007 has this fold of the
-    full model complete (it is copied, never trained here)."""
-    if not args.reuse_261007_full:
+def reference_full_root(
+    args: argparse.Namespace, spec: WindowSpec, dataset_key: str, training: dict
+) -> Path:
+    """Where the reference script stored "full" for this fold: 261007 (full)
+    for CapnoBase, 261013 (full_wd{selected weight decay}) for BIDMC / STEAM2."""
+    if training["Training_Protocol"] == "261007":
+        return condition_root(Path(args.reference_261007_root), "full", spec, dataset_key)
+    return condition_root(
+        Path(args.reference_261013_root), "full_wd{:g}".format(training["Weight_Decay"]), spec, dataset_key
+    )
+
+
+def in_reference(
+    args: argparse.Namespace, spec: WindowSpec, dataset_key: str, subject: str, training: dict
+) -> bool:
+    """True when --reuse-reference-full is set and the reference script has
+    this fold of the full model complete with the same settings (it is
+    copied, never trained here)."""
+    if not args.reuse_reference_full:
         return False
     variant = VARIANTS["full"]
-    epochs = variant.epochs if args.epoch_cap is None else min(variant.epochs, args.epoch_cap)
-    source = condition_root(Path(args.reference_261007_root), variant.name, spec, dataset_key)
-    return member_done(source, variant, subject, SINGLE_MEMBER, epochs)
+    return member_done(
+        reference_full_root(args, spec, dataset_key, training),
+        variant,
+        subject,
+        SINGLE_MEMBER,
+        epoch_limit(args, variant),
+        fold_model_key(variant, training),
+        DATASET_CONFIGS[dataset_key]["label"],
+    )
 
 
-def import_261007_full(
+def import_reference_full(
     args: argparse.Namespace,
     results_root: Path,
     spec: WindowSpec,
     dataset_key: str,
-    subjects: Sequence[str],
+    trainings: Dict[str, dict],
 ) -> int:
-    """Copy the 10 s member m0 of the 261007 full model into the "full"
-    folder of this script (--reuse-261007-full). It is the same model, seed
-    and training as "full" here, so it is not trained again. Only complete
-    members of the same model key and maximum epochs are copied; returns the
-    number of folds copied."""
+    """Copy member m0 of the full model from 261007 (CapnoBase) or 261013
+    (BIDMC / STEAM2, selected weight decay) into the "full" folder of this
+    script (--reuse-reference-full). It is the same model, seed and training
+    as "full" here, so it is not trained again. Only complete members of the
+    same key, epochs and profile are copied; returns the number of folds
+    copied."""
     variant = VARIANTS["full"]
-    epochs = variant.epochs if args.epoch_cap is None else min(variant.epochs, args.epoch_cap)
-    source = condition_root(Path(args.reference_261007_root), variant.name, spec, dataset_key)
+    epochs = epoch_limit(args, variant)
+    label = DATASET_CONFIGS[dataset_key]["label"]
     target = condition_root(results_root, variant.name, spec, dataset_key)
     copied = 0
-    for subject in subjects:
-        if member_done(target, variant, subject, SINGLE_MEMBER, epochs):
+    for subject, training in trainings.items():
+        key = fold_model_key(variant, training)
+        if member_done(target, variant, subject, SINGLE_MEMBER, epochs, key, label):
             continue
-        if not member_done(source, variant, subject, SINGLE_MEMBER, epochs):
+        if not in_reference(args, spec, dataset_key, subject, training):
             continue
+        source = reference_full_root(args, spec, dataset_key, training)
         tag = safe_tag(subject)
+        member_root = Path("Members") / f"m{SINGLE_MEMBER}"
         files = [
-            path
-            for path in (source / "Members" / f"m{SINGLE_MEMBER}").rglob(f"{tag}_*")
-            if path.is_file() and not path.name.endswith("_training_state.pt")
+            member_root / "Models" / f"{tag}_best.pth",
+            member_root / "Learning_Curves" / f"{tag}_Learning_Curve.csv",
+            member_root / "Training_Audits" / f"{tag}_Training_Audit.csv",
+            member_root / "Predictions" / f"{tag}_test_outputs.npz",
         ]
         summary_path, window_path, _ = member_paths(source, subject, SINGLE_MEMBER)
-        for path in files + [window_path]:
-            destination = target / path.relative_to(source)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, destination)
+        for relative in files + [window_path.relative_to(source)]:
+            if (source / relative).exists():
+                destination = target / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source / relative, destination)
         summary = read_json(summary_path) or {}
-        summary["Copied_From_261007"] = str(summary_path)
+        summary["Copied_From"] = str(summary_path)
+        summary.setdefault("Analysis_Profile", LEGACY_PROFILES.get(label))
+        summary.setdefault("Inference", INFERENCE_PROTOCOL)
+        for field in ("Training_Protocol", "Weight_Decay_Scope", "Weight_Decay_Source"):
+            summary[field] = training[field]
+        summary["Weight_Decay"] = training["Weight_Decay"]
         destination = target / summary_path.relative_to(source)
         destination.parent.mkdir(parents=True, exist_ok=True)
         # Written last: its presence marks the member as complete.
@@ -4294,15 +4758,17 @@ def run_member(
     test_subject: str,
     member: int,
     device: torch.device,
+    training: dict,
 ) -> Optional[dict]:
     """Train and score one member of one fold; returns its summary."""
     root = condition_root(results_root, variant.name, spec, dataset_key)
     summary_path, window_path, _ = member_paths(root, test_subject, member)
-    epochs = variant.epochs if args.epoch_cap is None else min(variant.epochs, args.epoch_cap)
-    if args.resume and member_done(root, variant, test_subject, member, epochs):
+    epochs = epoch_limit(args, variant)
+    dataset_label = DATASET_CONFIGS[dataset_key]["label"]
+    model_key = fold_model_key(variant, training)
+    if args.resume and member_done(root, variant, test_subject, member, epochs, model_key, dataset_label):
         return None
     summary_path.parent.mkdir(parents=True, exist_ok=True)
-    dataset_label = DATASET_CONFIGS[dataset_key]["label"]
     seed = member_seed(spec, dataset_key, test_subject, member)
     train_subjects = [subject for subject in subjects if subject != test_subject]
     start_time = time.time()
@@ -4322,6 +4788,9 @@ def run_member(
         variant.options,
         args.save_features,
         args.resume,
+        val_subjects=training["Val_Subjects"],
+        weight_decay=training["Weight_Decay_Arg"],
+        model_key=model_key,
     )
     summary, window_frame = evaluate_subject_minutes(
         outputs,
@@ -4339,8 +4808,12 @@ def run_member(
             "Seed": int(seed),
             "LOSO_Fold_Index": subjects.index(test_subject) + 1,
             "Window_Config": spec.name,
-            "Model": variant.options.key,
+            "Model": model_key,
             "Model_Label": variant.options.label,
+            "Analysis_Profile": DATASET_CONFIGS[dataset_key]["profile"],
+            "Inference": INFERENCE_PROTOCOL,
+            "Training_Protocol": training["Training_Protocol"],
+            "Weight_Decay_Source": training["Weight_Decay_Source"],
             "Max_Epochs": int(epochs),
             "Best_Val_Loss": audit["Best_Val_Loss"],
             "Best_Epoch": audit["Best_Epoch"],
@@ -4353,6 +4826,8 @@ def run_member(
     )
     summary.update(diagnostics)
     summary.update(subject_data[test_subject]["reference_diagnostics"])
+    if training["Val_Subjects"] is not None:
+        summary["Validation_Subjects"] = " ".join(training["Val_Subjects"])
     if not window_frame.empty:
         window_frame.insert(0, "Member", int(member))
         window_frame.insert(0, "Variant", variant.name)
@@ -4393,6 +4868,7 @@ def mean_sd_table(overall: pd.DataFrame) -> pd.DataFrame:
                 "Window_Config": r["Window_Config"],
                 "Variant": r["Variant"],
                 "Model": r["Model"],
+                "Training": r["Training_Protocol"],
                 "Parameters": int(r["Parameters"]),
                 "Model RF (s)": f"{r['Model_RF_Sec']:.2f}",
                 "N_Subjects": int(r["N_Subjects"]),
@@ -4429,6 +4905,7 @@ def summarize_results(
     layers = pd.concat([model_layer_table(variant) for variant in variants], ignore_index=True)
     structure_by_variant = structure.set_index("Variant")
     overall_rows, subject_tables, minute_frames, missing_rows = [], [], [], []
+    training_frames = []
     for spec in window_specs:
         for dataset_key in dataset_keys:
             dataset_label = DATASET_CONFIGS[dataset_key]["label"]
@@ -4437,20 +4914,28 @@ def summarize_results(
             except Exception as exc:
                 print(f"{dataset_label}: not summarized ({exc})")
                 continue
+            all_subjects = sorted(subject_data)
             subjects = selected_subjects(args, subject_data)
             del subject_data
             release_memory()
+            trainings, no_selection = fold_trainings(args, spec, dataset_key, all_subjects, subjects)
+            training_frames.append(training_table(dataset_label, spec, trainings))
             figure_rows: List[Tuple[str, pd.DataFrame]] = []
             for variant in variants:
                 root = condition_root(results_root, variant.name, spec, dataset_key)
-                epochs = (
-                    variant.epochs
-                    if args.epoch_cap is None
-                    else min(variant.epochs, args.epoch_cap)
-                )
+                epochs = epoch_limit(args, variant)
                 done_paths = []
                 for subject in subjects:
-                    if member_done(root, variant, subject, SINGLE_MEMBER, epochs):
+                    training = trainings.get(subject)
+                    if training is not None and member_done(
+                        root,
+                        variant,
+                        subject,
+                        SINGLE_MEMBER,
+                        epochs,
+                        fold_model_key(variant, training),
+                        dataset_label,
+                    ):
                         done_paths.append(member_paths(root, subject, SINGLE_MEMBER)[1])
                     else:
                         missing_rows.append(
@@ -4459,6 +4944,7 @@ def summarize_results(
                                 "Window_Config": spec.name,
                                 "Variant": variant.name,
                                 "Subject": subject,
+                                "Reason": no_selection.get(subject, "not trained yet"),
                             }
                         )
                 minutes = scored_minutes(read_minutes(done_paths))
@@ -4473,6 +4959,7 @@ def summarize_results(
                     "Window_Config": spec.name,
                     "Variant": variant.name,
                     "Model": label,
+                    "Training_Protocol": TRAINING_PROTOCOLS[dataset_key],
                     "Encoder": info["Encoder"],
                     "Decoder": info["Decoder"],
                     "Encoder_RF_Sec": float(info["Encoder_RF_Sec"]),
@@ -4500,12 +4987,16 @@ def summarize_results(
     minutes_all = pd.concat(minute_frames, ignore_index=True) if minute_frames else pd.DataFrame()
     missing = pd.DataFrame(missing_rows)
     comparison = compare_models(minutes_all)
+    training_by_fold = (
+        pd.concat(training_frames, ignore_index=True) if training_frames else pd.DataFrame()
+    )
     tables = {
         "fft_davies_overall": overall,
         "fft_davies_overall_mean_sd": mean_sd,
         "model_comparison": comparison,
         "model_variants": structure,
         "model_layers": layers,
+        "training_by_fold": training_by_fold,
         "per_subject_fft": per_subject,
         "minutes": minutes_all,
         "incomplete_folds": missing,
@@ -4520,11 +5011,21 @@ def summarize_results(
             "Model_comparison": comparison,
             "Model_variants": structure,
             "Model_layers": layers,
+            "Training_by_fold": training_by_fold,
             "Per_subject": per_subject,
             "Minutes": minutes_all,
             "Incomplete_folds": missing,
         },
     )
+    if not training_by_fold.empty:
+        print("\nTraining settings (validation; weight decay per fold):")
+        for dataset, frame in training_by_fold.groupby("Dataset", sort=False):
+            counts = frame["Weight_Decay"].value_counts().sort_index()
+            print(
+                f"  {dataset:<10s} {frame['Training_Protocol'].iloc[0]}: {frame['Validation'].iloc[0]}; "
+                f"weight decay ({frame['Weight_Decay_Scope'].iloc[0]}) "
+                + ", ".join(f"{value:g} in {count} folds" for value, count in counts.items())
+            )
     if overall.empty:
         print("\nNo complete fold to summarize yet.")
         return
@@ -4567,6 +5068,45 @@ def summarize_results(
     print(f"Excel workbook: {excel_path}")
 
 
+def fold_trainings(
+    args: argparse.Namespace,
+    spec: WindowSpec,
+    dataset_key: str,
+    all_subjects: Sequence[str],
+    subjects: Sequence[str],
+) -> Tuple[Dict[str, dict], Dict[str, str]]:
+    """Training settings of every fold to run, and the folds without a usable
+    261013 selection (subject -> reason)."""
+    trainings, missing = {}, {}
+    for subject in subjects:
+        train_subjects = [other for other in all_subjects if other != subject]
+        try:
+            trainings[subject] = fold_training(args, spec, dataset_key, subject, train_subjects)
+        except SelectionMissing as exc:
+            missing[subject] = str(exc)
+    return trainings, missing
+
+
+def training_table(dataset_label: str, spec: WindowSpec, trainings: Dict[str, dict]) -> pd.DataFrame:
+    """Validation and weight decay of every fold."""
+    return pd.DataFrame(
+        [
+            {
+                "Dataset": dataset_label,
+                "Window_Config": spec.name,
+                "Subject": subject,
+                "Training_Protocol": training["Training_Protocol"],
+                "Validation": training["Validation"],
+                "Validation_Subjects": " ".join(training["Val_Subjects"] or []),
+                "Weight_Decay": training["Weight_Decay"],
+                "Weight_Decay_Scope": training["Weight_Decay_Scope"],
+                "Weight_Decay_Source": training["Weight_Decay_Source"],
+            }
+            for subject, training in trainings.items()
+        ]
+    )
+
+
 def selected_subjects(args: argparse.Namespace, subject_data: Dict[str, dict]) -> List[str]:
     subjects = sorted(subject_data)
     if args.subjects:
@@ -4598,6 +5138,9 @@ def run_experiment(args: argparse.Namespace) -> None:
         DATASET_CONFIGS["steam2"]["rsp_dir"] = str(args.steam2_rsp_dir)
     if args.inspect_capnobase:
         inspect_capnobase(results_root)
+        return
+    if args.inspect_steam2:
+        inspect_steam2(results_root)
         return
     if args.threads:
         torch.set_num_threads(int(args.threads))
@@ -4674,21 +5217,48 @@ def run_experiment(args: argparse.Namespace) -> None:
                         subject_data,
                     )
                 subjects = selected_subjects(args, subject_data)
-                if args.reuse_261007_full and shard_index == 0 and VARIANTS["full"] in variants:
-                    copied = import_261007_full(args, results_root, spec, dataset_key, subjects)
+                trainings, no_selection = fold_trainings(
+                    args, spec, dataset_key, all_subjects, subjects
+                )
+                for subject, reason in no_selection.items():
+                    print(f"{reason}; fold skipped")
+                    failed_rows.append(
+                        {
+                            "Dataset": dataset_label,
+                            "Window_Config": spec.name,
+                            "Variant": "",
+                            "Subject": subject,
+                            "Member": SINGLE_MEMBER,
+                            "Error": reason,
+                        }
+                    )
+                if trainings and TRAINING_PROTOCOLS[dataset_key] == "261013":
+                    counts = pd.Series([t["Weight_Decay"] for t in trainings.values()]).value_counts()
+                    print(
+                        f"{dataset_label}: 261013 settings, subject-wise validation, weight decay "
+                        "selected by 261013 per fold ("
+                        + ", ".join(f"{value:g}: {count}" for value, count in counts.sort_index().items())
+                        + ")"
+                    )
+                if args.reuse_reference_full and shard_index == 0 and VARIANTS["full"] in variants:
+                    copied = import_reference_full(args, results_root, spec, dataset_key, trainings)
                     print(
                         f"{dataset_label}: {copied} fold(s) of the full model copied from "
-                        f"261007 (member m0, {spec.label})"
+                        f"{TRAINING_PROTOCOLS[dataset_key]} (member m0, {spec.label})"
                     )
-                # Full-model folds available in 261007 are copied (by worker 0),
-                # so no worker trains them.
+                # Full-model folds available in the reference script are copied
+                # (by worker 0), so no worker trains them.
                 jobs = [
                     (variant, subject, SINGLE_MEMBER)
                     for variant in variants
                     for subject in subjects
-                    if not (variant.name == "full" and in_261007(args, spec, dataset_key, subject))
+                    if subject in trainings
+                    and not (
+                        variant.name == "full"
+                        and in_reference(args, spec, dataset_key, subject, trainings[subject])
+                    )
                 ]
-                if args.resume or args.reuse_261007_full:
+                if args.resume or args.reuse_reference_full:
                     # Only the folds still to train are shared out, so the
                     # workers stay balanced.
                     jobs = [
@@ -4699,9 +5269,9 @@ def run_experiment(args: argparse.Namespace) -> None:
                             variant,
                             subject,
                             member,
-                            variant.epochs
-                            if args.epoch_cap is None
-                            else min(variant.epochs, args.epoch_cap),
+                            epoch_limit(args, variant),
+                            fold_model_key(variant, trainings[subject]),
+                            dataset_label,
                         )
                     ]
                 mine = [job for index, job in enumerate(jobs) if index % shard_count == shard_index]
@@ -4722,11 +5292,13 @@ def run_experiment(args: argparse.Namespace) -> None:
                             subject,
                             member,
                             device,
+                            trainings[subject],
                         )
                         if summary is not None:
                             print(
                                 f"[{time.strftime('%H:%M:%S')}] {dataset_label} {variant.name} "
-                                f"{subject}: FFT MAE={summary['RR_MAE_Wave_FFT']:.3f} "
+                                f"{subject} (wd {summary['Weight_Decay']:g}): "
+                                f"FFT MAE={summary['RR_MAE_Wave_FFT']:.3f} "
                                 f"(valid min {summary['N60_RefValid']}), best epoch "
                                 f"{summary['Best_Epoch']}/{summary['History_Epochs']}, "
                                 f"train/val windows {summary['Train_Windows']}/"
@@ -4776,18 +5348,30 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Models to train and summarize (default: all three).",
     )
     parser.add_argument(
+        "--reuse-reference-full",
         "--reuse-261007-full",
+        dest="reuse_reference_full",
         action="store_true",
         help=(
-            "Copy the 10 s member m0 of the 261007 full model (same model, seed "
-            "and training) as the full model instead of training it again."
+            "Copy member m0 of the full model (same model, seed and training) "
+            "instead of training it again: CapnoBase from 261007, BIDMC and "
+            "STEAM2 from 261013 (its selected weight decay)."
         ),
     )
     parser.add_argument(
         "--reference-261007-root",
         type=Path,
         default=REFERENCE_261007_ROOT,
-        help="Results root of 261007 (for --reuse-261007-full).",
+        help="Results root of 261007 (CapnoBase full model for --reuse-reference-full).",
+    )
+    parser.add_argument(
+        "--reference-261013-root",
+        type=Path,
+        default=REFERENCE_261013_ROOT,
+        help=(
+            "Results root of 261013: the weight decay selected in every BIDMC / "
+            "STEAM2 fold (WD_Selection) and its full model for --reuse-reference-full."
+        ),
     )
     parser.add_argument("--min-epochs", type=int, default=MIN_EPOCHS)
     parser.add_argument("--patience", type=int, default=PATIENCE)
@@ -4846,6 +5430,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help=(
             "Only read every CapnoBase case, print how it was loaded and save "
             "capnobase_loading_check.csv (no training, no GPU needed)."
+        ),
+    )
+    parser.add_argument(
+        "--inspect-steam2",
+        action="store_true",
+        help=(
+            "Only read every STEAM2 session (261013 reader), print how it was "
+            "loaded and save steam2_loading_check.csv (no training)."
         ),
     )
     parser.add_argument(
