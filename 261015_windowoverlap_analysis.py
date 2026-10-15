@@ -86,6 +86,20 @@ Summary
 * per-subject table, per-minute table, incomplete folds, figures and
   261015_windowoverlap_analysis_results.xlsx.
 
+Memory
+------
+Every window condition and dataset is trained in its own Python process
+(started by the main process, which then writes the summary), so the host
+and GPU memory of one is returned before the next. cuDNN autotuning is off
+(benchmark mode keeps run-time compiled kernels for every new input shape in
+host memory). Out of host or GPU memory or a CUDA / cuDNN failure stops the
+worker instead of failing every following fold (and a memory error while
+reading the data stops it instead of skipping subjects); the worker is
+started again with --resume, which keeps every stored run and continues an
+interrupted one from its last epoch. None of this changes the model, its
+parameters or the training settings. --single-process trains everything in
+one process.
+
 Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261015_windowoverlap_analysis)
   full\{condition}\CapnoBase\Members\m0\   models, learning curves,
       training audits, test predictions; Fold_Summaries\ per subject
@@ -117,6 +131,8 @@ import os
 import random
 import re
 import shutil
+import subprocess
+import sys
 import time
 import warnings
 from dataclasses import dataclass
@@ -495,7 +511,12 @@ def set_seed(seed: int) -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = False
-        torch.backends.cudnn.benchmark = True
+        # No cuDNN autotuning: in benchmark mode cuDNN times (and compiles at
+        # run time) its algorithms for every new input shape and keeps them in
+        # host memory; the last batch of every loader has a fold-dependent
+        # size, so over hundreds of models the host memory runs out. The
+        # model, its parameters and the training are not affected.
+        torch.backends.cudnn.benchmark = False
 
 
 def stable_seed(*parts: object) -> int:
@@ -1857,6 +1878,8 @@ def load_bidmc_subjects(spec: WindowSpec) -> Dict[str, dict]:
             if result is not None:
                 data[subject] = result
         except Exception as exc:
+            if is_fatal_error(exc):
+                raise
             print(f"[BIDMC {subject}] skipped: {exc}")
     return data
 
@@ -2277,6 +2300,8 @@ def load_capnobase_subjects(spec: WindowSpec) -> Dict[str, dict]:
                 result["reference_diagnostics"].update(case["diagnostics"])
                 data[case_id] = result
         except Exception as exc:
+            if is_fatal_error(exc):
+                raise
             print(f"[CapnoBase {case_id}] skipped: {exc}")
     return data
 
@@ -2575,6 +2600,8 @@ def load_steam2_subjects(spec: WindowSpec) -> Dict[str, dict]:
             if result is not None:
                 data[subject] = result
         except Exception as exc:
+            if is_fatal_error(exc):
+                raise
             print(f"[STEAM2 {subject}] skipped: {exc}")
     return data
 
@@ -2693,6 +2720,19 @@ def test_metadata(
             record["starts"],
         )
     ]
+
+
+FATAL_ERROR_WORDS = ("CUDA", "cuDNN", "CUDNN", "CUBLAS", "cublas", "out of memory", "Memory allocation")
+
+
+def is_fatal_error(exc: BaseException) -> bool:
+    """Out of host or GPU memory, or a CUDA / cuDNN failure: the process (and
+    its CUDA context) cannot be trusted any more, so it stops instead of
+    failing every following fold; it is restarted with --resume."""
+    if isinstance(exc, MemoryError):
+        return True
+    text = f"{type(exc).__name__}: {exc}"
+    return any(word in text for word in FATAL_ERROR_WORDS)
 
 
 def release_memory(device: Optional[torch.device] = None) -> None:
@@ -4797,6 +4837,8 @@ def summarize_results(
             try:
                 subject_data = load_dataset(dataset_key, spec)
             except Exception as exc:
+                if is_fatal_error(exc):
+                    raise
                 print(f"{dataset_label}: not summarized ({exc})")
                 continue
             all_subjects = sorted(subject_data)
@@ -4930,6 +4972,58 @@ def summarize_results(
     print(f"Excel workbook: {excel_path}")
 
 
+def task_progress(results_root: Path, spec: WindowSpec, dataset_key: str) -> int:
+    """Number of trained runs stored for one window condition and dataset."""
+    label = DATASET_CONFIGS[dataset_key]["label"]
+    return sum(
+        len(list((folder / f"{spec.order:02d}_{spec.name}" / label / "Fold_Summaries").glob("*_summary.json")))
+        for folder in results_root.glob("full*")
+        if folder.is_dir()
+    )
+
+
+def run_tasks_in_subprocesses(
+    args: argparse.Namespace,
+    results_root: Path,
+    window_specs: Sequence[WindowSpec],
+    dataset_keys: Sequence[str],
+) -> List[str]:
+    """Train every window condition and dataset in its own Python process.
+
+    The process ends when its condition and dataset are done, so all its
+    host and GPU memory is returned before the next one. A process that stops
+    on a fatal error (out of memory, CUDA / cuDNN failure) is started again
+    with --resume, which keeps the stored runs and continues an interrupted
+    run from its last epoch; after two attempts without a new stored run the
+    task is left and reported. Returns the tasks left incomplete."""
+    script = str(Path(__file__).resolve())
+    incomplete = []
+    for spec in window_specs:
+        for dataset_key in dataset_keys:
+            label = DATASET_CONFIGS[dataset_key]["label"]
+            attempt, stalled = 0, 0
+            while True:
+                before = task_progress(results_root, spec, dataset_key)
+                command = [sys.executable, script, *sys.argv[1:], "--windows", spec.name,
+                           "--datasets", dataset_key, "--child-task"]
+                if attempt > 0 and "--resume" not in command:
+                    command.append("--resume")
+                print(f"\n=== {spec.label}, {label}: worker process (attempt {attempt + 1}) ===", flush=True)
+                code = subprocess.run(command).returncode
+                if code == 0:
+                    break
+                attempt += 1
+                stalled = stalled + 1 if task_progress(results_root, spec, dataset_key) <= before else 0
+                if stalled >= 2:
+                    print(f"{spec.label}, {label}: worker stopped (exit code {code}) twice without a new "
+                          "run; left incomplete (run again with --resume)", flush=True)
+                    incomplete.append(f"{spec.name} / {label}")
+                    break
+                print(f"{spec.label}, {label}: worker stopped (exit code {code}); restarting with --resume",
+                      flush=True)
+    return incomplete
+
+
 def selected_subjects(args: argparse.Namespace, subject_data: Dict[str, dict]) -> List[str]:
     subjects = sorted(subject_data)
     if args.subjects:
@@ -4979,7 +5073,11 @@ def run_experiment(args: argparse.Namespace) -> None:
     dataset_keys = [key for key in DATASET_ORDER if key in args.datasets]
     shard_index, shard_count = parse_shard(args.shard)
     manifest = build_manifest(args, results_root, device, variants, window_specs, dataset_keys)
-    manifest_name = "run_manifest.json" if shard_count == 1 else f"run_manifest_shard{shard_index}.json"
+    manifest_name = (
+        "run_manifest.json" if shard_count == 1 else f"run_manifest_shard{shard_index}.json"
+    )
+    if args.child_task:
+        manifest_name = manifest_name.replace(".json", f"_{window_specs[0].name}_{dataset_keys[0]}.json")
     (results_root / manifest_name).write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False, default=_json_default),
         encoding="utf-8",
@@ -5019,9 +5117,28 @@ def run_experiment(args: argparse.Namespace) -> None:
                 release_memory()
         return
 
+    if not args.summary_only and not args.child_task and not args.single_process:
+        # Every window condition and dataset in its own process (memory).
+        incomplete = run_tasks_in_subprocesses(args, results_root, window_specs, dataset_keys)
+        if incomplete:
+            print("\nIncomplete tasks: " + "; ".join(incomplete))
+        if shard_count > 1:
+            print(
+                "\nWorker finished. When every worker is done, run with "
+                "--resume --summary-only to build the summary."
+            )
+            return
+        summarize_results(args, results_root, window_specs, dataset_keys)
+        return
+
     if not args.summary_only:
+        task = (
+            f"_{window_specs[0].name}_{DATASET_CONFIGS[dataset_keys[0]]['label']}"
+            if args.child_task and len(window_specs) == 1 and len(dataset_keys) == 1
+            else ""
+        )
         failed_path = results_root / (
-            "failed_members.csv" if shard_count == 1 else f"failed_members_shard{shard_index}.csv"
+            f"failed_members{task}.csv" if shard_count == 1 else f"failed_members{task}_shard{shard_index}.csv"
         )
         failed_rows = []
         for spec in window_specs:
@@ -5030,6 +5147,12 @@ def run_experiment(args: argparse.Namespace) -> None:
                 try:
                     subject_data = load_dataset(dataset_key, spec)
                 except Exception as exc:
+                    if is_fatal_error(exc):
+                        failed_rows.append({"Dataset": dataset_label, "Subject": "", "Error": repr(exc)})
+                        pd.DataFrame(failed_rows).to_csv(failed_path, index=False, encoding="utf-8-sig")
+                        print(f"{dataset_label}: loading stopped by a fatal error ({exc}); "
+                              "the worker stops (run again with --resume)", flush=True)
+                        raise SystemExit(3)
                     print(f"{dataset_label}: could not be loaded, skipped ({exc})")
                     failed_rows.append(
                         {"Dataset": dataset_label, "Subject": "", "Error": repr(exc)}
@@ -5119,11 +5242,21 @@ def run_experiment(args: argparse.Namespace) -> None:
                             }
                         )
                         print(f"{dataset_label} {spec.name} {subject} {run.name}: FAILED {exc}")
+                        if is_fatal_error(exc):
+                            # The CUDA context and the host memory are not
+                            # reliable any more: stop instead of failing every
+                            # following run; the run is continued with --resume.
+                            pd.DataFrame(failed_rows).to_csv(failed_path, index=False, encoding="utf-8-sig")
+                            print("Fatal error (memory / CUDA): the worker stops; it continues with --resume.",
+                                  flush=True)
+                            raise SystemExit(3)
                     finally:
                         release_memory(device)
                 del subject_data
                 release_memory(device)
         pd.DataFrame(failed_rows).to_csv(failed_path, index=False, encoding="utf-8-sig")
+        if args.child_task:
+            return
         if shard_count > 1:
             print(
                 "\nWorker finished. When every worker is done, run with "
@@ -5225,6 +5358,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Do not train; score the stored folds and write the summary.",
     )
+    parser.add_argument(
+        "--single-process",
+        action="store_true",
+        help=(
+            "Train every condition and dataset in this process (no worker "
+            "processes; a fatal error then stops the run, continue with --resume)."
+        ),
+    )
+    parser.add_argument("--child-task", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--capnobase-path", type=Path, default=None)
     parser.add_argument("--bidmc-path", type=Path, default=None)
