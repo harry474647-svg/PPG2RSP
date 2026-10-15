@@ -98,7 +98,10 @@ reading the data stops it instead of skipping subjects); the worker is
 started again with --resume, which keeps every stored run and continues an
 interrupted one from its last epoch. None of this changes the model, its
 parameters or the training settings. --single-process trains everything in
-one process.
+one process. The output of every worker is printed by the main process
+(also in IDE consoles such as Spyder): the start of every run, the training
+and validation loss, learning rate, best validation loss and patience after
+every epoch, early stopping, and the result of every run.
 
 Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261015_windowoverlap_analysis)
   full\{condition}\CapnoBase\Members\m0\   models, learning curves,
@@ -3428,6 +3431,7 @@ def fit_model(
             torch.cuda.set_rng_state_all(state["cuda_rng"])
         if state.get("stopped", False):
             return history
+        print(f"    resumed after epoch {start_epoch} (best val {best_val:.4f})", flush=True)
     for epoch in range(start_epoch, epochs):
         model.train()
         train_loss = 0.0
@@ -3451,15 +3455,29 @@ def fit_model(
             "Val_Loss": val_loss,
             "Val_Wave_Loss": val_parts["wave"],
         }
+        epoch_lr = float(optimizer.param_groups[0]["lr"])
         scheduler.step()
         history.append(row)
-        if row["Val_Loss"] < best_val - 1e-4:
+        improved = row["Val_Loss"] < best_val - 1e-4
+        if improved:
             best_val = row["Val_Loss"]
             atomic_torch_save(model.state_dict(), checkpoint)
             patience_counter = 0
         elif epoch + 1 >= min_epochs:
             patience_counter += 1
         stop = epoch + 1 >= min_epochs and patience_counter >= patience
+        # Progress output only.
+        print(
+            f"    epoch {epoch + 1:3d}/{epochs}  train loss {train_loss:.4f}  val loss {val_loss:.4f}  "
+            f"lr {epoch_lr:.2e}  best val {best_val:.4f}{' *' if improved else '  '}  "
+            f"patience {patience_counter}/{patience}",
+            flush=True,
+        )
+        if stop:
+            print(
+                f"    early stop after epoch {epoch + 1}: no validation improvement for {patience} epochs",
+                flush=True,
+            )
         if state_path is not None:
             atomic_torch_save(
                 {
@@ -4618,6 +4636,11 @@ def run_member(
         else None
     )
     variant = VARIANTS["full"]
+    print(
+        f"[{time.strftime('%H:%M:%S')}] {dataset_label} {spec.name} {test_subject} {run.name} "
+        f"(wd {run.weight_decay:g}): training, up to {epochs} epochs",
+        flush=True,
+    )
     start_time = time.time()
     outputs, metadata, audit, prediction_path, diagnostics = train_one(
         dataset_key,
@@ -4982,6 +5005,31 @@ def task_progress(results_root: Path, spec: WindowSpec, dataset_key: str) -> int
     )
 
 
+def run_worker(command: Sequence[str]) -> int:
+    """Run a worker process and print its output here line by line, so it is
+    seen in any console (IDE consoles such as Spyder do not show the output a
+    child process writes itself). Stopping the main process stops the worker."""
+    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
+    process = subprocess.Popen(
+        list(command),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        env=env,
+    )
+    try:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+        return process.wait()
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+
+
 def run_tasks_in_subprocesses(
     args: argparse.Namespace,
     results_root: Path,
@@ -5004,12 +5052,12 @@ def run_tasks_in_subprocesses(
             attempt, stalled = 0, 0
             while True:
                 before = task_progress(results_root, spec, dataset_key)
-                command = [sys.executable, script, *sys.argv[1:], "--windows", spec.name,
+                command = [sys.executable, "-u", script, *sys.argv[1:], "--windows", spec.name,
                            "--datasets", dataset_key, "--child-task"]
                 if attempt > 0 and "--resume" not in command:
                     command.append("--resume")
                 print(f"\n=== {spec.label}, {label}: worker process (attempt {attempt + 1}) ===", flush=True)
-                code = subprocess.run(command).returncode
+                code = run_worker(command)
                 if code == 0:
                     break
                 attempt += 1
@@ -5144,6 +5192,7 @@ def run_experiment(args: argparse.Namespace) -> None:
         for spec in window_specs:
             for dataset_key in dataset_keys:
                 dataset_label = DATASET_CONFIGS[dataset_key]["label"]
+                print(f"[{time.strftime('%H:%M:%S')}] {dataset_label} ({spec.label}): reading the data ...", flush=True)
                 try:
                     subject_data = load_dataset(dataset_key, spec)
                 except Exception as exc:
