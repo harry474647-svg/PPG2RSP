@@ -11,13 +11,16 @@ outputs are concatenated and fused by the 1x1 stem fusion (+ GroupNorm) into
 the 24 encoder channels. Every combination of the branches except all three
 (the full model) and none is trained:
 
-  model        stem branches          removed           stem channels
-  no_k32       k=64 + k=128           k=32              16
-  no_k64       k=32 + k=128           k=64              16
-  no_k128      k=32 + k=64            k=128             16
-  only_k32     k=32                   k=64, k=128        8
-  only_k64     k=64                   k=32, k=128        8
-  only_k128    k=128                  k=32, k=64         8
+  model (name in the results)   removed          stem channels   folder
+  k=64 + k=128                  k=32             16              no_k32
+  k=32 + k=128                  k=64             16              no_k64
+  k=32 + k=64                   k=128            16              no_k128
+  only_k=32                     k=64, k=128       8              only_k32
+  only_k=64                     k=32, k=128       8              only_k64
+  only_k=128                    k=32, k=64        8              only_k128
+Every result table, figure and log names a model by its kept branches as
+above (the full model: k=32 + k=64 + k=128); the folder name is also the
+value of --variants.
 
 A removed branch is left out of the network; the remaining branches are
 unchanged and the 1x1 stem fusion maps their 8 or 16 channels to the same 24
@@ -100,20 +103,20 @@ error, Benjamini-Hochberg over the pairs of one dataset.
 
 Memory and progress
 -------------------
-Every dataset is trained in its own Python process (started by the main
-process, which then writes the summary), so its host and GPU memory is
-returned before the next one. cuDNN autotuning is off (benchmark mode keeps
-run-time compiled kernels for every new input shape in host memory). Out of
-host or GPU memory or a CUDA / cuDNN failure stops the worker instead of
-failing every following fold (a memory error while reading the data stops
-it instead of skipping subjects); the worker is started again with
---resume, which keeps every stored run and continues an interrupted one
-from its last epoch. The output of every worker is printed by the main
+Every dataset and model is trained in its own Python process (42-53 runs;
+started by the main process, which then writes the summary), so its host
+and GPU memory is returned before the next one. Out of host or GPU memory
+or a CUDA / cuDNN failure stops the worker instead of failing every
+following fold (a memory error while reading the data stops it instead of
+skipping subjects); the worker is started again with --resume, which keeps
+every stored run and continues an interrupted one from its last epoch. The output of every worker is printed by the main
 process (also in IDE consoles such as Spyder): the start of every run, the
 training and validation loss, learning rate, best validation loss and
 patience after every epoch, early stopping and the result of every run.
-None of this changes the models or the training. --single-process trains
-everything in one process.
+None of this changes the models or the training: data, preprocessing,
+network (apart from the stem branches), loss, optimizer, schedule, seeds,
+cuDNN settings and evaluation are those of 261007 (CapnoBase) and 261013
+(BIDMC, STEAM2). --single-process trains everything in one process.
 
 Data and outputs
 ----------------
@@ -121,7 +124,8 @@ Datasets: CapnoBase, BIDMC and STEAM2 (paths in DATASET_CONFIGS, or
 --capnobase-path / --bidmc-path / --steam2-ppg-dir / --steam2-rsp-dir).
 All results go to PROJECT_ROOT
 (D:\PPG2RSP_RRWaveNet_Inspired\261016_branchwise_ablation); {model} is
-no_k32, no_k64, no_k128, only_k32, only_k64 or only_k128:
+the folder of a model (no_k32, no_k64, no_k128, only_k32, only_k64,
+only_k128; see the table above):
   {model}\01_w10s_nonoverlap\{dataset}\Members\m0\   model, learning
       curve, training audit and test predictions of each fold
   {model}\01_w10s_nonoverlap\{dataset}\Fold_Summaries\   per-subject
@@ -140,6 +144,8 @@ Resume after an interruption:    python 261016_branchwise_ablation.py --resume
                                  (finished folds are reused, an interrupted
                                  fold continues from its last epoch)
 Some datasets / models:          --datasets capnobase --variants only_k32 only_k64
+                                 (folder names; only_k32 = only_k=32,
+                                 no_k128 = k=32 + k=64, ...)
 Results of 261007 / 261013 (full model; weight decay per fold of BIDMC /
 STEAM2):                         --reference-261007-root <261007 results>
                                  --reference-261013-root <261013 results>
@@ -553,15 +559,17 @@ def branch_variant(name: str, label: str, kernels: Sequence[int]) -> Variant:
 
 
 # The full model (all three stem branches; read from 261007 / 261013) and
-# every other combination of the branches except none.
+# every other combination of the branches except none. The key is the
+# results folder and the --variants value; the label (the kept branches) is
+# the name of the model in every result table, figure and log.
 VARIANTS = {
-    "full": branch_variant("full", "Full model (k=32 + k=64 + k=128)", (32, 64, 128)),
-    "no_k32": branch_variant("no_k32", "w/o k=32 (k=64 + k=128)", (64, 128)),
-    "no_k64": branch_variant("no_k64", "w/o k=64 (k=32 + k=128)", (32, 128)),
-    "no_k128": branch_variant("no_k128", "w/o k=128 (k=32 + k=64)", (32, 64)),
-    "only_k32": branch_variant("only_k32", "k=32 only", (32,)),
-    "only_k64": branch_variant("only_k64", "k=64 only", (64,)),
-    "only_k128": branch_variant("only_k128", "k=128 only", (128,)),
+    "full": branch_variant("full", "k=32 + k=64 + k=128", (32, 64, 128)),
+    "no_k32": branch_variant("no_k32", "k=64 + k=128", (64, 128)),
+    "no_k64": branch_variant("no_k64", "k=32 + k=128", (32, 128)),
+    "no_k128": branch_variant("no_k128", "k=32 + k=64", (32, 64)),
+    "only_k32": branch_variant("only_k32", "only_k=32", (32,)),
+    "only_k64": branch_variant("only_k64", "only_k=64", (64,)),
+    "only_k128": branch_variant("only_k128", "only_k=128", (128,)),
 }
 # Trained by default: every model except the full one.
 ABLATION_VARIANTS = tuple(name for name in VARIANTS if name != "full")
@@ -578,12 +586,7 @@ def set_seed(seed: int) -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = False
-        # No cuDNN autotuning: in benchmark mode cuDNN times (and compiles at
-        # run time) its algorithms for every new input shape and keeps them in
-        # host memory; the last batch of every loader has a fold-dependent
-        # size, so over hundreds of models the host memory runs out. The
-        # model, its parameters and the training are not affected.
-        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.benchmark = True
 
 
 def stable_seed(*parts: object) -> int:
@@ -3652,6 +3655,8 @@ def train_one(
         "Val_Windows": len(val_loader.dataset),
         "Val_Wave_Loss_At_Best": float(best_row["Val_Wave_Loss"]),
     }
+    if held_out:
+        diagnostics["Validation_Subjects"] = " ".join(sorted(held_out))
     diagnostics.update(feature_representation_summary(features))
     arrays = {
         "predictions": outputs["predictions"],
@@ -4117,7 +4122,7 @@ def compare_models(minutes: pd.DataFrame) -> pd.DataFrame:
     rows = []
     if minutes.empty or "Variant" not in minutes.columns:
         return pd.DataFrame()
-    order = list(VARIANTS)
+    order = [variant.label for variant in VARIANTS.values()]
     for dataset, frame in minutes.groupby("Dataset", sort=False):
         present = set(frame["Variant"])
         models = [name for name in order if name in present]
@@ -4201,7 +4206,7 @@ def model_layer_table(variant: Variant) -> pd.DataFrame:
         span = (kernel - 1) * dilation + 1
         rows.append(
             {
-                "Variant": variant.name,
+                "Model": variant.label,
                 "Layer": names[module],
                 "In_Channels": int(module.in_channels),
                 "Out_Channels": int(module.out_channels),
@@ -4240,8 +4245,8 @@ def model_variant_table(variants: Sequence[Variant]) -> pd.DataFrame:
         model = variant.options.build()
         layers = model_layer_table(variant)
         row = {
-            "Variant": variant.name,
             "Model": variant.label,
+            "Folder": variant.name,
             "Model_Key": variant.options.key,
             "Stem_Branches": variant.options.stem_description,
             "Stem_Channels": variant.options.stem_channels,
@@ -4712,8 +4717,8 @@ def run_member(
     seed = member_seed(spec, dataset_key, test_subject, member)
     train_subjects = [subject for subject in subjects if subject != test_subject]
     print(
-        f"[{time.strftime('%H:%M:%S')}] {dataset_label} {variant.name} {test_subject} "
-        f"(stem {variant.options.stem_description}, wd {training['Weight_Decay']:g}): "
+        f"[{time.strftime('%H:%M:%S')}] {dataset_label} {variant.label} {test_subject} "
+        f"(wd {training['Weight_Decay']:g}): "
         f"training, up to {epochs} epochs",
         flush=True,
     )
@@ -4750,6 +4755,7 @@ def run_member(
             "Dataset": dataset_label,
             "Subject": str(test_subject),
             "Variant": variant.name,
+            "Model_Name": variant.label,
             "Member": int(member),
             "Seed": int(seed),
             "LOSO_Fold_Index": subjects.index(test_subject) + 1,
@@ -4772,8 +4778,6 @@ def run_member(
     )
     summary.update(diagnostics)
     summary.update(subject_data[test_subject]["reference_diagnostics"])
-    if training["Val_Subjects"] is not None:
-        summary["Validation_Subjects"] = " ".join(training["Val_Subjects"])
     if not window_frame.empty:
         window_frame.insert(0, "Member", int(member))
         window_frame.insert(0, "Variant", variant.name)
@@ -4812,7 +4816,6 @@ def mean_sd_table(overall: pd.DataFrame) -> pd.DataFrame:
             {
                 "Dataset": r["Dataset"],
                 "Window_Config": r["Window_Config"],
-                "Variant": r["Variant"],
                 "Model": r["Model"],
                 "Training": r["Training_Protocol"],
                 "Parameters": int(r["Parameters"]),
@@ -4849,7 +4852,7 @@ def summarize_results(
     summary_root.mkdir(parents=True, exist_ok=True)
     structure = model_variant_table(variants)
     layers = pd.concat([model_layer_table(variant) for variant in variants], ignore_index=True)
-    structure_by_variant = structure.set_index("Variant")
+    structure_by_variant = structure.set_index("Folder")
     overall_rows, subject_tables, minute_frames, missing_rows = [], [], [], []
     training_frames = []
     for spec in window_specs:
@@ -4895,7 +4898,7 @@ def summarize_results(
                             {
                                 "Dataset": dataset_label,
                                 "Window_Config": spec.name,
-                                "Variant": variant.name,
+                                "Model": variant.label,
                                 "Subject": subject,
                                 "Reason": no_selection.get(
                                     subject,
@@ -4906,17 +4909,18 @@ def summarize_results(
                 minutes = scored_minutes(read_minutes(done_paths))
                 if minutes.empty:
                     continue
-                # The full model read from 261013 carries its run name (full_wd...).
-                minutes["Variant"] = variant.name
+                # Named by the kept branches (the full model read from 261013
+                # carries its run name, full_wd...).
+                minutes["Variant"] = variant.label
                 minutes["Window_Config"] = spec.name
                 minute_frames.append(minutes)
-                label = f"{variant.label} (single model)"
+                label = variant.label
                 info = structure_by_variant.loc[variant.name]
                 row = {
                     "Dataset": dataset_label,
                     "Window_Config": spec.name,
-                    "Variant": variant.name,
                     "Model": label,
+                    "Folder": variant.name,
                     "Training_Protocol": TRAINING_PROTOCOLS[dataset_key],
                     "Stem_Branches": info["Stem_Branches"],
                     "Stem_Channels": int(info["Stem_Channels"]),
@@ -4988,7 +4992,7 @@ def summarize_results(
     print("\nModels (receptive field in s; MACs per 10 s window):")
     for _, row in structure.iterrows():
         print(
-            f"  {row['Variant']:<10s} stem {row['Stem_Branches']:<22s} ({row['Stem_Channels']:>2d} channels)  "
+            f"  {row['Model']:<20s} ({row['Stem_Channels']:>2d} stem channels)  "
             f"RF {row['Model_RF_Sec']:.2f} s  params {row['Parameters']:,}  "
             f"MACs {row['MACs_Per_10s_Window'] / 1e6:.2f} M"
         )
@@ -4999,7 +5003,7 @@ def summarize_results(
     )
     for _, row in mean_sd.iterrows():
         print(
-            f"  {row['Dataset']:<10s} {row['Variant']:<10s} subj {row['N_Subjects']:>3d} "
+            f"  {row['Dataset']:<10s} {row['Model']:<20s} subj {row['N_Subjects']:>3d} "
             f"min {row['N_Minutes']:>4d}  MAE {row['MAE (mean ± SD over minutes)']:<15s} "
             f"subject MAE {row['Subject MAE (mean ± SD over subjects)']:<15s} "
             f"r {row['Pearson r']}  mAE {row['mAE [IQR]']}  mMAE {row['mMAE [IQR]']}  "
@@ -5070,15 +5074,10 @@ def training_table(dataset_label: str, spec: WindowSpec, trainings: Dict[str, di
     )
 
 
-def task_progress(results_root: Path, spec: WindowSpec, dataset_key: str) -> int:
-    """Number of trained runs stored for one dataset."""
-    label = DATASET_CONFIGS[dataset_key]["label"]
-    return sum(
-        len(list((results_root / name / f"{spec.order:02d}_{spec.name}" / label / "Fold_Summaries").glob(
-            "*_summary.json"
-        )))
-        for name in VARIANTS
-    )
+def task_progress(results_root: Path, spec: WindowSpec, dataset_key: str, variant: Variant) -> int:
+    """Number of trained runs stored for one dataset and model."""
+    folder = condition_root(results_root, variant.name, spec, dataset_key) / "Fold_Summaries"
+    return len(list(folder.glob("*_summary.json")))
 
 
 def run_worker(command: Sequence[str]) -> int:
@@ -5111,39 +5110,45 @@ def run_tasks_in_subprocesses(
     results_root: Path,
     window_specs: Sequence[WindowSpec],
     dataset_keys: Sequence[str],
+    variants: Sequence[Variant],
 ) -> List[str]:
-    """Train every dataset in its own Python process.
+    """Train every dataset and model in its own Python process (at most one
+    model per subject of one dataset, i.e. 42-53 runs).
 
-    The process ends when its dataset is done, so all its host and GPU memory
-    is returned before the next one. A process that stops on a fatal error
-    (out of memory, CUDA / cuDNN failure) is started again with --resume,
-    which keeps the stored runs and continues an interrupted run from its
-    last epoch; after two attempts without a new stored run the dataset is
-    left and reported. Returns the tasks left incomplete."""
+    The process ends when its dataset and model are done, so all its host and
+    GPU memory is returned before the next one. A process that stops on a
+    fatal error (out of memory, CUDA / cuDNN failure) is started again with
+    --resume, which keeps the stored runs and continues an interrupted run
+    from its last epoch; after two attempts without a new stored run the task
+    is left and reported. Returns the tasks left incomplete."""
     script = str(Path(__file__).resolve())
     incomplete = []
     for spec in window_specs:
         for dataset_key in dataset_keys:
             label = DATASET_CONFIGS[dataset_key]["label"]
-            attempt, stalled = 0, 0
-            while True:
-                before = task_progress(results_root, spec, dataset_key)
-                command = [sys.executable, "-u", script, *sys.argv[1:], "--datasets", dataset_key,
-                           "--child-task"]
-                if attempt > 0 and "--resume" not in command:
-                    command.append("--resume")
-                print(f"\n=== {label}: worker process (attempt {attempt + 1}) ===", flush=True)
-                code = run_worker(command)
-                if code == 0:
-                    break
-                attempt += 1
-                stalled = stalled + 1 if task_progress(results_root, spec, dataset_key) <= before else 0
-                if stalled >= 2:
-                    print(f"{label}: worker stopped (exit code {code}) twice without a new run; left "
-                          "incomplete (run again with --resume)", flush=True)
-                    incomplete.append(label)
-                    break
-                print(f"{label}: worker stopped (exit code {code}); restarting with --resume", flush=True)
+            for variant in variants:
+                attempt, stalled = 0, 0
+                while True:
+                    before = task_progress(results_root, spec, dataset_key, variant)
+                    command = [sys.executable, "-u", script, *sys.argv[1:], "--datasets", dataset_key,
+                               "--variants", variant.name, "--child-task"]
+                    if attempt > 0 and "--resume" not in command:
+                        command.append("--resume")
+                    print(f"\n=== {label}, {variant.label}: worker process (attempt {attempt + 1}) ===",
+                          flush=True)
+                    code = run_worker(command)
+                    if code == 0:
+                        break
+                    attempt += 1
+                    progress = task_progress(results_root, spec, dataset_key, variant)
+                    stalled = stalled + 1 if progress <= before else 0
+                    if stalled >= 2:
+                        print(f"{label}, {variant.label}: worker stopped (exit code {code}) twice without a "
+                              "new run; left incomplete (run again with --resume)", flush=True)
+                        incomplete.append(f"{label} / {variant.label}")
+                        break
+                    print(f"{label}, {variant.label}: worker stopped (exit code {code}); restarting with "
+                          "--resume", flush=True)
     return incomplete
 
 
@@ -5200,7 +5205,7 @@ def run_experiment(args: argparse.Namespace) -> None:
         "run_manifest.json" if shard_count == 1 else f"run_manifest_shard{shard_index}.json"
     )
     if args.child_task:
-        manifest_name = manifest_name.replace(".json", f"_{dataset_keys[0]}.json")
+        manifest_name = manifest_name.replace(".json", f"_{dataset_keys[0]}_{variants[0].name}.json")
     (results_root / manifest_name).write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False, default=_json_default),
         encoding="utf-8",
@@ -5208,7 +5213,7 @@ def run_experiment(args: argparse.Namespace) -> None:
     for variant in variants:
         fields = variant.options.receptive_fields()
         print(
-            f"{variant.name}: {variant.options.label}; receptive field "
+            f"{variant.label}: {variant.options.label}; receptive field "
             f"{fields['Model_RF_Sec']:.2f} s; up to {variant.epochs} epochs; "
             f"{count_parameters(variant.options.build())} parameters"
         )
@@ -5236,10 +5241,10 @@ def run_experiment(args: argparse.Namespace) -> None:
         return
 
     if not args.summary_only and not args.child_task and not args.single_process:
-        # Every dataset in its own process (memory).
-        incomplete = run_tasks_in_subprocesses(args, results_root, window_specs, dataset_keys)
+        # Every dataset and model in its own process (memory).
+        incomplete = run_tasks_in_subprocesses(args, results_root, window_specs, dataset_keys, variants)
         if incomplete:
-            print("\nIncomplete datasets: " + "; ".join(incomplete))
+            print("\nIncomplete tasks: " + "; ".join(incomplete))
         if shard_count > 1:
             print(
                 "\nWorker finished. When every worker is done, run with "
@@ -5251,8 +5256,8 @@ def run_experiment(args: argparse.Namespace) -> None:
 
     if not args.summary_only:
         task = (
-            f"_{DATASET_CONFIGS[dataset_keys[0]]['label']}"
-            if args.child_task and len(dataset_keys) == 1
+            f"_{DATASET_CONFIGS[dataset_keys[0]]['label']}_{variants[0].name}"
+            if args.child_task and len(dataset_keys) == 1 and len(variants) == 1
             else ""
         )
         failed_path = results_root / (
@@ -5296,7 +5301,7 @@ def run_experiment(args: argparse.Namespace) -> None:
                         {
                             "Dataset": dataset_label,
                             "Window_Config": spec.name,
-                            "Variant": "",
+                            "Model": "",
                             "Subject": subject,
                             "Member": SINGLE_MEMBER,
                             "Error": reason,
@@ -5354,7 +5359,7 @@ def run_experiment(args: argparse.Namespace) -> None:
                         )
                         if summary is not None:
                             print(
-                                f"[{time.strftime('%H:%M:%S')}] {dataset_label} {variant.name} "
+                                f"[{time.strftime('%H:%M:%S')}] {dataset_label} {variant.label} "
                                 f"{subject} (wd {summary['Weight_Decay']:g}): "
                                 f"FFT MAE={summary['RR_MAE_Wave_FFT']:.3f} "
                                 f"(valid min {summary['N60_RefValid']}), best epoch "
@@ -5368,13 +5373,13 @@ def run_experiment(args: argparse.Namespace) -> None:
                             {
                                 "Dataset": dataset_label,
                                 "Window_Config": spec.name,
-                                "Variant": variant.name,
+                                "Model": variant.label,
                                 "Subject": subject,
                                 "Member": member,
                                 "Error": repr(exc),
                             }
                         )
-                        print(f"{dataset_label} {variant.name} {subject}: FAILED {exc}")
+                        print(f"{dataset_label} {variant.label} {subject}: FAILED {exc}")
                         if is_fatal_error(exc):
                             # The CUDA context and the host memory are not
                             # reliable any more: stop instead of failing every
@@ -5483,8 +5488,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--single-process",
         action="store_true",
         help=(
-            "Train every dataset in this process (no worker processes; a fatal "
-            "error then stops the run, continue with --resume)."
+            "Train every dataset and model in this process (no worker processes; "
+            "a fatal error then stops the run, continue with --resume)."
         ),
     )
     parser.add_argument("--child-task", action="store_true", help=argparse.SUPPRESS)
