@@ -5336,12 +5336,14 @@ def run_experiment(args: argparse.Namespace) -> None:
                     for subject in subjects
                     if subject in trainings
                 ]
+                # The folds are shared out on the full job list (before the
+                # finished ones are skipped), so a fold always belongs to one
+                # worker, however far the other workers are.
+                mine = [job for index, job in enumerate(jobs) if index % shard_count == shard_index]
                 if args.resume:
-                    # Only the folds still to train are shared out, so the
-                    # workers stay balanced.
-                    jobs = [
+                    mine = [
                         (variant, subject, member)
-                        for variant, subject, member in jobs
+                        for variant, subject, member in mine
                         if not member_done(
                             condition_root(results_root, variant.name, spec, dataset_key),
                             variant,
@@ -5352,10 +5354,9 @@ def run_experiment(args: argparse.Namespace) -> None:
                             dataset_label,
                         )
                     ]
-                mine = [job for index, job in enumerate(jobs) if index % shard_count == shard_index]
                 print(
                     f"\n{dataset_label} ({spec.label}): {len(all_subjects)} LOSOCV folds, "
-                    f"{len(jobs)} folds to train ({len(mine)} in this worker)"
+                    f"{len(mine)} folds to train in this worker"
                 )
                 for variant, subject, member in mine:
                     try:
