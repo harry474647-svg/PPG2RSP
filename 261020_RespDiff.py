@@ -83,8 +83,31 @@ Needed for these datasets (not in the paper or the official code)
   instead of NaN, missing samples (NaN) are interpolated linearly; both are
   counted in Summary/data_check.csv (CapnoBase and BIDMC have none);
 * fixed seeds per fold (the official code sets none), the training state is
-  saved every 25 epochs to resume an interrupted run, every dataset and model
-  is trained in its own process (memory), the loss of every epoch is printed.
+  saved every 25 epochs to resume an interrupted run, the loss of every epoch
+  is printed.
+
+Memory (the model and its results are unchanged)
+-------------------------------------------------
+Most memory goes to the activations of the 6-layer bidirectional RNN
+(batch x 150 steps x 2048 per layer, kept for the backward pass):
+* training: the random steps and noise of the whole batch of 128 are drawn,
+  and the encoders run on the whole batch (BatchNorm statistics of the 128
+  segments, as in the official code); the RNN and the layers after it run on
+  micro-batches of 16 (--train-micro-batch), each followed by its backward
+  pass, and the gradient reaching the encoders is passed back once. The
+  gradient is the gradient of the whole batch (the loss is a sum over the
+  segments; the spectral loss, a batch mean, counts each micro-batch with
+  its share), so only 16 of the 128 RNN activation sets are held at a time;
+* sampling: the PPG features (they depend on the PPG only) are computed once
+  per test batch of 64 instead of at every step of every sample, the RNN runs
+  on micro-batches of 16 (--sample-micro-batch), no autograd graph is kept;
+* the optimizer state is freed before sampling, every subject is segmented as
+  soon as it is read (only the 30 Hz segments are kept), the training
+  segments are held once as float32 tensors, and every dataset and model is
+  trained in its own process. The peak GPU memory of training and sampling
+  is printed and stored with every fold (Training_Peak_GPU_GB,
+  Sampling_Peak_GPU_GB). --train-micro-batch 8 lowers it further (slower);
+  0 runs the whole batch at once (the official way).
 
 Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261020_RespDiff)
 -----------------------------------------------------------------------
@@ -101,6 +124,7 @@ Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261020_RespDiff)
 Run (GPU):                       python 261020_RespDiff.py
 Resume after an interruption:    python 261020_RespDiff.py --resume
 Some datasets / models:          --datasets bidmc --variants respdiff
+Less GPU memory (slower):        --train-micro-batch 8 --sample-micro-batch 8
 Summary of stored results only:  --summary-only
 Check the data without training: --dry-run --no-require-cuda
 """
@@ -214,6 +238,12 @@ LR_GAMMA = 0.1
 TRAIN_BATCH = 128
 TEST_BATCH = 64
 N_SAMPLES = 100
+# Memory: the RNN (and the layers after it) runs on micro-batches of this
+# many segments; the encoders still see the whole batch (128 in training,
+# 64 in sampling), so the BatchNorm statistics, the random draws and the
+# gradient are those of the whole batch (0 = whole batch at once).
+TRAIN_MICRO_BATCH = 16
+SAMPLE_MICRO_BATCH = 16
 
 RR_WINDOW = 60 * FS
 RR_HOP = 20 * FS
@@ -737,13 +767,34 @@ class DiffusionBaseModel(nn.Module):
         self.step_embedding_on_noise = variant.step_embedding_on_noise
 
     def forward(self, ppg: torch.Tensor, noise: torch.Tensor, step: torch.Tensor) -> torch.Tensor:
+        return self.head(self.features(self.ppg_features(ppg), noise, step))
+
+    # The forward pass in three parts (the same computation, in the same
+    # order), so that the PPG features can be computed once per batch and the
+    # RNN can run on micro-batches.
+    def ppg_features(self, ppg: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """E_fine(x) and lambda_ppg * E_coarse(x): they depend on the PPG only."""
+        return self.ppg_encoder2(ppg), self.weight * self.ppg_encoder1(ppg)
+
+    def features(self, ppg_parts: Tuple[torch.Tensor, torch.Tensor], noise: torch.Tensor,
+                 step: torch.Tensor) -> torch.Tensor:
+        fine, coarse = ppg_parts
         embedding = self.diffusion_embedding(step).unsqueeze(2)
-        f1 = self.ppg_encoder2(ppg) + embedding + self.weight * self.ppg_encoder1(ppg)
+        f1 = fine + embedding + coarse
         f2 = self.noise_encoder(noise)
         if self.step_embedding_on_noise:
             f2 = f2 + embedding
-        f = torch.concat([f1, f2], dim=1).permute(0, 2, 1)
+        return torch.concat([f1, f2], dim=1).permute(0, 2, 1)
+
+    def head(self, f: torch.Tensor) -> torch.Tensor:
         return self.de(F.relu(self.diff_model(f)))
+
+    def head_chunked(self, f: torch.Tensor, micro_batch: int) -> torch.Tensor:
+        """head() over micro-batches (every sequence is processed on its own)."""
+        if micro_batch <= 0 or micro_batch >= f.shape[0]:
+            return self.head(f)
+        return torch.cat([self.head(f[start:start + micro_batch]) for start in range(0, f.shape[0], micro_batch)],
+                         dim=0)
 
 
 class DiffusionPipeline(nn.Module):
@@ -759,30 +810,76 @@ class DiffusionPipeline(nn.Module):
         self.loss_fft = FFTLoss()
         self.device = device
 
+    def batch_loss(self, predicted: torch.Tensor, noise: torch.Tensor, noisy_resp: torch.Tensor,
+                   resp: torch.Tensor, current_alpha: torch.Tensor, batch_size: int) -> torch.Tensor:
+        """Official loss of a part of the batch: summed over the parts it is
+        the loss of the whole batch (the spectral loss is a batch mean, so a
+        part counts with its share of the batch)."""
+        L = predicted.shape[-1]
+        residual = noise - predicted
+        loss = (residual ** 2).sum() / L
+        if self.spectral_loss:
+            predicted_resp = (noisy_resp - (1.0 - current_alpha) ** 0.5 * predicted) / (current_alpha ** 0.5)
+            loss = loss + self.loss_fft(predicted_resp, resp) * SPECTRAL_WEIGHT * (predicted.shape[0] / batch_size)
+        return loss
+
     def train_process(self, ppg: torch.Tensor, resp: torch.Tensor) -> torch.Tensor:
+        """Official training loss of one batch (whole batch at once)."""
         B, K, L = ppg.shape
         t = torch.randint(0, self.num_steps, [B]).to(self.device)
         current_alpha = self.alpha_torch[t]
         noise = torch.randn(B, K, L).to(self.device)
         noisy_resp = (current_alpha ** 0.5) * resp + (1.0 - current_alpha) ** 0.5 * noise
         predicted = self.diffusion_model(ppg, noisy_resp, t).permute(0, 2, 1)
-        residual = noise - predicted
-        loss = (residual ** 2).sum() / L
-        if self.spectral_loss:
-            predicted_resp = (noisy_resp - (1.0 - current_alpha) ** 0.5 * predicted) / (current_alpha ** 0.5)
-            loss = loss + self.loss_fft(predicted_resp, resp) * SPECTRAL_WEIGHT
-        return loss
+        return self.batch_loss(predicted, noise, noisy_resp, resp, current_alpha, B)
+
+    def train_step(self, ppg: torch.Tensor, resp: torch.Tensor, micro_batch: int) -> float:
+        """Loss and gradients of one batch; returns the loss.
+
+        With micro_batch, the same random steps and noise are drawn for the
+        whole batch and the encoders run on the whole batch (BatchNorm
+        statistics of the batch, as in the official code); only the RNN and
+        the layers after it run on micro-batches, each followed by its
+        backward pass, so that only one micro-batch of RNN activations is kept
+        at a time. The gradients add up to those of the whole batch; the
+        gradient reaching the encoders is passed back once at the end."""
+        B, K, L = ppg.shape
+        if micro_batch <= 0 or micro_batch >= B:
+            loss = self.train_process(ppg, resp)
+            loss.backward()
+            return float(loss.item())
+        model = self.diffusion_model
+        t = torch.randint(0, self.num_steps, [B]).to(self.device)
+        current_alpha = self.alpha_torch[t]
+        noise = torch.randn(B, K, L).to(self.device)
+        noisy_resp = (current_alpha ** 0.5) * resp + (1.0 - current_alpha) ** 0.5 * noise
+        features = model.features(model.ppg_features(ppg), noisy_resp, t)
+        detached = features.detach().requires_grad_(True)
+        total = 0.0
+        for start in range(0, B, micro_batch):
+            part = slice(start, start + micro_batch)
+            predicted = model.head(detached[part]).permute(0, 2, 1)
+            loss = self.batch_loss(predicted, noise[part], noisy_resp[part], resp[part], current_alpha[part], B)
+            loss.backward()
+            total += float(loss.item())
+            del predicted, loss
+        features.backward(detached.grad)
+        return total
 
     @torch.no_grad()
-    def ddpm_sampling(self, ppg: torch.Tensor, n_samples: int) -> torch.Tensor:
-        """DDPM over all 50 steps (official imputation)."""
+    def ddpm_sampling(self, ppg: torch.Tensor, n_samples: int, micro_batch: int = 0) -> torch.Tensor:
+        """DDPM over all 50 steps (official imputation). The PPG features are
+        computed once for the batch; the RNN runs on micro-batches."""
         B, K, L = ppg.shape
+        model = self.diffusion_model
+        ppg_parts = model.ppg_features(ppg)
         samples = torch.ones(B, n_samples, K, L)
         for i in range(n_samples):
             sample = torch.randn(B, K, L).to(self.device)
             for t in range(self.num_steps - 1, -1, -1):
                 steps = torch.full((B,), t).to(self.device)
-                noise_predicted = self.diffusion_model(ppg, sample, steps).permute(0, 2, 1)
+                noise_predicted = model.head_chunked(model.features(ppg_parts, sample, steps),
+                                                     micro_batch).permute(0, 2, 1)
                 coeff1 = 1 / self.alpha_hat[t] ** 0.5
                 coeff2 = (1 - self.alpha_hat[t]) / (1 - self.alpha[t]) ** 0.5
                 noise = torch.randn_like(noise_predicted)
@@ -794,17 +891,22 @@ class DiffusionPipeline(nn.Module):
         return samples
 
     @torch.no_grad()
-    def ddim_sampling(self, ppg: torch.Tensor, n_samples: int, n_steps: int) -> torch.Tensor:
+    def ddim_sampling(self, ppg: torch.Tensor, n_samples: int, n_steps: int, micro_batch: int = 0) -> torch.Tensor:
         """Deterministic DDIM over n_steps of the 50 (official ddim_sampling,
-        including the min-max scaling of the x0 estimate at every step)."""
+        including the min-max scaling of the x0 estimate over the batch at
+        every step). The PPG features are computed once for the batch; the
+        RNN runs on micro-batches."""
         B, K, L = ppg.shape
+        model = self.diffusion_model
+        ppg_parts = model.ppg_features(ppg)
         samples = torch.ones(B, n_samples, K, L)
         timesteps = np.linspace(self.num_steps - 1, 0, n_steps).astype(int)
         for i in range(n_samples):
             sample = torch.randn(B, K, L).to(self.device)
             for index, t in enumerate(timesteps):
                 steps = torch.full((B,), int(t)).to(self.device)
-                noise_predicted = self.diffusion_model(ppg, sample, steps).permute(0, 2, 1)
+                noise_predicted = model.head_chunked(model.features(ppg_parts, sample, steps),
+                                                     micro_batch).permute(0, 2, 1)
                 alpha_t = self.alpha[t]
                 alpha_next = self.alpha[timesteps[index + 1]] if index + 1 < len(timesteps) else 1.0
                 x0_pred = (sample - (1 - alpha_t) ** 0.5 * noise_predicted) / alpha_t ** 0.5
@@ -816,11 +918,11 @@ class DiffusionPipeline(nn.Module):
             samples[:, i] = sample.detach().cpu()
         return samples
 
-    def sample(self, ppg: torch.Tensor, sampling: str, n_samples: int) -> torch.Tensor:
+    def sample(self, ppg: torch.Tensor, sampling: str, n_samples: int, micro_batch: int = 0) -> torch.Tensor:
         sampler, nfe = SAMPLERS[sampling]
         if sampler == "DDPM":
-            return self.ddpm_sampling(ppg, n_samples)
-        return self.ddim_sampling(ppg, n_samples, nfe)
+            return self.ddpm_sampling(ppg, n_samples, micro_batch)
+        return self.ddim_sampling(ppg, n_samples, nfe, micro_batch)
 
 
 # ---------------------------------------------------------------------------
@@ -839,9 +941,9 @@ def fill_missing(signal: np.ndarray) -> Tuple[np.ndarray, int]:
     return signal, count
 
 
-def capnobase_recordings(cfg: dict) -> Dict[str, List[dict]]:
+def capnobase_recordings(cfg: dict):
+    """(subject, recordings) one case at a time."""
     csv_dir = Path(cfg["data_path"])
-    data = {}
     for case_id in capnobase_case_ids(csv_dir):
         try:
             signal_path = capnobase_file(csv_dir, case_id, "signal")
@@ -852,33 +954,33 @@ def capnobase_recordings(cfg: dict) -> Dict[str, List[dict]]:
             param = read_capnobase_fields(param_path) if param_path else {}
             ppg_fs, _ = _sampling_rate(param, "pleth", cfg["default_fs"])
             co2_fs, _ = _sampling_rate(param, "co2", ppg_fs)
-            data[case_id] = [{"name": case_id, "ppg": ppg, "resp": co2, "ppg_fs": ppg_fs, "resp_fs": co2_fs}]
         except Exception as exc:
             if is_fatal_error(exc):
                 raise
             print(f"[CapnoBase {case_id}] skipped: {exc}")
-    return data
+            continue
+        yield case_id, [{"name": case_id, "ppg": ppg, "resp": co2, "ppg_fs": ppg_fs, "resp_fs": co2_fs}]
 
 
-def bidmc_recordings(cfg: dict) -> Dict[str, List[dict]]:
+def bidmc_recordings(cfg: dict):
+    """(subject, recordings) one record at a time (the file is read once)."""
     mat = sio.loadmat(cfg["data_path"])
-    data = {}
     for index, subject_record in enumerate(mat["data"][0]):
         subject = f"{index + 1:02d}"
         try:
             ppg = np.asarray(subject_record["ppg"][0, 0]["v"]).squeeze()
             resp = np.asarray(subject_record["ref"][0, 0]["resp_sig"][0, 0]["imp"][0, 0]["v"]).squeeze()
-            data[subject] = [{"name": subject, "ppg": ppg, "resp": resp, "ppg_fs": float(cfg["default_fs"]),
-                              "resp_fs": float(cfg["default_fs"])}]
         except Exception as exc:
             if is_fatal_error(exc):
                 raise
             print(f"[BIDMC {subject}] skipped: {exc}")
-    return data
+            continue
+        yield subject, [{"name": subject, "ppg": ppg, "resp": resp, "ppg_fs": float(cfg["default_fs"]),
+                         "resp_fs": float(cfg["default_fs"])}]
 
 
-def steam2_recordings(cfg: dict) -> Dict[str, List[dict]]:
-    data = {}
+def steam2_recordings(cfg: dict):
+    """(subject, recordings) one person at a time."""
     for subject, items in steam2_session_files(Path(cfg["ppg_dir"]), Path(cfg["rsp_dir"])).items():
         try:
             recordings = []
@@ -892,13 +994,13 @@ def steam2_recordings(cfg: dict) -> Dict[str, List[dict]]:
                 for piece_index, (p, r, p_fs, r_fs) in enumerate(pieces):
                     recordings.append({"name": f"{name}_piece{piece_index + 1}", "ppg": p, "resp": r,
                                        "ppg_fs": p_fs, "resp_fs": r_fs})
-            if recordings:
-                data[subject] = recordings
         except Exception as exc:
             if is_fatal_error(exc):
                 raise
             print(f"[STEAM2 {subject}] skipped: {exc}")
-    return data
+            continue
+        if recordings:
+            yield subject, recordings
 
 
 def segment_recording(recording: dict) -> Optional[dict]:
@@ -929,8 +1031,11 @@ def load_dataset(dataset_key: str) -> Dict[str, List[dict]]:
     cfg = DATASET_CONFIGS[dataset_key]
     readers = {"capnobase": capnobase_recordings, "bidmc": bidmc_recordings, "steam2": steam2_recordings}
     data = {}
-    for subject, recordings in readers[dataset_key](cfg).items():
+    # Every subject is segmented as soon as it is read, so only its 5 s
+    # segments at 30 Hz are kept, not the raw signals.
+    for subject, recordings in readers[dataset_key](cfg):
         segmented = [item for item in (segment_recording(r) for r in recordings) if item is not None]
+        del recordings
         if segmented:
             data[subject] = segmented
         else:
@@ -959,18 +1064,18 @@ def stack_scaled(recordings: Sequence[dict]) -> Tuple[np.ndarray, np.ndarray, in
 
 
 class SegmentDataset(Dataset):
+    """Scaled segments as float32 tensors (converted once; the model gets the
+    same float32 values as with the official per-item conversion)."""
+
     def __init__(self, ppg: np.ndarray, resp: np.ndarray):
-        self.ppg = ppg
-        self.resp = resp
+        self.ppg = torch.tensor(ppg, dtype=torch.float32)
+        self.resp = torch.tensor(resp, dtype=torch.float32)
 
     def __len__(self) -> int:
         return len(self.ppg)
 
     def __getitem__(self, index: int):
-        return (
-            torch.tensor(self.ppg[index, None, :], dtype=torch.float32),
-            torch.tensor(self.resp[index, None, :], dtype=torch.float32),
-        )
+        return self.ppg[index, None, :], self.resp[index, None, :]
 
 
 def data_check_rows(dataset_key: str, data: Dict[str, List[dict]]) -> List[dict]:
@@ -1060,6 +1165,16 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def reset_peak_memory(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+
+
+def peak_memory_gb(device: torch.device) -> float:
+    """Largest GPU memory held by tensors since the last reset (GB)."""
+    return float(torch.cuda.max_memory_allocated(device) / 1024 ** 3) if device.type == "cuda" else float("nan")
+
+
 def fold_root(results_root: Path, variant: Variant, dataset_key: str) -> Path:
     return results_root / variant.name / DATASET_CONFIGS[dataset_key]["label"]
 
@@ -1107,8 +1222,9 @@ def train_fold(
     key: dict,
     root: Path,
     device: torch.device,
-) -> Tuple[DiffusionPipeline, float]:
-    """Official training loop; returns the model after the last epoch."""
+) -> Tuple[DiffusionPipeline, float, float]:
+    """Official training loop; returns the model after the last epoch, the
+    training time and the peak GPU memory of the training (GB)."""
     model_dir, log_dir = root / "Models", root / "Training_Logs"
     model_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -1121,7 +1237,7 @@ def train_fold(
     if args.resume and final_path.exists() and read_json(key_path) == key:
         model.load_state_dict(torch.load(final_path, map_location=device))
         print(f"    trained model reused ({final_path.name})", flush=True)
-        return model, 0.0
+        return model, 0.0, float("nan")
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     milestones = [int(fraction * args.epochs) for fraction in LR_MILESTONE_FRACTIONS]
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=LR_GAMMA)
@@ -1141,18 +1257,19 @@ def train_fold(
                 torch.cuda.set_rng_state_all(state["cuda_rng"])
             history, start_epoch, elapsed = list(state["history"]), int(state["epoch"]), float(state["seconds"])
             print(f"    resumed after epoch {start_epoch}", flush=True)
+        del state
     elif state_path.exists():
         state_path.unlink()
+    reset_peak_memory(device)
     for epoch in range(start_epoch, args.epochs):
         started = time.time()
         model.train()
         avg_loss, batch_no = 0.0, 0
         learning_rate = float(optimizer.param_groups[0]["lr"])
         for batch_no, (ppg, resp) in enumerate(loader, start=1):
-            optimizer.zero_grad()
-            loss = model.train_process(ppg.to(device), resp.to(device))
-            loss.backward()
-            avg_loss += loss.item() / ppg.shape[0]
+            optimizer.zero_grad(set_to_none=True)
+            loss = model.train_step(ppg.to(device), resp.to(device), args.train_micro_batch)
+            avg_loss += loss / ppg.shape[0]
             optimizer.step()
         scheduler.step()
         seconds = time.time() - started
@@ -1161,7 +1278,7 @@ def train_fold(
         history.append({"Epoch": epoch + 1, "Train_Loss": epoch_loss, "LR": learning_rate, "Seconds": seconds})
         print(f"    epoch {epoch + 1:3d}/{args.epochs}  train loss {epoch_loss:.5f}  lr {learning_rate:.1e}  "
               f"{seconds:.1f} s", flush=True)
-        if (epoch + 1) % CHECKPOINT_EVERY == 0 and epoch + 1 < args.epochs:
+        if args.checkpoint_every > 0 and (epoch + 1) % args.checkpoint_every == 0 and epoch + 1 < args.epochs:
             atomic_torch_save(
                 {
                     "key": key,
@@ -1177,12 +1294,19 @@ def train_fold(
                 },
                 state_path,
             )
+    peak = peak_memory_gb(device)
     atomic_torch_save(model.state_dict(), final_path)
     write_json(key_path, key)
     pd.DataFrame(history).to_csv(log_dir / f"{subject}_loss.csv", index=False, encoding="utf-8-sig")
     if state_path.exists():
         state_path.unlink()
-    return model, elapsed
+    # The optimizer state (two copies of every weight) and the training data
+    # are not needed for sampling.
+    del optimizer, scheduler, loader
+    release_memory(device)
+    memory = f", peak GPU memory {peak:.2f} GB" if device.type == "cuda" else ""
+    print(f"    training done: {elapsed / 60:.1f} min{memory}", flush=True)
+    return model, elapsed, peak
 
 
 def test_fold(
@@ -1197,6 +1321,7 @@ def test_fold(
     device: torch.device,
     key: dict,
     training_seconds: float,
+    training_peak_gb: float,
 ) -> dict:
     """Samples every 5 s segment of the held-out subject (batches of 64 in
     recording order, as in the official code) and scores every recording."""
@@ -1204,12 +1329,15 @@ def test_fold(
     set_seed(stable_seed("261020-respdiff-sample", dataset_key, subject, sampling))
     model.eval()
     loader = DataLoader(SegmentDataset(test_ppg, test_resp), batch_size=TEST_BATCH, shuffle=False)
+    reset_peak_memory(device)
     started = time.time()
     outputs = []
     for ppg, _ in loader:
-        samples = model.sample(ppg.to(device), sampling, args.n_samples)
+        samples = model.sample(ppg.to(device), sampling, args.n_samples, args.sample_micro_batch)
         outputs.append(samples[:, :, 0, :].mean(dim=1).numpy().astype(np.float64))
+        del samples
     sampling_seconds = time.time() - started
+    sampling_peak = peak_memory_gb(device)
     output = np.concatenate(outputs, axis=0)
     segment_mae = float(np.mean(np.abs(output - test_resp).mean(axis=1)))
 
@@ -1252,6 +1380,10 @@ def test_fold(
         "N_Samples": int(args.n_samples),
         "Training_Seconds": float(training_seconds),
         "Sampling_Seconds": float(sampling_seconds),
+        "Training_Peak_GPU_GB": float(training_peak_gb),
+        "Sampling_Peak_GPU_GB": float(sampling_peak),
+        "Train_Micro_Batch": int(args.train_micro_batch),
+        "Sample_Micro_Batch": int(args.sample_micro_batch),
         "Training_Key": key,
     }
     result_dir, prediction_dir = root / "Fold_Results", root / "Predictions"
@@ -1302,20 +1434,24 @@ def run_task(args: argparse.Namespace, results_root: Path, dataset_key: str, var
             todo = [s for s in variant.samplers if not (args.resume and fold_done(root, subject, s, key, args.n_samples))]
             if not todo:
                 continue
+            model = None
             try:
                 print(f"[{time.strftime('%H:%M:%S')}] {label} {variant.label} {subject}: training on "
                       f"{len(train_ppg)} segments of {len(train_subjects)} subjects, {args.epochs} epochs",
                       flush=True)
-                model, seconds = train_fold(args, variant, dataset_key, subject, train_ppg, train_resp, key,
-                                            root, device)
+                del train_recordings
+                model, seconds, peak = train_fold(args, variant, dataset_key, subject, train_ppg, train_resp, key,
+                                                  root, device)
+                del train_ppg, train_resp
                 for sampling in todo:
                     summary = test_fold(args, model, variant, dataset_key, subject, data[subject], sampling, root,
-                                        device, key, seconds)
+                                        device, key, seconds, peak)
                     print(f"[{time.strftime('%H:%M:%S')}] {label} {variant.label} {subject} {summary['Sampling']}: "
                           f"RR MAE {summary['RR_MAE']:.3f} bpm (official code {summary['RR_MAE_Official_Code']:.3f}), "
                           f"waveform MAE {summary['Waveform_MAE']:.3f}, {summary['N_Windows']} windows, "
-                          f"sampling {summary['Sampling_Seconds']:.0f} s", flush=True)
-                del model
+                          f"sampling {summary['Sampling_Seconds']:.0f} s"
+                          + (f", peak GPU memory {summary['Sampling_Peak_GPU_GB']:.2f} GB"
+                             if device.type == "cuda" else ""), flush=True)
             except Exception as exc:
                 failed.append({"Dataset": label, "Model": variant.label, "Subject": subject, "Error": repr(exc)})
                 print(f"{label} {variant.label} {subject}: FAILED {exc}", flush=True)
@@ -1324,6 +1460,7 @@ def run_task(args: argparse.Namespace, results_root: Path, dataset_key: str, var
                     print("Fatal error (memory / CUDA): the worker stops; it continues with --resume.", flush=True)
                     raise SystemExit(3)
             finally:
+                del model
                 release_memory(device)
     write_failed(results_root, dataset_key, variants, failed)
 
@@ -1481,6 +1618,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=EPOCHS)
     parser.add_argument("--n-samples", type=int, default=N_SAMPLES,
                         help="Samples averaged per segment (official code: 100).")
+    parser.add_argument("--train-micro-batch", type=int, default=TRAIN_MICRO_BATCH,
+                        help="Segments per RNN micro-batch in training (memory; the gradient is that of the "
+                             "whole batch of 128). 0 = the whole batch at once.")
+    parser.add_argument("--sample-micro-batch", type=int, default=SAMPLE_MICRO_BATCH,
+                        help="Segments per RNN micro-batch in sampling (memory). 0 = the whole batch of 64.")
+    parser.add_argument("--checkpoint-every", type=int, default=CHECKPOINT_EVERY,
+                        help="Save the training state every this many epochs (resume); 0 = never.")
     parser.add_argument("--resume", action="store_true",
                         help="Reuse finished folds and trained models; continue interrupted training.")
     parser.add_argument("--summary-only", action="store_true")
