@@ -1,0 +1,6 @@
+﻿Dataset,Window_Config,Model,Training,Parameters,Model RF (s),N_Subjects,N_Minutes,MAE (mean ± SD over minutes),Subject MAE (mean ± SD over subjects),Bias (mean ± SD over minutes),LoA,RMSE,Pearson r,Within 1 / 2 bpm (%),mAE [IQR],mMAE [IQR],Wave PCC (mean ± SD over minutes)
+BIDMC,w10s_nonoverlap,full decoder (k7 d12 -> k5 d24),261013,9377,11.19,53,397,1.014 ± 1.861,1.107 ± 1.441,0.263 ± 2.103,-3.86 to 4.39,2.117,0.69,75.6 / 90.7,0.469 [0.188-0.984],0.690 [0.453-1.129],0.448 ± 0.310
+BIDMC,w10s_nonoverlap,"same RF, no dilation (k73 -> k97)",261013,46497,11.19,53,397,1.026 ± 1.778,1.069 ± 1.144,0.154 ± 2.048,-3.86 to 4.17,2.051,0.72,74.3 / 89.9,0.469 [0.188-1.047],0.662 [0.506-1.154],0.434 ± 0.302
+BIDMC,w10s_nonoverlap,"same kernel, no dilation (k7 -> k5)",261013,9377,8.72,53,397,1.184 ± 2.259,1.288 ± 1.823,0.239 ± 2.540,-4.74 to 5.22,2.548,0.6,73.6 / 88.9,0.484 [0.188-1.047],0.721 [0.479-1.154],0.426 ± 0.306
+BIDMC,w10s_nonoverlap,front layer only (k7 d12),261013,8721,9.69,53,397,1.050 ± 1.846,1.094 ± 1.426,0.320 ± 2.100,-3.79 to 4.44,2.121,0.702,72.5 / 89.4,0.469 [0.188-1.062],0.734 [0.475-1.221],0.466 ± 0.297
+BIDMC,w10s_nonoverlap,back layer only (k5 d24),261013,6961,10.06,53,397,0.997 ± 1.682,1.056 ± 0.877,0.337 ± 1.927,-3.44 to 4.11,1.954,0.748,75.1 / 90.4,0.469 [0.219-1.000],0.738 [0.506-1.349],0.442 ± 0.326

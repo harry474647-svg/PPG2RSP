@@ -1,0 +1,6 @@
+﻿Model,Folder,Model_Key,Decoder,Encoder_RF_Samples,Encoder_RF_Sec,Decoder_RF_Samples,Decoder_RF_Sec,Model_RF_Samples,Model_RF_Sec,Parameters,Decoder_Parameters,MACs_Per_10s_Window
+full decoder (k7 d12 -> k5 d24),full,rrwavenet_fs64_stemfusion_dec12-24_p0.10,"Conv(24->16, k7, d12) -> Conv(16->8, k5, d24)",421,6.578125,169,2.640625,716,11.1875,9377,3400,5493760
+"same RF, no dilation (k73 -> k97)",dec_same_rf,rrwavenet_fs64_stemfusion_decc16k73d1-c8k97d1_p0.10,"Conv(24->16, k73, d1) -> Conv(16->8, k97, d1)",421,6.578125,169,2.640625,716,11.1875,46497,40520,29250560
+"same kernel, no dilation (k7 -> k5)",dec_same_kernel,rrwavenet_fs64_stemfusion_decc16k7d1-c8k5d1_p0.10,"Conv(24->16, k7, d1) -> Conv(16->8, k5, d1)",421,6.578125,11,0.171875,558,8.71875,9377,3400,5493760
+front layer only (k7 d12),dec_front_only,rrwavenet_fs64_stemfusion_decc16k7d12_p0.10,"Conv(24->16, k7, d12)",421,6.578125,73,1.140625,620,9.6875,8721,2736,5089280
+back layer only (k5 d24),dec_back_only,rrwavenet_fs64_stemfusion_decc8k5d24_p0.10,"Conv(24->8, k5, d24)",421,6.578125,97,1.515625,644,10.0625,6961,984,3978240
