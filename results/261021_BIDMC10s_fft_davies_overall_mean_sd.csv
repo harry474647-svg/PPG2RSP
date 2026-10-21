@@ -1,0 +1,4 @@
+﻿Dataset,Window_Config,Model,Training,Parameters,Model RF (s),N_Subjects,N_Minutes,MAE (mean ± SD over minutes),Subject MAE (mean ± SD over subjects),Bias (mean ± SD over minutes),LoA,RMSE,Pearson r,Within 1 / 2 bpm (%),mAE [IQR],mMAE [IQR],Wave PCC (mean ± SD over minutes)
+BIDMC,w10s_nonoverlap,8 filters per branch (full),261013,9377,11.19,53,397,1.014 ± 1.861,1.107 ± 1.441,0.263 ± 2.103,-3.86 to 4.39,2.117,0.690,75.6 / 90.7,0.469 [0.188-0.984],0.690 [0.453-1.129],0.448 ± 0.310
+BIDMC,w10s_nonoverlap,4 filters per branch,261013,8157,11.19,53,397,1.171 ± 2.167,1.194 ± 1.828,0.121 ± 2.461,-4.70 to 4.94,2.460,0.599,74.3 / 89.4,0.469 [0.188-1.047],0.672 [0.463-1.141],0.456 ± 0.304
+BIDMC,w10s_nonoverlap,12 filters per branch,261013,10597,11.19,53,397,1.000 ± 1.845,1.030 ± 1.478,0.417 ± 2.057,-3.61 to 4.45,2.097,0.711,75.6 / 91.7,0.484 [0.188-1.000],0.725 [0.475-1.072],0.444 ± 0.307
