@@ -1,0 +1,4 @@
+﻿Model,Folder,Model_Key,Filters_Per_Branch,Stem_Channels,Stem_Fusion,Decoder,Encoder_RF_Samples,Encoder_RF_Sec,Decoder_RF_Samples,Decoder_RF_Sec,Model_RF_Samples,Model_RF_Sec,Parameters,Stem_Parameters,Stem_Fusion_Parameters,MACs_Per_10s_Window
+8 filters per branch (full),full,rrwavenet_fs64_stemfusion_dec12-24_p0.10,8,24,"Conv1d(24 -> 24, k1)","Conv(24->16, k7, d12) -> Conv(16->8, k5, d24)",421,6.578125,169,2.640625,716,11.1875,9377,1864,648,5493760
+4 filters per branch,stem4,rrwavenet_fs64_stemfusion_stem4_dec12-24_p0.10,4,12,"Conv1d(12 -> 24, k1)","Conv(24->16, k7, d12) -> Conv(16->8, k5, d24)",421,6.578125,169,2.640625,716,11.1875,8157,932,360,4736000
+12 filters per branch,stem12,rrwavenet_fs64_stemfusion_stem12_dec12-24_p0.10,12,36,"Conv1d(36 -> 24, k1)","Conv(24->16, k7, d12) -> Conv(16->8, k5, d24)",421,6.578125,169,2.640625,716,11.1875,10597,2796,936,6251520

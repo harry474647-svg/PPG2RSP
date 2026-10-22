@@ -1,0 +1,4 @@
+﻿Dataset,Window_Config,Model,Training,Parameters,Model RF (s),N_Subjects,N_Minutes,MAE (mean ± SD over minutes),Subject MAE (mean ± SD over subjects),Bias (mean ± SD over minutes),LoA,RMSE,Pearson r,Within 1 / 2 bpm (%),mAE [IQR],mMAE [IQR],Wave PCC (mean ± SD over minutes)
+CapnoBase,w10s_nonoverlap,8 filters per branch (full),261007,9377,11.19,42,299,1.298 ± 4.283,1.495 ± 4.393,-0.585 ± 4.437,-9.28 to 8.11,4.469,0.791,83.3 / 89.6,0.219 [0.078-0.664],0.425 [0.164-1.269],0.778 ± 0.220
+CapnoBase,w10s_nonoverlap,4 filters per branch,261007,8157,11.19,42,299,1.417 ± 4.460,1.636 ± 4.803,-0.540 ± 4.649,-9.65 to 8.57,4.672,0.77,82.9 / 88.3,0.234 [0.078-0.656],0.416 [0.196-1.281],0.779 ± 0.225
+CapnoBase,w10s_nonoverlap,12 filters per branch,261007,10597,11.19,42,299,1.705 ± 4.844,1.931 ± 5.131,0.064 ± 5.136,-10.00 to 10.13,5.128,0.723,79.9 / 86.6,0.281 [0.078-0.781],0.449 [0.188-1.194],0.764 ± 0.239
