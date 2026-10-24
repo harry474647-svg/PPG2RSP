@@ -1,403 +1,75 @@
-r"""261024_RRWaveNet_QC30s_Stride10s: 261007_RRWaveNet_Ensemble_NoEvent
-(CapnoBase), 261013_RRWaveNet_Adult_SubjectVal_WD (BIDMC, STEAM2) and the
-reference QC window count comparison in one script, with the respiratory
+r"""261024_RRWaveNet_QC30s_Stride10s: number of subjects and input windows
+before and after QC for CapnoBase, BIDMC and STEAM2, with the respiratory
 reference QC on 30 s windows every 10 s.
 
-What this script is (nothing else changes)
-------------------------------------------
-* The three scripts 261007_RRWaveNet_Ensemble_NoEvent_QC30s_Stride10s.py,
-  261013_RRWaveNet_Adult_SubjectVal_WD_QC30s_Stride10s.py and
-  Compare_Reference_QC_Window_Counts.py in one file.
-* CapnoBase runs the 261007 code and BIDMC and STEAM2 the 261013 code, as
-  recommended for those scripts. Model, data reading, targets, training,
-  ensemble, evaluation and summary of each are unchanged: what the two
-  scripts share is written once, and where they differ both versions are
-  kept (names ending in _261007 or _261013; in the training functions the
-  model options decide: ModelOptions.weight_decay is None for 261007 and a
-  weight decay candidate for 261013).
-* Respiratory reference QC: the quality rule is evaluated on 30 s windows
-  every 10 s (REF_QC_WINDOW_SEC = 30, REF_QC_HOP_SEC = 10; 32 s / 8 s in
-  261007 and 261013). The model input windows, the model and the 60 s
-  evaluation are not changed.
-* --compare-qc: the window counts under the old (32 s / 8 s) and the new
-  (30 s / 10 s) reference QC with the data loaders of this script, no
-  training (see "Reference QC window counts" at the end).
-A dataset given with --datasets always runs with its code (CapnoBase 261007;
-BIDMC, STEAM2 261013); --windows and --variants are options of the 261007
-runs, --weight-decays, --val-subject-ratio and --reference-root of the 261013
-runs; the other options apply to both.
+Only the data are read and checked. The data reading and QC are those of
+261007_RRWaveNet_Ensemble_NoEvent for CapnoBase and of
+261013_RRWaveNet_Adult_SubjectVal_WD for BIDMC and STEAM2, unchanged except
+the respiratory reference QC window and stride (REF_QC_WINDOW_SEC = 30 s,
+REF_QC_HOP_SEC = 10 s; 32 s / 8 s in 261007 and 261013).
 
-Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261024_RRWaveNet_QC30s_Stride10s)
-  261007_CapnoBase\       outputs of the 261007 code (CapnoBase), below
-  261013_BIDMC_STEAM2\    outputs of the 261013 code (BIDMC, STEAM2), below
-  QC_Window_Comparison\   --compare-qc
+QC stages
+---------
+Before QC           every input window (10 s, 0% overlap; --windows) of every
+                    recording, resampled to 64 Hz (STEAM2: of every piece of
+                    a session between EEGLAB boundary events).
+After signal QC     at least 50% of the window's samples with usable PPG and
+                    at least 50% with structurally valid RSP. Structurally
+                    valid: in 10 s blocks, at least 50% finite samples, not
+                    flat, not saturated. Usable PPG: structurally valid and
+                    inside a beat whose interval fits a heart rate of
+                    40-180 bpm (CapnoBase 40-220), is at most 3 s and at most
+                    2.2 times (or 1/2.2 of) the median interval, and whose
+                    correlation with the pulse template is at least 0.5.
+                    CapnoBase: samples in an expert-annotated artifact of the
+                    PPG or the capnogram are not valid, and the capnogram is
+                    first aligned to the PPG (transport delay).
+After reference QC  passes the signal QC, and at least 50% of the window's
+                    samples are valid in the respiratory reference QC and none
+                    lies in an expert-annotated reference artifact
+                    (CapnoBase). Respiratory reference QC: the reference is
+                    checked on 30 s windows every 10 s; a 30 s window passes
+                    when the count-orig breathing rate agrees with the FFT
+                    rate (CapnoBase: with the rate of the expert breath
+                    labels) within 2 breaths/min, at least 75% of the
+                    breathing time lies in clean cycles and the rate is in
+                    the dataset's band (6-30 breaths/min; CapnoBase 3-60). A
+                    sample is valid when at least half of the 30 s windows
+                    covering it pass.
+Subjects: found in the data (STEAM2: with at least one session whose PPG
+and RSP files pair up), read without error, with at least one window
+before QC, and with at least one window after each QC stage. Subjects with
+no window left after the signal QC are counted as well (with their windows
+before QC); the 261007 / 261013 data reading leaves them out.
 
-Run (GPU), all three datasets:   python 261024_RRWaveNet_QC30s_Stride10s.py
-Resume after an interruption:    python 261024_RRWaveNet_QC30s_Stride10s.py --resume
-One code only:                   --datasets capnobase   (261007)
-                                 --datasets bidmc steam2   (261013)
-261007 variants / windows:       --variants full --windows w10s_nonoverlap
-Parallel workers (e.g. 4):       --resume --shard 0/4 ... --shard 3/4, then
-                                 --resume --summary-only
-                                 (261007 shares out member runs, 261013
-                                 whole folds)
-Summary of stored results only:  --summary-only
-Check the data without training: --dry-run --no-require-cuda
-Check how CapnoBase / STEAM2 are read: --inspect-capnobase / --inspect-steam2
-                                 --no-require-cuda
-Reference QC window counts:      --compare-qc --no-require-cuda
-                                 (--qc-windows w10s_nonoverlap w20s_nonoverlap)
+Outputs (CSV, Excel-compatible UTF-8 BOM; PROJECT_ROOT =
+D:\PPG2RSP_RRWaveNet_Inspired\261024_RRWaveNet_QC30s_Stride10s)
+  qc_counts_by_dataset.csv   subjects and windows before / after QC, per
+                             dataset and input window
+  qc_counts_by_subject.csv   windows before / after QC per subject
+  qc_unread_subjects.csv     subjects found but not read (reading error)
+  qc_window_detail.csv       with --save-window-detail: every window with
+                             its QC values
 
-
-==========================================================================
-261007_RRWaveNet_Ensemble_NoEvent (CapnoBase)
-==========================================================================
-261006_RRWaveNet_Ensemble without the breath-event head; three-model
-ensemble, LOSOCV and the ablation study, with 10 s and then 20 s input
-windows. In this script it runs CapnoBase (BIDMC and STEAM2 run the
-261013 code below).
-
-Differences from 261006_RRWaveNet_Ensemble (nothing else changes):
-* no breath-event head and no event or count loss: the model has one
-  output, the respiratory waveform, and is trained (and its epoch picked)
-  with the v16 waveform loss alone, the 260928 loss;
-* three models per LOSOCV fold instead of five;
-* input windows of 10 s and then 20 s (everything for 10 s first), and
-  the summary compares 20 s with 10 s.
-The two random initializations of the removed head are still drawn and
-discarded, so a seed gives the same initial weights, batch order and
-dropout as in 261006_RRWaveNet_Ensemble: runs of the two scripts with the
-same seed differ only in the loss.
-
-Why without the event head: in the CapnoBase LOSOCV (10 s windows, same
-seed, single model) the waveform-only model had a pooled FFT MAE of 1.298
-against 1.523 with the head, with no difference over subjects (13 better,
-12 worse, 17 equal; Wilcoxon p = 0.48): slow breathers drawn at twice
-their rate improved without the head (0016 8.77 -> 0.29 breaths/min) and
-the fast-breathing infant 0018 was better with it (0.52 -> 3.73). The
-head was added for breath counting on the predicted waveform; the rate
-is now its FFT peak, which the head does not use.
-
-Model (the 260928 layout; no identity channel, no gating, no added module)
----------------------------------------------------------------------------
-raw PPG (min-max per input window, 10 s or 20 s) at 64 Hz
--> three stem branches: Conv1d with kernels 32 / 64 / 128 samples
-   (0.5 / 1 / 2 s), 8 filters each, GroupNorm, GELU  -> 24 channels
--> 1x1 stem fusion (24 -> 24) + GroupNorm
--> four depthwise residual encoder blocks, kernel 15, dilations 1/2/4/8
-   (receptive field 6.58 s)
--> decoder Conv(24 -> 16, k7, dilation 12) -> Conv(16 -> 8, k5, dilation 24)
-   (receptive field 2.64 s), GroupNorm + GELU + dropout after each
--> waveform head (1x1 conv + tanh), the only output.
-Dropout 0.10 in the encoder and decoder. Compared with 260928 only the
-sampling rate (128 -> 64 Hz, so the same kernel sizes span twice the time),
-the decoder dilations (1/1 -> 12/24) and the dropout (0.20 -> 0.10) differ.
-9,377 parameters (8,729 without the 1x1 stem fusion).
-
-Training
---------
-Raw PPG input without a band-pass; target = respiratory-phase waveform
-from the expert CO2 breath labels (CapnoBase) or the respiratory-band
-reference (BIDMC, STEAM2); loss = the v16 waveform loss (SmoothL1 +
-Pearson + derivative, the 260928 loss). Validation is the last 20% of
-every training subject's windows; the epoch with the lowest validation
-loss is restored
-(AdamW, learning rate 2e-4 with cosine decay, up to 240 epochs, at least 20,
-patience 25). Training windows keep the v16 jitter (random shift up to
-0.094 s, gain 0.95-1.05, small noise); there is no speed augmentation and
-no rate-balanced sampling.
-
-Selection of the training settings (made with the event head and kept
-unchanged; CapnoBase 5-fold pilot, rate-ranked folds, pooled waveform-FFT
-MAE over all reference-valid minutes; BIDMC and STEAM2 were not used to
-choose anything):
-* dropout 0.20 -> 0.10: pooled FFT MAE 2.064 -> 1.934 breaths/min (seeds 1-2,
-  40 epochs; Davies mMAE 0.461 -> 0.427). Decoder dilations 10/20 (2.207) and
-  dropout 0.10 with dilations 10/20 (1.970) did not improve on it, so the
-  decoder keeps the dilations 12/24 of model A.
-* longer training: 80 instead of 40 epochs lowered the pooled FFT MAE
-  further (1.934 -> 1.786; Davies mAE 0.266 -> 0.250, mMAE 0.427 -> 0.450)
-  and the best epoch stayed near the end (67-80 of 80). The LOSOCV schedule
-  is doubled the same way, 120 -> 240 epochs (120-epoch LOSOCV runs of the
-  earlier model reached the cap in 40 of 42 folds, best epoch 106 on average).
-* model A itself (decoder dilations 12/24) was the best of the structure
-  pilot: decoders with two or three layers and increasing or decreasing
-  dilations, two seeds each.
-
-Ensemble
---------
-Every LOSOCV fold trains 3 models that differ only in the random seed
-(initial weights, batch order, jitter and dropout). On the held-out
-subject their waveform outputs are averaged and the averaged waveform
-is scored. Seeds depend only on the dataset,
-the window condition, the held-out subject and the member index, so every
-ablation variant uses the same three seeds as the final model (and as
-members m0-m2 of 261006_RRWaveNet_Ensemble).
-
-Input windows
--------------
-Every dataset and variant is run with 10 s non-overlapping windows first
-and then with 20 s windows; the model, training and the 60 s evaluation
-minutes are the same for both. window_comparison.csv lists, per dataset
-and variant, the metrics of both window lengths on the subjects scored in
-both, and a paired Wilcoxon test of the per-subject FFT MAE.
-
-Evaluation (Davies & Mandic 2022 style; no subject is excluded)
------------------------------------------------------------------
-Every complete 60 s minute with a valid reference is scored. Breathing rate
-= frequency of the largest FFT peak of the predicted waveform (3-60
-breaths/min for CapnoBase, 6-30 for BIDMC and STEAM2); ground truth = the
-number of reference breaths in the minute (CapnoBase expert labels;
-breaths detected on the reference for BIDMC and STEAM2). Reported per
-dataset:
-* FFT metrics over all minutes: MAE, RMSE, bias and 95% limits of
-  agreement, Pearson r, share of minutes within 1 and 2 breaths/min, and the
-  mean +- SD of the per-subject MAE (as RRWaveNet reports);
-* Davies & Mandic (2022): median absolute error over all minutes (mAE) and
-  median of the per-subject mean absolute error (mMAE), each with its
-  interquartile range;
-* waveform agreement: Pearson r between the predicted and the target
-  waveform in every minute (mean and median over minutes);
-* every subject with its median true and predicted rate and its MAE
-  (Davies & Mandic, Fig. 3b), without any grouping of subjects.
-
-Ablation study
---------------
-Each variant repeats the LOSOCV with the same seeds and the same ensemble
-and changes one thing:
-* full: the final model above;
-* w/o ensemble: the three single models of the full model, each scored
-  alone (metrics averaged over the members; no extra training);
-* no_stem_fusion: the 1x1 stem fusion and its GroupNorm removed, the 24
-  concatenated stem channels feed the encoder;
-* dropout_0.20: dropout of model A (0.20);
-* epochs_120: up to 120 epochs as for model A.
-Comparison: per dataset, the FFT and Davies & Mandic metrics of every variant
-side by side, and paired Wilcoxon signed-rank tests of the full model
-against each variant on the per-subject MAE and on the per-minute absolute
-error (Benjamini-Hochberg over the variants of one dataset).
-
-Data and outputs
-----------------
-Dataset: CapnoBase (path in DATASET_CONFIGS, or --capnobase-path).
-All results go to PROJECT_ROOT\261007_CapnoBase
-({window} is 01_w10s_nonoverlap, then 02_w20s_nonoverlap):
-  {variant}\{window}\{dataset}\Members\m{k}\   models, learning curves,
-      training audits and test predictions of ensemble member k
-  {variant}\{window}\{dataset}\Fold_Summaries\   per-subject JSON and
-      per-minute CSV of every member and of the ensemble
-  {variant}\{window}\{dataset}\Ensemble_Predictions\   averaged outputs
-  Data_Quality\   window and subject quality of every dataset
-  Summary\   fft_davies_overall.csv, fft_davies_single_models.csv,
-      ablation_comparison.csv, window_comparison.csv, per_subject_fft.csv,
-      per-minute tables, figures and 261007_RRWaveNet_Ensemble_NoEvent_results.xlsx
---resume reuses finished members; an interrupted member continues from its
-last epoch.
-
-
-==========================================================================
-261013_RRWaveNet_Adult_SubjectVal_WD (BIDMC, STEAM2)
-==========================================================================
-261013_RRWaveNet_Adult_SubjectVal_WD: 261007_RRWaveNet_Ensemble_NoEvent
-for the adult datasets (BIDMC, STEAM2), 10 s windows, with subject-wise
-validation and a larger weight decay; three-model ensemble, LOSOCV.
-
-Why: in 261007 the training loss of BIDMC and STEAM2 kept falling while the
-validation loss stayed flat from about epoch 100-120 (train/validation gap
-about 0.04 for BIDMC and 0.09 for STEAM2; none for CapnoBase). The adult
-targets are the impedance (BIDMC) or belt (STEAM2) respiration signal,
-which carries waveform detail that the PPG cannot predict; the model keeps
-fitting that detail on its training windows. The 261007 validation set (the
-last 20% of every training subject's windows) comes from the same subjects
-as the training windows, so it cannot show whether the model still
-generalizes to new subjects, which is what the held-out LOSOCV subject is.
-
-Differences from 261007_RRWaveNet_Ensemble_NoEvent (nothing else changes):
-* subject-wise validation: in every LOSOCV fold 20% of the training
-  subjects (rounded; BIDMC 10 of 52, STEAM2 9 of 43) are held out whole as
-  validation subjects. All windows of the other training subjects are used
-  for training (no temporal split). The validation loss of these subjects
-  picks the best epoch and stops training (same rule: at least 20 epochs,
-  patience 25, best checkpoint restored). The validation subjects are drawn
-  once per fold (seeded by dataset and held-out subject), so the three
-  ensemble members and every weight decay candidate use the same ones;
-* weight decay: AdamW, as in 261007, but on the convolution weights only
-  (biases and GroupNorm scale / shift are not decayed, as usual) and larger.
-  261007 used 5e-5, which with AdamW decays every weight by learning rate x
-  weight decay = 1e-8 per step, i.e. no regularization. The candidates are
-  1e-2, 1e-1 and 1 (per-step decay 2e-6, 2e-5 and 2e-4 at the starting
-  learning rate 2e-4). In every fold, member m0 is trained with each
-  candidate; the candidate with the lowest validation loss (validation
-  subjects only, never the test subject) is selected and members m1 and m2
-  are trained with it. The ensemble is m0-m2 of the selected candidate;
-* only the full model (stem fusion), only 10 s windows, only BIDMC and
-  STEAM2 (CapnoBase keeps its 261007 results);
-* STEAM2 reading and target polarity (see "STEAM2 data" below);
-* every mean in the summary comes with its SD (ddof=1).
-The network is exactly the 261007 full model (same layers, shapes, 9,377
-parameters and the same initial weights for a seed). The input, loss,
-learning rate schedule, epochs, jitter, seeds of the members and the 60 s
-evaluation are those of 261007.
-
-STEAM2 data
------------
-Every STEAM2 session (one 2-back block, about 203 s) is an EEGLAB structure
-saved as .mat (EEG.data, EEG.srate = 200 Hz, EEG.chanlocs, EEG.event) with
-one channel: the PPG file and the RSP (belt) file of a session have the same
-name in the PPG and RSP folders (PPG\<subject>\<subject>_Session<k>.mat)
-and the same length. Reading:
-* the channel is taken by its label (PPG / RSP); a file whose label names
-  the other signal is rejected (swapped files), and the sampling rate is
-  EEG.srate of each file;
-* PPG and RSP files are paired by identical names only (a file without a
-  partner is reported and left out, never paired by position); the sessions
-  of a subject are ordered by their number and all stay in that subject, so
-  a person is never in the training and the test data of one fold. A flat
-  folder (<subject>_Session<k>.mat without subject folders) is grouped by the
-  subject part of the name;
-* EEGLAB "boundary" events inside a recording (removed data) split the
-  session into separate pieces, so no window or filter spans a gap; the
-  markers at the start (0.5, "New Segment" at 1) and the end are not gaps.
-Target polarity: STEAM2 uses the profile adult_belt_as_recorded, i.e. the
-belt reference keeps the polarity it was recorded with (one belt type for
-every subject) and is not shifted. 261007 used the v16 rule for both adult
-datasets: the sign of the zero-lag correlation between the PPG and the
-reference in 0.1-0.5 Hz. For the belt this correlation is near zero (the
-PPG respiratory modulation lies a variable fraction of a cycle off the chest
-movement; in the session checked, r = -0.05 at zero lag and |r| = 0.33 only
-at a lag of 3.7 s), so the rule flipped the target at random between
-sessions. BIDMC keeps the v16 rule (adult_fixed_band). Breath counts and the
-FFT rate do not depend on the polarity. --inspect-steam2 reads every session
-without training and writes steam2_loading_check.csv (labels, sampling
-rates, lengths, gaps, zero-lag correlation and the sign the v16 rule would
-have chosen). Models stored by an earlier version for STEAM2 (without the
-recorded profile) are not reused by --resume.
-
-Model (the 260928 layout; no identity channel, no gating, no added module)
----------------------------------------------------------------------------
-raw PPG (min-max per 10 s window) at 64 Hz
--> three stem branches: Conv1d with kernels 32 / 64 / 128 samples
-   (0.5 / 1 / 2 s), 8 filters each, GroupNorm, GELU  -> 24 channels
--> 1x1 stem fusion (24 -> 24) + GroupNorm
--> four depthwise residual encoder blocks, kernel 15, dilations 1/2/4/8
--> decoder Conv(24 -> 16, k7, dilation 12) -> Conv(16 -> 8, k5, dilation 24)
--> waveform head (1x1 conv + tanh), the only output.
-Dropout 0.10; 9,377 parameters.
-
-Training
---------
-Raw PPG input; target = respiratory-band reference (impedance or belt);
-loss = the v16 waveform loss (SmoothL1 + Pearson + derivative); AdamW,
-learning rate 2e-4 with cosine decay, up to 240 epochs, at least 20,
-patience 25; v16 jitter of training windows. Every member's learning curve
-(training and validation loss per epoch) is stored.
-
-Evaluation (Davies & Mandic 2022 style; no subject is excluded)
------------------------------------------------------------------
-Results are per subject: all sessions of a subject (STEAM2) form one LOSOCV
-fold, minutes are scored inside each session (never across sessions), and
-the subject MAE pools the subject's minutes over its sessions. Inference is
-that of 261007: the held-out subject's 10 s windows without overlap (0%),
-their outputs placed one after another.
-As in 261007: every complete 60 s minute with a valid reference of the
-held-out subject; rate = largest FFT peak of the predicted waveform (6-30
-breaths/min); FFT metrics (MAE +- SD, RMSE, bias +- SD, LoA, Pearson r,
-within 1 / 2 breaths/min, subject MAE mean +- SD), Davies & Mandic mAE and
-mMAE with IQR, waveform PCC mean +- SD.
-
-Summary
--------
-* fft_davies_overall.csv / fft_davies_overall_mean_sd.csv: the final
-  model (ensemble of 3), its single models, and member m0 of every weight
-  decay candidate (single models);
-* ablation_comparison.csv: final ensemble vs its single models (paired
-  Wilcoxon on the subject MAE and the minute AE);
-* reference_comparison.csv: final ensemble vs the 261007 full ensemble
-  (temporal validation, weight decay 5e-5) on the same subjects, when the
-  261007 results are found (--reference-root);
-* weight_decay_selection.csv: per fold the validation loss of every
-  candidate and the selected one; selection counts per dataset;
-* learning curves (mean +- SD over folds, training and validation loss per
-  member of the selected candidate) and the train / validation gap at the
-  best epoch.
-
-Outputs (under PROJECT_ROOT\261013_BIDMC_STEAM2)
-  full_wd{wd}\01_w10s_nonoverlap\{dataset}\Members\m{k}\   models, learning
-      curves, training audits and test predictions
-  full_wd{wd}\01_w10s_nonoverlap\{dataset}\Fold_Summaries\   per member
-      and ensemble
-  WD_Selection\01_w10s_nonoverlap\{dataset}\{subject}_selection.json
-  Data_Quality\, Summary\ (tables, figures, workbook)
-
-
-==========================================================================
-Reference QC window counts (--compare-qc; Compare_Reference_QC_Window_Counts)
-==========================================================================
-Compare the exact data-selection pipeline under two reference-RSP QC settings.
-
-Uses the loaders/QC implementations of this script (CapnoBase: 261007; BIDMC,
-STEAM2: 261013), with ONLY REF_QC_WINDOW_SEC and REF_QC_HOP_SEC varied in
-memory. No network training, cross-validation, or prediction takes place.
-
-Default: CapnoBase (261007), BIDMC and STEAM2 (261013), model input = 10 s /
-0% overlap (--datasets, --qc-windows).
-
-Reference-RSP QC comparison:
-    old: 32 s window, 8 s stride
-    new: 30 s window, 10 s stride
-
-Three distinct counts:
-    Candidate_Windows: all possible model-input windows BEFORE quality filtering
-    Kept_Windows:      windows with >=50% usable PPG and >=50% structurally valid RSP
-    Train_OK_Windows:  kept windows with >=50% respiratory-reference-QC valid
-                       samples AND no annotated reference artifact
-QC_Windows_Total/Passed: 30-s/32-s windows used to establish the sample-level
-                       respiratory-reference quality map, NOT model-input windows
-
-IMPORTANT: the existing loaders include only subjects having at least one
-first-stage 'Kept' input window. The counts therefore cover loaded subjects,
-not necessarily every source-file subject. Source-load errors are printed.
-
-Usage:
-  python 261024_RRWaveNet_QC30s_Stride10s.py --compare-qc --no-require-cuda
-  python 261024_RRWaveNet_QC30s_Stride10s.py --compare-qc --datasets capnobase \
-      --qc-windows w10s_nonoverlap w20s_nonoverlap --capnobase-path "D:\...\csv"
-  (--old-qc-window / --old-qc-stride / --new-qc-window / --new-qc-stride,
-  --qc-results-dir, --save-window-detail, --ignore-capnobase-artifacts)
-
-Results (CSV, Excel-compatible UTF-8 BOM; PROJECT_ROOT\QC_Window_Comparison):
-  qc_counts_by_subject.csv    : old/new counts per subject
-  qc_counts_by_dataset.csv    : old/new totals per dataset and input condition
-  qc_counts_change.csv        : new-minus-old counts per subject
-  qc_counts_change_summary.csv: new-minus-old counts for dataset totals
-  qc_window_detail.csv        : optional, with --save-window-detail
-  qc_load_failures.csv        : datasets that could not be loaded
+Run:                     python 261024_RRWaveNet_QC30s_Stride10s.py
+Some datasets:           --datasets capnobase
+Other input windows:     --windows w10s_nonoverlap w20s_nonoverlap
+Data paths:              --capnobase-path, --bidmc-path, --steam2-ppg-dir,
+                         --steam2-rsp-dir
+Without the CapnoBase expert artifact labels: --ignore-capnobase-artifacts
 """
 
 import argparse
 import csv
-import gc
-import hashlib
-import json
 import math
-import os
-import random
 import re
-import time
-import warnings
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.io as sio
-import torch
-import torch.nn as nn
 from scipy import stats
 from scipy.signal import (
     butter,
@@ -410,25 +82,15 @@ from scipy.signal import (
     sosfiltfilt,
     welch,
 )
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader, Dataset
 
 
 # ---------------------------------------------------------------------------
-# Paths, datasets, v16 constants, and requested experiment order
+# Paths, datasets and QC constants
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261024_RRWaveNet_QC30s_Stride10s")
-# Every result of this script is written under PROJECT_ROOT: the runs of the
-# 261007 code (CapnoBase), of the 261013 code (BIDMC, STEAM2) and the
-# reference QC window counts, each in its own folder.
+# The count tables are written to PROJECT_ROOT.
 DEFAULT_RESULTS_ROOT = PROJECT_ROOT
-PROTOCOL_FOLDERS = {"261007": "261007_CapnoBase", "261013": "261013_BIDMC_STEAM2"}
-QC_COMPARISON_FOLDER = "QC_Window_Comparison"
-# 261013: results of 261007_RRWaveNet_Ensemble_NoEvent on BIDMC / STEAM2
-# (temporal validation, weight decay 5e-5) for the paired comparison;
-# skipped when not found.
-REFERENCE_261007_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1")
 
 DATASET_CONFIGS = {
     "bidmc": {
@@ -454,9 +116,9 @@ DATASET_CONFIGS = {
         # Expert CO2 breath annotations ({case}_8min_labels.csv) are the
         # ground truth when present; detection is the fallback.
         "expert_breath_labels": True,
-        # Expert artifact spans: PPG artifacts are unusable input samples,
-        # CO2 artifacts invalidate the reference (training windows and
-        # scored minutes that overlap them are excluded).
+        # Expert artifact spans: PPG artifacts are unusable PPG samples,
+        # CO2 artifacts invalidate the reference (windows that overlap them
+        # do not pass the reference QC).
         "use_artifact_labels": True,
     },
     "steam2": {
@@ -478,15 +140,10 @@ DATASET_CONFIGS = {
 }
 
 DATASET_ORDER = ("capnobase", "bidmc", "steam2")
-# Code run for each dataset: CapnoBase 261007_RRWaveNet_Ensemble_NoEvent,
-# BIDMC and STEAM2 261013_RRWaveNet_Adult_SubjectVal_WD.
+# Data reading and QC of each dataset: CapnoBase that of
+# 261007_RRWaveNet_Ensemble_NoEvent, BIDMC and STEAM2 that of
+# 261013_RRWaveNet_Adult_SubjectVal_WD.
 DATASET_PROTOCOL = {"capnobase": "261007", "bidmc": "261013", "steam2": "261013"}
-# Datasets and window conditions run when none are given on the command line.
-DEFAULT_DATASETS = ("capnobase", "bidmc", "steam2")
-# 261007: 10 s windows first, then 20 s (the run follows WINDOW_SPECS order).
-DEFAULT_WINDOWS_261007 = ("w10s_nonoverlap", "w20s_nonoverlap")
-# 261013: 10 s windows only.
-WINDOWS_261013 = ("w10s_nonoverlap",)
 
 
 @dataclass(frozen=True)
@@ -504,39 +161,9 @@ WINDOW_SPECS = (
     WindowSpec(3, 60.0, 60.0, "w60s_nonoverlap", "60 s / 0% overlap"),
 )
 
-# Model input: resampled PPG time series, min-max [0, 1] per window (no filter).
+# PPG of each window: the resampled PPG time series (no filter).
 PPG_INPUT = "raw"
-
-# v16 input/output and training constants.
-TARGET_FS = 64  # model and analysis sampling rate (Hz)
-EVAL_WINDOW_SEC = 60.0
-EVAL_STRIDE_SEC = 60.0
-BATCH_SIZE = 48
-# Maximum epochs of the final model (model A: 120).
-DEFAULT_EPOCHS = 240
-MIN_EPOCHS = 20
-PATIENCE = 25
-LEARNING_RATE = 2e-4
-# Weight decay of 261007 (all parameters; with AdamW the decay per step is
-# learning rate x weight decay = 1e-8, i.e. no regularization).
-WEIGHT_DECAY_261007 = 5e-5
-# Candidates of 261013, applied to the convolution weights only (AdamW,
-# decoupled): per-step decay 2e-6, 2e-5 and 2e-4 at the starting learning
-# rate. In every LOSOCV fold member m0 is trained with each candidate and the
-# one with the lowest subject-wise validation loss is used for m1 and m2.
-WEIGHT_DECAY_CANDIDATES = (1e-2, 1e-1, 1.0)
-SELECTION_MEMBER = 0
-LOSS_WEIGHTS = (0.45, 0.45, 0.10)
-# 261007: share of every training subject's windows (the last ones) used for
-# validation.
-VAL_WINDOW_RATIO = 0.20
-# 261013: share of the training subjects held out whole as validation subjects.
-VAL_SUBJECT_RATIO = 0.20
-# 261013 inference on the held-out subject: its 10 s windows without overlap
-# (0%), as in 261007. Recorded in every summary; results of an earlier version that
-# combined overlapping test windows ("sliding_50pct_hann") are not reused.
-INFERENCE_PROTOCOL = "stored_windows"
-
+TARGET_FS = 64  # analysis sampling rate (Hz)
 
 # Breath detection and reference quality (RRest / Charlton et al. 2016).
 RESP_BAND_HZ = (0.1, 0.5)
@@ -544,6 +171,8 @@ RR_BAND_BPM = (6.0, 30.0)  # RR representable in the 0.1-0.5 Hz analysis band
 CTO_PEAK_FRACTION = 0.2  # count-orig: peaks above 0.2 x Q3 of all peak values
 CTO_PEAK_QUANTILE = 0.75
 FFT_MIN_POINTS = 16384
+# Respiratory reference QC: 30 s windows every 10 s (32 s / 8 s in 261007
+# and 261013).
 REF_QC_WINDOW_SEC = 30.0  # respiratory reference QC window (s)
 REF_QC_HOP_SEC = 10.0
 REF_AGREEMENT_BPM = 2.0  # RRest: count-orig RR and FFT RR within 2 bpm
@@ -558,14 +187,8 @@ EVENT_SIGMA_SEC = 0.3  # event width when a breath has no neighbour
 # Event width proportional to the local breath period (0.12 x period).
 EVENT_SIGMA_PERIOD_FRACTION = 0.12
 EVENT_SIGMA_LIMITS_SEC = (0.15, 0.5)
-# Count loss: heatmap counted above this background level.
+# Breath heatmap counted above this background level.
 EVENT_COUNT_THRESHOLD = 0.1
-# v16 jitter of training windows: random shift up to 0.094 s (12 samples
-# at 128 Hz), gain 0.95-1.05 and small noise.
-SHIFT_AUG_SEC = 0.094
-# conv1x1: 1x1 stem fusion + GroupNorm; none: ablation, the concatenated
-# stem branches feed the encoder.
-STEM_FUSION_MODES = ("conv1x1", "none")
 
 # PPG-only quality rules. These are applied to each candidate input window.
 PPG_SQI_THRESHOLD = 0.86
@@ -657,195 +280,10 @@ ADAPTIVE_UPPER_LIMITS_HZ = (0.5, 1.0)
 # harmonics, so the largest peak can be the 2nd harmonic at slow rates).
 FFT_SUBHARMONIC_POWER_RATIO = 0.3
 
-# Network of the final model (260928 layout). Only the sampling rate
-# (TARGET_FS), the decoder dilations and the dropout differ from 260928.
-MODEL_CONFIG = {
-    # Stem kernels 32 / 64 / 128 samples = 0.5 / 1 / 2 s at 64 Hz, 8 filters each.
-    "stem_kernel_sizes": (32, 64, 128),
-    "stem_base_channels": 8,
-    "hidden_channels": 24,
-    "encoder_kernel_size": 15,
-    # Encoder receptive field 6.58 s.
-    "encoder_dilations": (1, 2, 4, 8),
-    "dropout": 0.10,
-    "decoder_mid_channels": (16, 8),
-    "decoder_kernel_sizes": (7, 5),
-    # Decoder receptive field 2.64 s.
-    "decoder_dilations": (12, 24),
-    "decoder_heads": ("waveform_tanh",),
-}
-# Model A (selected in the structure pilot) differs from the final model in
-# these training settings; the ablation study reverts each changed one.
-A_SETTINGS = {"dropout": 0.20, "decoder_dilations": (12, 24), "epochs": 120}
-ENSEMBLE_MEMBERS = 3
-# Post-fusion representation diagnostics written per member.
-FEATURE_METRICS = (
-    "Feature_OffDiag_SignedMean",
-    "Feature_OffDiag_AbsMean",
-    "Feature_EffectiveRank",
-    "Feature_EffectiveRank_Normalized",
-    "Feature_ParticipationRatio",
-)
-
-
-@dataclass(frozen=True)
-class ModelOptions:
-    stem_fusion: str = "conv1x1"
-    dropout: float = MODEL_CONFIG["dropout"]
-    decoder_dilations: Tuple[int, ...] = tuple(MODEL_CONFIG["decoder_dilations"])
-    # Training setting stored with the model (not part of the network).
-    # None: 261007 (AdamW weight decay WEIGHT_DECAY_261007 on every parameter,
-    # temporal validation); a value: 261013 (that weight decay on the
-    # convolution weights only, subject-wise validation).
-    weight_decay: Optional[float] = None
-
-    @property
-    def subject_validation(self) -> bool:
-        """True for the 261013 training (subject-wise validation)."""
-        return self.weight_decay is not None
-
-    @property
-    def key(self) -> str:
-        if not self.subject_validation:
-            return "rrwavenet_fs{}_{}_dec{}_p{:.2f}".format(
-                TARGET_FS,
-                "stemfusion" if self.stem_fusion == "conv1x1" else "nostemfusion",
-                "-".join(str(value) for value in self.decoder_dilations),
-                self.dropout,
-            )
-        return "rrwavenet_fs{}_{}_dec{}_p{:.2f}_wd{:g}_subjval".format(
-            TARGET_FS,
-            "stemfusion" if self.stem_fusion == "conv1x1" else "nostemfusion",
-            "-".join(str(value) for value in self.decoder_dilations),
-            self.dropout,
-            self.weight_decay,
-        )
-
-    @property
-    def label(self) -> str:
-        fusion = (
-            "1x1 stem fusion + GroupNorm"
-            if self.stem_fusion == "conv1x1"
-            else "no stem fusion (concatenated stem into the encoder)"
-        )
-        dilations = "/".join(str(value) for value in self.decoder_dilations)
-        label = (
-            f"3 stem branches x 8 filters, {fusion}, residual encoder, "
-            f"decoder dilations {dilations}, dropout {self.dropout:.2f}"
-        )
-        if self.subject_validation:
-            label += f", weight decay {self.weight_decay:g} (conv weights), subject-wise validation"
-        return label
-
-    def build(self) -> "DeepOnlyV16Decoder":
-        return DeepOnlyV16Decoder(
-            stem_fusion=self.stem_fusion,
-            dropout=self.dropout,
-            decoder_dilations=self.decoder_dilations,
-        )
-
-
-@dataclass(frozen=True)
-class Variant:
-    """One LOSOCV run: a 261007 variant of the ablation study (same seeds,
-    same ensemble) or the 261013 full model with one weight decay candidate."""
-
-    name: str
-    label: str
-    options: ModelOptions
-    epochs: int
-
-
-def build_variants_261007() -> Dict[str, Variant]:
-    final = ModelOptions()
-    variants = {
-        "full": Variant("full", "Full model", final, DEFAULT_EPOCHS),
-        "no_stem_fusion": Variant(
-            "no_stem_fusion",
-            "w/o 1x1 stem fusion",
-            replace(final, stem_fusion="none"),
-            DEFAULT_EPOCHS,
-        ),
-    }
-    if final.dropout != A_SETTINGS["dropout"]:
-        name = "dropout_{:.2f}".format(A_SETTINGS["dropout"])
-        variants[name] = Variant(
-            name,
-            "dropout {:.2f} (model A)".format(A_SETTINGS["dropout"]),
-            replace(final, dropout=A_SETTINGS["dropout"]),
-            DEFAULT_EPOCHS,
-        )
-    if tuple(final.decoder_dilations) != tuple(A_SETTINGS["decoder_dilations"]):
-        name = "decoder_d" + "_".join(str(v) for v in A_SETTINGS["decoder_dilations"])
-        variants[name] = Variant(
-            name,
-            "decoder dilations {} (model A)".format(
-                "/".join(str(v) for v in A_SETTINGS["decoder_dilations"])
-            ),
-            replace(final, decoder_dilations=tuple(A_SETTINGS["decoder_dilations"])),
-            DEFAULT_EPOCHS,
-        )
-    if DEFAULT_EPOCHS != A_SETTINGS["epochs"]:
-        name = "epochs_{}".format(A_SETTINGS["epochs"])
-        variants[name] = Variant(
-            name,
-            "up to {} epochs (model A)".format(A_SETTINGS["epochs"]),
-            final,
-            A_SETTINGS["epochs"],
-        )
-    return variants
-
-
-def variant_name(weight_decay: float) -> str:
-    return "full_wd{:g}".format(weight_decay)
-
-
-def build_variants_261013(candidates: Sequence[float] = WEIGHT_DECAY_CANDIDATES) -> Dict[str, Variant]:
-    return {
-        variant_name(wd): Variant(
-            variant_name(wd),
-            "Full model, weight decay {:g}".format(wd),
-            ModelOptions(weight_decay=float(wd)),
-            DEFAULT_EPOCHS,
-        )
-        for wd in candidates
-    }
-
-
-# 261007: the final model and its ablation variants (CapnoBase).
-VARIANTS_261007 = build_variants_261007()
-# 261013: the full model with each weight decay candidate (BIDMC, STEAM2);
-# rebuilt from --weight-decays.
-VARIANTS_261013 = build_variants_261013()
-# The single models of "full" scored one by one (no training of their own).
-NO_ENSEMBLE_LABEL = "w/o ensemble (single models)"
-
 
 # ---------------------------------------------------------------------------
 # Small utilities and signal preprocessing
 # ---------------------------------------------------------------------------
-
-def set_seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = False
-        torch.backends.cudnn.benchmark = True
-
-
-def stable_seed(*parts: object) -> int:
-    text = "|".join(str(part) for part in parts)
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    return int(digest[:8], 16) % (2**31 - 1)
-
-
-def safe_tag(value: object) -> str:
-    return "".join(
-        char if char.isalnum() or char in "-_ ." else "_"
-        for char in str(value)
-    ).replace(" ", "_")
 
 
 def sanitize_signal(signal: np.ndarray) -> Tuple[np.ndarray, int]:
@@ -860,6 +298,19 @@ def sanitize_signal(signal: np.ndarray) -> Tuple[np.ndarray, int]:
         arr = arr.copy()
         arr[~finite] = float(np.median(arr[finite]))
     return arr, replaced
+
+
+def safe_pcc(x: np.ndarray, y: np.ndarray) -> float:
+    x_arr, _ = sanitize_signal(x)
+    y_arr, _ = sanitize_signal(y)
+    length = min(len(x_arr), len(y_arr))
+    x_arr = x_arr[:length]
+    y_arr = y_arr[:length]
+    if length < 2:
+        return np.nan
+    if np.std(x_arr) < 1e-8 or np.std(y_arr) < 1e-8:
+        return np.nan
+    return float(stats.pearsonr(x_arr, y_arr)[0])
 
 
 def bandpass_filter(
@@ -881,18 +332,6 @@ def bandpass_filter(
     except ValueError:
         filtered = arr
     return np.asarray(filtered, dtype=np.float64), replaced
-
-
-def maybe_resample(
-    signal: np.ndarray,
-    source_fs: float,
-    target_fs: float,
-) -> np.ndarray:
-    arr, _ = sanitize_signal(signal)
-    if int(round(source_fs)) == int(round(target_fs)):
-        return arr.astype(np.float32)
-    target_len = max(1, int(round(len(arr) * target_fs / float(source_fs))))
-    return resample(arr, target_len).astype(np.float32)
 
 
 def maybe_resample_with_mask(
@@ -1042,7 +481,7 @@ def label_phase_waveform(labels: np.ndarray, length: int) -> np.ndarray:
     crossing is exactly the label. RR needs only breath timing; the rest of
     a capnogram (trapezoid shape, inspiratory/expiratory split, EtCO2 level)
     varies between subjects and cannot be inferred from the PPG, so this
-    target keeps the timing and drops what the model cannot predict.
+    waveform keeps only the breath timing.
     """
     labels = np.unique(np.asarray(labels, dtype=np.float64))
     samples = np.arange(length, dtype=np.float64)
@@ -1109,20 +548,6 @@ def align_target_lag_and_sign(
     return (sign * shift_signal(y, lag)).astype(np.float32), lag, sign, corr
 
 
-def instance_minmax_normalize(
-    data: np.ndarray,
-    feature_range: Tuple[float, float],
-) -> np.ndarray:
-    arr = np.asarray(data, dtype=np.float32)
-    min_value = np.min(arr, axis=-1, keepdims=True)
-    max_value = np.max(arr, axis=-1, keepdims=True)
-    denominator = max_value - min_value
-    denominator[denominator < 1e-8] = 1.0
-    scaled = (arr - min_value) / denominator
-    lower, upper = feature_range
-    return (scaled * (upper - lower) + lower).astype(np.float32)
-
-
 def extract_window_starts(
     signal_length: int,
     fs: int,
@@ -1148,11 +573,6 @@ def extract_window_starts(
 PPG_QC_UNIT_SEC = 10.0
 PPG_USABLE_SQI_THRESHOLD = 0.50
 MIN_USABLE_PROPORTION = 0.50
-
-
-def finite_ratio(signal: np.ndarray) -> float:
-    arr = np.asarray(signal).reshape(-1)
-    return float(np.isfinite(arr).mean()) if arr.size else 0.0
 
 
 def flat_fraction(signal: np.ndarray) -> float:
@@ -1378,7 +798,7 @@ def build_rsp_quality_map(
 
 
 # ---------------------------------------------------------------------------
-# Breath detection, reference quality and breath-event targets
+# Breath detection and reference quality
 # ---------------------------------------------------------------------------
 
 def _local_extrema(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -1541,8 +961,7 @@ def build_reference_resp_quality_map(
 
     The quality rule is evaluated on 30 s windows every 10 s; a sample is
     usable when at least half of the windows covering it pass. Only the
-    reference (and its expert labels, if any) is used, never the PPG or a
-    model output.
+    reference (and its expert labels, if any) is used, never the PPG.
     """
     length = len(ref_filtered)
     window = int(round(REF_QC_WINDOW_SEC * fs))
@@ -1652,7 +1071,7 @@ def breath_event_target_and_norm(
 ) -> Tuple[np.ndarray, float]:
     """Breath heatmap of one window and its count normalizer.
 
-    Peaks may be fractional sample positions (speed-augmented windows). The
+    Peaks may be fractional sample positions. The
     normalizer is the thresholded area of one bump with the window's mean
     width, so sum(max(heatmap - threshold, 0)) / normalizer counts breaths.
     """
@@ -1671,16 +1090,6 @@ def breath_event_target_and_norm(
     )
     norm = COUNT_BUMP_AREA_FACTOR * float(np.mean(sigmas[near]))
     return bumps.max(axis=0).astype(np.float32), norm
-
-
-def breath_event_target(
-    peaks: np.ndarray,
-    start: int,
-    length: int,
-    fs: int,
-) -> np.ndarray:
-    """Breath heatmap (height 1 at every reference breath onset)."""
-    return breath_event_target_and_norm(peaks, start, length, fs)[0]
 
 
 def preprocess_segment(
@@ -1811,7 +1220,7 @@ def preprocess_segment(
     # Fixed ground truth: expert breath labels when available (shifted with
     # the reference), otherwise breaths detected once on the continuous
     # reference. Its respiratory quality (reference and labels only) decides
-    # which windows may be used for training and validation.
+    # which windows pass the reference QC.
     detected_breaths = detect_breaths_continuous(rsp_low, fs)
     labels = None
     if label_samples is not None and len(label_samples) >= 2:
@@ -1843,7 +1252,7 @@ def preprocess_segment(
         "PPG_Artifact_Label_Sec": float(ppg_artifact.sum() / float(fs)),
         "RSP_Artifact_Label_Sec": float(rsp_artifact.sum() / float(fs)),
     }
-    train_quality_map = resp_quality_map & reference_structural
+    reference_qc_map = resp_quality_map & reference_structural
     starts = extract_window_starts(
         length,
         fs,
@@ -1851,12 +1260,12 @@ def preprocess_segment(
         spec.stride_sec,
     )
 
-    model_input = (ppg_raw if PPG_INPUT == "raw" else ppg_low).astype(np.float32)
+    ppg_input = (ppg_raw if PPG_INPUT == "raw" else ppg_low).astype(np.float32)
     low_kept = []
     rsp_kept = []
     event_kept = []
     event_norm_kept = []
-    train_ok_kept = []
+    reference_qc_kept = []
     kept_starts = []
     quality_rows = []
     for index, start in enumerate(starts):
@@ -1870,11 +1279,11 @@ def preprocess_segment(
             ppg_usable_ratio >= MIN_USABLE_PROPORTION
             and rsp_usable_ratio >= MIN_USABLE_PROPORTION
         )
-        resp_usable_ratio = float(train_quality_map[int(start):end].mean())
+        resp_usable_ratio = float(reference_qc_map[int(start):end].mean())
         ref_artifact_ratio = float(rsp_artifact[int(start):end].mean())
         # Labels may be missing inside a labelled reference artifact, so such
-        # windows would teach the event head "no breath" there.
-        train_ok = bool(
+        # windows do not pass the reference QC.
+        reference_qc_ok = bool(
             passed
             and resp_usable_ratio >= MIN_USABLE_PROPORTION
             and ref_artifact_ratio == 0.0
@@ -1909,22 +1318,21 @@ def preprocess_segment(
                     ppg_artifact[int(start):end].mean()
                 ),
                 "RSP_Artifact_Label_Proportion": ref_artifact_ratio,
-                "Train_OK": int(train_ok),
+                "Reference_QC_OK": int(reference_qc_ok),
             }
         )
         quality_rows.append(diagnostics)
         if passed:
-            # Model input window: the PPG itself (min-max normalized per
-            # window in the dataset) or, with --ppg-input resp_band, the
-            # respiratory-band PPG of 261001_RRWaveNet_fv.
-            low_kept.append(model_input[int(start):end])
+            # Window kept by the signal QC: its PPG (PPG_INPUT) and its
+            # reference waveform.
+            low_kept.append(ppg_input[int(start):end])
             rsp_kept.append(target_signal[int(start):end])
             event_window, event_norm = breath_event_target_and_norm(
                 reference_breaths, int(start), window_len, fs
             )
             event_kept.append(event_window)
             event_norm_kept.append(event_norm)
-            train_ok_kept.append(train_ok)
+            reference_qc_kept.append(reference_qc_ok)
             kept_starts.append(int(start))
 
     reference = {
@@ -1938,12 +1346,12 @@ def preprocess_segment(
         "band_hz": band,
         "profile": profile,
         "diagnostics": segment_diagnostics,
-        # Continuous arrays for speed augmentation: model input, waveform
-        # target and the samples usable for training (reference quality,
-        # no labelled reference artifact, usable PPG).
-        "model_input": model_input,
+        # Continuous arrays: PPG, reference waveform and the samples that
+        # pass the reference QC (reference quality, no labelled reference
+        # artifact, usable PPG).
+        "ppg_input": ppg_input,
         "target_signal": np.asarray(target_signal, dtype=np.float32),
-        "train_map": train_quality_map & ~rsp_artifact & (ppg_quality_map > 0),
+        "reference_qc_map": reference_qc_map & ~rsp_artifact & (ppg_quality_map > 0),
     }
     if not low_kept:
         return {
@@ -1951,7 +1359,7 @@ def preprocess_segment(
             "rsp": np.empty((0, window_len), dtype=np.float32),
             "event": np.empty((0, window_len), dtype=np.float32),
             "event_norm": np.empty(0, dtype=np.float32),
-            "train_ok": np.empty(0, dtype=bool),
+            "reference_qc_ok": np.empty(0, dtype=bool),
             "starts": np.empty(0, dtype=np.int64),
             "segment_ids": np.empty(0, dtype=np.int64),
             "quality": quality_rows,
@@ -1965,7 +1373,7 @@ def preprocess_segment(
         "rsp": np.stack(rsp_kept).astype(np.float32),
         "event": np.stack(event_kept).astype(np.float32),
         "event_norm": np.asarray(event_norm_kept, dtype=np.float32),
-        "train_ok": np.asarray(train_ok_kept, dtype=bool),
+        "reference_qc_ok": np.asarray(reference_qc_kept, dtype=bool),
         "starts": np.asarray(kept_starts, dtype=np.int64),
         "segment_ids": np.full(len(kept_starts), segment_id, dtype=np.int64),
         "quality": quality_rows,
@@ -2037,7 +1445,7 @@ def combine_segments(
     rsp = np.concatenate([segment["rsp"] for segment in valid], axis=0)
     event = np.concatenate([segment["event"] for segment in valid], axis=0)
     event_norm = np.concatenate([segment["event_norm"] for segment in valid], axis=0)
-    train_ok = np.concatenate([segment["train_ok"] for segment in valid], axis=0)
+    reference_qc_ok = np.concatenate([segment["reference_qc_ok"] for segment in valid], axis=0)
     starts = np.concatenate([segment["starts"] for segment in valid], axis=0)
     segment_ids = np.concatenate(
         [segment["segment_ids"] for segment in valid], axis=0
@@ -2053,7 +1461,7 @@ def combine_segments(
         "rsp": rsp.astype(np.float32),
         "event": event.astype(np.float32),
         "event_norm": event_norm.astype(np.float32),
-        "train_ok": train_ok.astype(bool),
+        "reference_qc_ok": reference_qc_ok.astype(bool),
         "starts": starts.astype(np.int64),
         "segment_ids": segment_ids.astype(np.int64),
         "references": references,
@@ -2618,138 +2026,6 @@ def load_capnobase_subjects(spec: WindowSpec) -> Dict[str, dict]:
     return data
 
 
-def capnobase_label_checks(case: dict) -> dict:
-    """Checks that the labels sit where the signals say they should.
-
-    A start of expiration is where CO2 rises (mean of the 0.5 s after the
-    label above the 0.5 s before it), a start of inspiration is where it
-    falls, the two alternate, and an expert pulse peak is the PPG maximum
-    within +-0.1 s (offset 0 means index base and sampling rate agree).
-    """
-    co2 = np.asarray(case["co2"], dtype=np.float64)
-    ppg = np.asarray(case["ppg"], dtype=np.float64)
-    half = int(round(0.5 * case["co2_fs"]))
-
-    def co2_step(labels: np.ndarray) -> np.ndarray:
-        labels = labels[(labels >= half) & (labels < len(co2) - half)]
-        return np.asarray(
-            [
-                np.nanmean(co2[index : index + half]) - np.nanmean(co2[index - half : index])
-                for index in labels
-            ]
-        )
-
-    breaths = case["breaths"] if case["breaths"] is not None else np.empty(0, dtype=np.int64)
-    exp_step = co2_step(breaths)
-    insp_step = co2_step(case["startinsp"])
-    alternation = np.nan
-    if len(breaths) > 1 and len(case["startinsp"]):
-        between = np.searchsorted(case["startinsp"], breaths[1:]) - np.searchsorted(
-            case["startinsp"], breaths[:-1]
-        )
-        alternation = float(np.mean(between == 1))
-    reach = int(round(0.1 * case["ppg_fs"]))
-    offsets = [
-        int(np.nanargmax(ppg[p - reach : p + reach + 1])) - reach
-        for p in case["pleth_peaks"]
-        if reach <= p < len(ppg) - reach and np.any(np.isfinite(ppg[p - reach : p + reach + 1]))
-    ]
-    offsets = np.asarray(offsets, dtype=np.float64)
-    return {
-        "Check_CO2_Rises_At_Breath_Label": float(np.mean(exp_step > 0)) if len(exp_step) else np.nan,
-        "Check_CO2_Falls_At_StartInsp": float(np.mean(insp_step < 0)) if len(insp_step) else np.nan,
-        "Check_One_StartInsp_Per_Breath": alternation,
-        "Check_Pleth_Peak_Labels": int(len(case["pleth_peaks"])),
-        "Check_Pleth_Peak_Offset_Median_Samples": float(np.median(offsets)) if len(offsets) else np.nan,
-        "Check_Pleth_Peak_Within_10ms": float(
-            np.mean(np.abs(offsets) <= 0.01 * case["ppg_fs"])
-        )
-        if len(offsets)
-        else np.nan,
-        "Check_Label_HR_Median_BPM": float(
-            60.0 * case["ppg_fs"] / np.median(np.diff(case["pleth_peaks"]))
-        )
-        if len(case["pleth_peaks"]) > 1
-        else np.nan,
-    }
-
-
-def inspect_capnobase(results_root: Path) -> pd.DataFrame:
-    """Print and save how every CapnoBase case is read (no training).
-
-    Writes capnobase_loading_check.csv. A correct load shows 300 Hz, a
-    480 s record, label RR equal to the reference-file RR, CO2 rising at
-    nearly every breath label, and a median pulse-peak offset of 0 samples.
-    """
-    cfg = DATASET_CONFIGS["capnobase"]
-    csv_dir = Path(cfg["data_path"])
-    case_ids = capnobase_case_ids(csv_dir)
-    print(f"CapnoBase directory: {csv_dir} ({len(case_ids)} cases)")
-    rows = []
-    for case_id in case_ids:
-        try:
-            case = read_capnobase_case(csv_dir, case_id, cfg["default_fs"])
-            row = {
-                "Case": case_id,
-                **case["diagnostics"],
-                **capnobase_label_checks(case),
-                "CapnoBase_Label_Fields": " ".join(case["label_fields"]),
-            }
-        except Exception as exc:
-            row = {"Case": case_id, "CapnoBase_Loading_Warnings": f"failed: {exc}"}
-        rows.append(row)
-    frame = pd.DataFrame(rows)
-    if frame.empty:
-        print("No {case}_8min_signal.csv files found.")
-        return frame
-    results_root.mkdir(parents=True, exist_ok=True)
-    path = results_root / "capnobase_loading_check.csv"
-    frame.to_csv(path, index=False, encoding="utf-8-sig")
-    shown = {
-        "Case": "case",
-        "CapnoBase_FS_Pleth": "fs",
-        "CapnoBase_Record_Sec": "sec",
-        "CapnoBase_Breath_Labels": "breaths",
-        "CapnoBase_Label_RR_Median_BPM": "RR_lab",
-        "CapnoBase_Reference_RR_Median_BPM": "RR_ref",
-        "Check_CO2_Rises_At_Breath_Label": "CO2up",
-        "Check_Pleth_Peak_Offset_Median_Samples": "pk_off",
-        "CapnoBase_PPG_Artifact_Sec": "ppg_art_s",
-        "CapnoBase_CO2_Artifact_Sec": "co2_art_s",
-        "CapnoBase_Ventilation": "vent",
-    }
-    table = frame[[column for column in shown if column in frame.columns]].rename(columns=shown)
-    with pd.option_context("display.max_rows", None, "display.width", 160):
-        print(table.to_string(index=False, float_format=lambda value: f"{value:.2f}"))
-    warned = frame[frame["CapnoBase_Loading_Warnings"].fillna("").astype(str) != ""]
-    for _, row in warned.iterrows():
-        print(f"[CapnoBase {row['Case']}] {row['CapnoBase_Loading_Warnings']}")
-    print(f"Saved: {path}")
-    return frame
-
-
-def _mat_stem(filename: str) -> str:
-    return os.path.splitext(filename)[0]
-
-
-def _match_mat_file_pairs(
-    ppg_dir: Path,
-    rsp_dir: Path,
-) -> List[Tuple[str, str]]:
-    ppg_files = sorted(path.name for path in ppg_dir.glob("*.mat"))
-    rsp_files = sorted(path.name for path in rsp_dir.glob("*.mat"))
-    ppg_map = {_mat_stem(name): name for name in ppg_files}
-    rsp_map = {_mat_stem(name): name for name in rsp_files}
-    common = sorted(set(ppg_map).intersection(rsp_map))
-    if common:
-        return [(ppg_map[key], rsp_map[key]) for key in common]
-    if len(ppg_files) != len(rsp_files):
-        raise RuntimeError(
-            "PPG/RSP MAT file counts differ and no common stems exist"
-        )
-    return list(zip(ppg_files, rsp_files))
-
-
 # STEAM2 sessions are EEGLAB structures saved as .mat files (EEG.data,
 # EEG.srate, EEG.chanlocs.labels, EEG.event), one channel per file: the
 # PPG file and the RSP (belt) file of a session have the same name in the
@@ -2833,8 +2109,7 @@ def steam2_session_files(ppg_root: Path, rsp_root: Path) -> Dict[str, List[Tuple
     Subject folders (PPG\\<subject>\\<session>.mat and RSP\\<subject>\\...) are
     used when present; otherwise the files of one flat folder are grouped by
     the subject part of their name (<subject>_Session<k>.mat). Every session
-    of a person stays in one subject, so a person is never in the training
-    and the test data of the same fold.
+    of a person stays in one subject.
     """
     sessions: Dict[str, List[Tuple[str, Path, Path]]] = {}
     subject_dirs = sorted(path for path in ppg_root.iterdir() if path.is_dir())
@@ -2916,53 +2191,6 @@ def load_steam2_subjects(spec: WindowSpec) -> Dict[str, dict]:
     return data
 
 
-def inspect_steam2(results_root: Path) -> pd.DataFrame:
-    """Read every STEAM2 session, print how it was loaded and save
-    steam2_loading_check.csv (no training)."""
-    cfg = DATASET_CONFIGS["steam2"]
-    rows = []
-    sessions = steam2_session_files(Path(cfg["ppg_dir"]), Path(cfg["rsp_dir"]))
-    for subject, items in sessions.items():
-        for name, ppg_path, rsp_path in items:
-            row = {"Subject": subject, "Session": name, "PPG_File": str(ppg_path), "RSP_File": str(rsp_path)}
-            try:
-                ppg = read_eeglab_channel(ppg_path, "PPG", cfg["default_fs"])
-                rsp = read_eeglab_channel(rsp_path, "RSP", cfg["default_fs"])
-                pieces, info = steam2_session_pieces(ppg, rsp)
-                row.update(info)
-                # Zero-lag correlation of PPG and belt in 0.1-0.5 Hz: the sign
-                # the v16 rule would have given the target of this session.
-                p, r, ppg_fs, rsp_fs = max(pieces, key=lambda piece: piece[0].size)
-                if int(round(ppg_fs)) != int(round(rsp_fs)):
-                    r = resample_signal_poly(r, rsp_fs, ppg_fs)
-                length = min(p.size, r.size)
-                band = ANALYSIS_PROFILES[cfg["profile"]]["band_hz"]
-                corr = safe_pcc(bandpass_filter(p[:length], ppg_fs, *band)[0],
-                                bandpass_filter(r[:length], ppg_fs, *band)[0])
-                row.update({"ZeroLag_r_PPG_RSP": corr, "v16_Sign": -1.0 if corr < 0 else 1.0, "Error": ""})
-            except Exception as exc:
-                row["Error"] = repr(exc)
-            rows.append(row)
-    frame = pd.DataFrame(rows)
-    path = results_root / "steam2_loading_check.csv"
-    frame.to_csv(path, index=False, encoding="utf-8-sig")
-    if frame.empty:
-        print("No STEAM2 session found.")
-        return frame
-    ok = frame[frame["Error"] == ""]
-    print(f"STEAM2: {frame['Subject'].nunique()} subjects, {len(frame)} sessions ({len(frame) - len(ok)} unreadable)")
-    if not ok.empty:
-        print(f"  sampling rate PPG {sorted(ok['PPG_FS'].unique())}, RSP {sorted(ok['RSP_FS'].unique())} Hz; "
-              f"session length {ok['PPG_Sec'].median():.1f} s (median); sessions split at internal boundaries: "
-              f"{int((ok['Internal_Boundaries'] > 0).sum())}")
-        absolute = ok["ZeroLag_r_PPG_RSP"].abs()
-        print(f"  zero-lag |r| PPG vs belt: median {absolute.median():.3f}, below 0.2 in "
-              f"{int((absolute < 0.2).sum())}/{len(ok)} sessions; the v16 rule would flip "
-              f"{int((ok['v16_Sign'] < 0).sum())}/{len(ok)} sessions")
-    print(f"Saved: {path}")
-    return frame
-
-
 def load_dataset(dataset_key: str, spec: WindowSpec) -> Dict[str, dict]:
     if dataset_key == "bidmc":
         return load_bidmc_subjects(spec)
@@ -2974,3402 +2202,172 @@ def load_dataset(dataset_key: str, spec: WindowSpec) -> Dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# LOSOCV window datasets
+# Subjects and windows before and after QC
 # ---------------------------------------------------------------------------
 
-def select_subject_indices(
-    n_windows: int,
-    split: str,
-) -> np.ndarray:
-    if split == "test":
-        return np.arange(n_windows, dtype=int)
-    val_count = (
-        max(1, int(round(n_windows * VAL_WINDOW_RATIO)))
-        if n_windows > 1
-        else 0
-    )
-    val_count = min(val_count, max(0, n_windows - 1))
-    if split == "train":
-        return np.arange(0, n_windows - val_count, dtype=int)
-    if split == "val":
-        return (
-            np.arange(n_windows - val_count, n_windows, dtype=int)
-            if val_count
-            else np.empty(0, dtype=int)
-        )
-    raise ValueError(split)
+STAGES = ("Before_QC", "After_Signal_QC", "After_Reference_QC")
 
 
-def validation_subjects(dataset_key: str, test_subject: str, train_subjects: Sequence[str]) -> List[str]:
-    """261013: training subjects held out whole as validation subjects in one fold.
-
-    VAL_SUBJECT_RATIO of the training subjects (rounded, at least one, at
-    most all but one), drawn once per fold with a seed of the dataset and the
-    held-out subject: every member and weight decay candidate of the fold
-    uses the same validation subjects, and the test subject is never one.
-    """
-    candidates = sorted(str(subject) for subject in train_subjects if str(subject) != str(test_subject))
-    count = int(round(VAL_SUBJECT_RATIO * len(candidates)))
-    count = min(max(1, count), max(1, len(candidates) - 1))
-    rng = np.random.default_rng(stable_seed("261013-validation-subjects", dataset_key, test_subject))
-    return sorted(rng.choice(candidates, size=count, replace=False).tolist())
+def source_subjects(dataset_key: str) -> List[str]:
+    """Subjects found in the data of a dataset (before reading and QC)."""
+    cfg = DATASET_CONFIGS[dataset_key]
+    if dataset_key == "capnobase":
+        return capnobase_case_ids(Path(cfg["data_path"]))
+    if dataset_key == "bidmc":
+        records = sio.loadmat(cfg["data_path"])["data"][0]
+        return [f"{index + 1:02d}" for index in range(len(records))]
+    if dataset_key == "steam2":
+        return sorted(steam2_session_files(Path(cfg["ppg_dir"]), Path(cfg["rsp_dir"])))
+    raise KeyError(dataset_key)
 
 
-def test_metadata(
-    subject_data: Dict[str, dict],
-    test_subject: str,
-) -> List[dict]:
-    record = subject_data[test_subject]
-    return [
-        {
-            "segment_id": int(segment_id),
-            "start": int(start),
+def load_all_subjects(dataset_key: str, spec: WindowSpec) -> Dict[str, dict]:
+    """load_dataset, with the subjects that it leaves out because no window
+    passes the signal QC: those are returned with the QC rows of their
+    windows only."""
+    global combine_segments
+    combine = combine_segments
+
+    def keep_every_subject(segments, spec, fs):
+        combined = combine(segments, spec, fs)
+        if combined is not None:
+            return combined
+        return {
+            "quality": [row for segment in segments for row in segment["quality"]],
+            "reference_diagnostics": {},
         }
-        for segment_id, start in zip(
-            record["segment_ids"],
-            record["starts"],
-        )
-    ]
 
-
-def release_memory(device: Optional[torch.device] = None) -> None:
-    """Release objects from completed folds before the next LOSOCV fold."""
-    gc.collect()
-    if device is not None and device.type == "cuda":
-        torch.cuda.empty_cache()
-
-
-class SubjectWindowDataset(Dataset):
-    """Lazy window view that avoids train/validation/test array duplication.
-
-    Splits: with temporal_validation (261007), "train"/"val" are the temporal
-    split of every subject (last 20% of its kept windows for validation,
-    Train_OK only); without it (261013), "train" and "val" are every Train_OK
-    window of the given subjects (training subjects or validation subjects of
-    the fold; the split is by subject, not in time). "test" is every kept
-    window (inference never depends on the reference). Training windows get
-    the v16 jitter (random shift up to SHIFT_AUG_SEC, gain 0.95-1.05, small
-    noise).
-    """
-
-    def __init__(
-        self,
-        subject_data: Dict[str, dict],
-        subjects: Sequence[str],
-        split: str,
-        augment: bool,
-        temporal_validation: bool = False,
-    ):
-        self.subject_data = subject_data
-        self.samples = []
-        for subject in subjects:
-            record = subject_data[subject]
-            indices = (
-                select_subject_indices(len(record["low"]), split)
-                if temporal_validation
-                else np.arange(len(record["low"]), dtype=int)
-            )
-            if split in ("train", "val"):
-                indices = indices[record["train_ok"][indices]]
-            self.samples.extend((subject, int(index)) for index in indices)
-        if not self.samples:
-            raise RuntimeError(f"No windows available for split={split}")
-        self.augment = augment
-
-    def __len__(self) -> int:
-        return len(self.samples)
-
-    def __getitem__(self, index: int):
-        subject, window_index = self.samples[index]
-        record = self.subject_data[subject]
-        x = record["low"][window_index]
-        y = record["rsp"][window_index]
-        e = record["event"][window_index]
-        norm = float(record["event_norm"][window_index])
-        x = instance_minmax_normalize(np.asarray(x, dtype=np.float32)[None, :], (0.0, 1.0))
-        y = instance_minmax_normalize(np.asarray(y, dtype=np.float32)[None, :], (-1.0, 1.0))[0]
-        x_tensor = torch.from_numpy(np.asarray(x, dtype=np.float32).copy())
-        y_tensor = torch.from_numpy(np.asarray(y, dtype=np.float32).copy())
-        e_tensor = torch.from_numpy(np.asarray(e, dtype=np.float32).copy())
-        if self.augment:
-            reach = int(round(SHIFT_AUG_SEC * float(record["fs"])))
-            shift = random.randint(-reach, reach)
-            scale = random.uniform(0.95, 1.05)
-            noise_std = random.uniform(0.002, 0.01)
-            if shift:
-                x_tensor = torch.roll(x_tensor, shifts=shift, dims=-1)
-                y_tensor = torch.roll(y_tensor, shifts=shift, dims=-1)
-                e_tensor = torch.roll(e_tensor, shifts=shift, dims=-1)
-            x_tensor = x_tensor * scale + torch.randn_like(x_tensor) * noise_std
-        return (
-            x_tensor,
-            y_tensor.unsqueeze(0),
-            e_tensor.unsqueeze(0),
-            torch.tensor(norm, dtype=torch.float32),
-        )
-
-
-def make_train_loader(
-    dataset: SubjectWindowDataset,
-    batch_size: int,
-    device: torch.device,
-) -> DataLoader:
-    return DataLoader(
-        dataset,
-        batch_size=int(batch_size),
-        shuffle=True,
-        drop_last=False,
-        num_workers=0,
-        pin_memory=device.type == "cuda",
-    )
-
-
-def make_eval_loader(dataset: SubjectWindowDataset, batch_size: int, device: torch.device) -> DataLoader:
-    return DataLoader(
-        dataset,
-        batch_size=int(batch_size),
-        shuffle=False,
-        drop_last=False,
-        num_workers=0,
-        pin_memory=device.type == "cuda",
-    )
-
-
-# ---------------------------------------------------------------------------
-# v16 Deep-only building blocks (unchanged)
-# ---------------------------------------------------------------------------
-
-def choose_group_count(channels: int) -> int:
-    for groups in (8, 4, 2):
-        if channels % groups == 0:
-            return groups
-    return 1
-
-
-class ResidualConvBlock(nn.Module):
-    """v16 depthwise dilated encoder block: GELU(block(x) + x)."""
-
-    def __init__(
-        self,
-        channels: int,
-        kernel_size: int,
-        dilation: int,
-        dropout: float,
-    ):
-        super().__init__()
-        padding = int(dilation) * (int(kernel_size) // 2)
-        groups = int(channels)
-        self.conv1 = nn.Conv1d(
-            channels,
-            channels,
-            kernel_size,
-            padding=padding,
-            dilation=dilation,
-            groups=groups,
-        )
-        self.norm1 = nn.GroupNorm(channels, channels)
-        self.conv2 = nn.Conv1d(
-            channels,
-            channels,
-            kernel_size,
-            padding=padding,
-            dilation=dilation,
-            groups=groups,
-        )
-        self.norm2 = nn.GroupNorm(channels, channels)
-        self.act = nn.GELU()
-        self.drop = nn.Dropout(dropout)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = self.drop(self.act(self.norm1(self.conv1(x))))
-        out = self.drop(self.norm2(self.conv2(out)))
-        return self.act(out + x)
-
-
-class Conv1dExplicitSame(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int,
-    ):
-        super().__init__()
-        total_pad = int(kernel_size) - 1
-        self.pad = nn.ConstantPad1d(
-            (total_pad // 2, total_pad - total_pad // 2),
-            0.0,
-        )
-        self.conv = nn.Conv1d(
-            in_channels,
-            out_channels,
-            kernel_size,
-            padding=0,
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.conv(self.pad(x))
-
-
-def make_encoder(channels: int, dropout: float) -> nn.Sequential:
-    return nn.Sequential(
-        *[
-            ResidualConvBlock(
-                channels,
-                MODEL_CONFIG["encoder_kernel_size"],
-                dilation,
-                dropout,
-            )
-            for dilation in MODEL_CONFIG["encoder_dilations"]
-        ]
-    )
-
-
-# ---------------------------------------------------------------------------
-# Multi-scale stem
-# ---------------------------------------------------------------------------
-
-class StemBranch(nn.Module):
-    """v16 stem branch: explicit-same Conv1d -> GroupNorm -> GELU."""
-
-    def __init__(self, stem_channels: int, kernel_size: int):
-        super().__init__()
-        self.conv = Conv1dExplicitSame(1, stem_channels, kernel_size)
-        self.norm = nn.GroupNorm(
-            choose_group_count(stem_channels),
-            stem_channels,
-        )
-        self.act = nn.GELU()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.act(self.norm(self.conv(x)))
-
-
-# ---------------------------------------------------------------------------
-# Decoder and network
-# ---------------------------------------------------------------------------
-
-def make_breath_decoder_trunk(
-    channels: int,
-    dilations: Sequence[int],
-    dropout: float,
-) -> nn.Sequential:
-    """v16 decoder layers (24 -> 16 -> 8 channels) with dilated convolutions."""
-    width = int(channels)
-    mids = tuple(MODEL_CONFIG["decoder_mid_channels"])
-    kernels = tuple(MODEL_CONFIG["decoder_kernel_sizes"])
-    dilation_list = tuple(dilations)
-    if not len(kernels) == len(dilation_list) == len(mids):
-        raise ValueError("decoder channels, kernels and dilations differ in length")
-    layers = []
-    # Conv -> GroupNorm -> GELU -> Dropout per layer, as in the v16 decoder.
-    for out_channels, kernel, dilation in zip(mids, kernels, dilation_list):
-        layers += [
-            nn.Conv1d(
-                width,
-                out_channels,
-                kernel,
-                padding=dilation * (kernel // 2),
-                dilation=dilation,
-            ),
-            nn.GroupNorm(choose_group_count(out_channels), out_channels),
-            nn.GELU(),
-            nn.Dropout(dropout),
-        ]
-        width = out_channels
-    return nn.Sequential(*layers)
-
-
-class DeepOnlyV16Decoder(nn.Module):
-    """260928 early stem fusion network with the dilated decoder.
-
-    three stem branches -> concatenation (24 channels) -> 1x1 fusion +
-    GroupNorm (no GELU) -> depthwise residual encoder -> dilated decoder
-    trunk -> waveform head (tanh), the only output. With
-    stem_fusion="none" (ablation) the concatenated stem channels feed the
-    encoder directly.
-    """
-
-    def __init__(
-        self,
-        stem_fusion: str = "conv1x1",
-        dropout: Optional[float] = None,
-        decoder_dilations: Optional[Sequence[int]] = None,
-    ):
-        super().__init__()
-        if stem_fusion not in STEM_FUSION_MODES:
-            raise ValueError(f"stem_fusion must be one of {STEM_FUSION_MODES}")
-        self.stem_fusion = stem_fusion
-        stem_channels = int(MODEL_CONFIG["stem_base_channels"])
-        hidden = MODEL_CONFIG["hidden_channels"]
-        kernel_sizes = tuple(MODEL_CONFIG["stem_kernel_sizes"])
-        dropout = float(MODEL_CONFIG["dropout"] if dropout is None else dropout)
-        dilations = tuple(
-            MODEL_CONFIG["decoder_dilations"]
-            if decoder_dilations is None
-            else decoder_dilations
-        )
-        self.stem_base_channels = stem_channels
-        self.branch_labels = tuple(f"k{size}" for size in kernel_sizes)
-        self.stem_branches = nn.ModuleList(
-            [StemBranch(stem_channels, size) for size in kernel_sizes]
-        )
-        stem_width = stem_channels * len(kernel_sizes)
-        if stem_fusion == "conv1x1":
-            self.stem_fuse = nn.Sequential(
-                nn.Conv1d(stem_width, hidden, 1),
-                nn.GroupNorm(choose_group_count(hidden), hidden),
-            )
-            width = hidden
-        else:
-            # Ablation: no 1x1 fusion and no GroupNorm after it. Every stem
-            # branch already ends in GroupNorm + GELU, so the concatenation
-            # is the encoder input.
-            self.stem_fuse = nn.Identity()
-            width = stem_width
-        self.feature_channels = width
-        self.encoder = make_encoder(width, dropout)
-        self.decoder = make_breath_decoder_trunk(width, dilations, dropout)
-        decoder_channels = MODEL_CONFIG["decoder_mid_channels"][-1]
-        self.wave_head = nn.Conv1d(decoder_channels, 1, 1)
-        # 261006_RRWaveNet_Ensemble had a 1x1 breath-event head here. Its
-        # random draws (construction, Kaiming and N(0, 0.01) initialization)
-        # are made and discarded so that a seed gives the same initial
-        # weights, batch order and dropout as in 261006; the head itself is
-        # not part of this model.
-        removed_head = nn.Conv1d(decoder_channels, 1, 1)
-        self._init_weights()
-        nn.init.kaiming_normal_(removed_head.weight, mode="fan_out", nonlinearity="relu")
-        nn.init.normal_(removed_head.weight, mean=0.0, std=0.01)
-        del removed_head
-
-    def _init_weights(self) -> None:
-        for module in self.modules():
-            if isinstance(module, (nn.Conv1d, nn.Linear)):
-                nn.init.kaiming_normal_(
-                    module.weight,
-                    mode="fan_out",
-                    nonlinearity="relu",
-                )
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0.0)
-
-    def fused_representation(self, x: torch.Tensor) -> torch.Tensor:
-        stem = torch.cat([branch(x) for branch in self.stem_branches], dim=1)
-        return self.stem_fuse(stem)
-
-    def forward_with_diagnostics(
-        self,
-        x: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Return (waveform, post-fusion features)."""
-        fused = self.fused_representation(x)
-        features = self.decoder(self.encoder(fused))
-        return torch.tanh(self.wave_head(features)), fused
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        waveform, _ = self.forward_with_diagnostics(x)
-        return waveform
-
-
-def count_parameters(model: nn.Module) -> int:
-    return int(sum(p.numel() for p in model.parameters() if p.requires_grad))
-
-
-# ---------------------------------------------------------------------------
-# Exact v16 loss, training, checkpointing, and audit
-# ---------------------------------------------------------------------------
-
-class PearsonLoss(nn.Module):
-    def forward(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-    ) -> torch.Tensor:
-        pred = pred.squeeze(1)
-        target = target.squeeze(1)
-        pred_centered = pred - pred.mean(dim=1, keepdim=True)
-        target_centered = target - target.mean(dim=1, keepdim=True)
-        covariance = (pred_centered * target_centered).sum(dim=1)
-        denominator = torch.sqrt(
-            (pred_centered**2).sum(dim=1)
-            * (target_centered**2).sum(dim=1)
-        ) + 1e-6
-        return 1.0 - (covariance / denominator).mean()
-
-
-class DerivativeLoss(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.base = nn.SmoothL1Loss()
-
-    def forward(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-    ) -> torch.Tensor:
-        return self.base(
-            pred[:, :, 1:] - pred[:, :, :-1],
-            target[:, :, 1:] - target[:, :, :-1],
-        )
-
-
-class HybridLoss(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.time_loss = nn.SmoothL1Loss()
-        self.corr_loss = PearsonLoss()
-        self.shape_loss = DerivativeLoss()
-
-    def forward(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-    ) -> torch.Tensor:
-        w_time, w_corr, w_shape = LOSS_WEIGHTS
-        return (
-            w_time * self.time_loss(pred, target)
-            + w_corr * self.corr_loss(pred, target)
-            + w_shape * self.shape_loss(pred, target)
-        )
-
-
-class WaveformLoss(nn.Module):
-    """The v16 hybrid waveform loss (the 260928 loss), with its parts."""
-
-    def __init__(self):
-        super().__init__()
-        self.wave_loss = HybridLoss()
-
-    def forward(
-        self,
-        wave_pred: torch.Tensor,
-        wave_target: torch.Tensor,
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        wave = self.wave_loss(wave_pred, wave_target)
-        return wave, {"wave": wave.detach()}
-
-
-def evaluate_loader(
-    model: nn.Module,
-    loader: DataLoader,
-    criterion: WaveformLoss,
-    device: torch.device,
-) -> Tuple[float, Dict[str, float]]:
-    """Mean validation loss over the loader."""
-    model.eval()
-    sums = {"total": 0.0, "wave": 0.0}
-    batches = 0
-    with torch.no_grad():
-        for x, y, _, _ in loader:
-            wave = model(x.to(device))
-            loss, parts = criterion(wave, y.to(device))
-            sums["total"] += float(loss.item())
-            for key, value in parts.items():
-                sums[key] += float(value.item())
-            batches += 1
-    if batches == 0:
-        return np.nan, {key: np.nan for key in sums}
-    means = {key: value / batches for key, value in sums.items()}
-    return means["total"], means
-
-
-def atomic_torch_save(state: dict, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    torch.save(state, temporary)
-    if path.exists():
-        path.unlink()
-    os.replace(temporary, path)
-
-
-def build_training_audit(history: Sequence[dict], checkpoint: Path) -> dict:
-    frame = pd.DataFrame(history)
-    required = {"Epoch", "Train_Loss", "Val_Loss"}
-    if frame.empty or not required.issubset(frame.columns):
-        raise RuntimeError(f"Invalid training history for {checkpoint}")
-    numeric = frame[["Epoch", "Train_Loss", "Val_Loss"]].apply(
-        pd.to_numeric,
-        errors="coerce",
-    )
-    if not np.isfinite(numeric.to_numpy(dtype=float)).all():
-        raise RuntimeError(f"Non-finite loss detected: {checkpoint}")
-    best_index = int(numeric["Val_Loss"].idxmin())
-    best_row = numeric.loc[best_index]
-    final_row = numeric.iloc[-1]
-    best_position = int(numeric.index.get_loc(best_index))
-    after_best = numeric.iloc[best_position + 1 :]
-    val_increase = after_best["Val_Loss"] > best_row["Val_Loss"]
-    train_decrease = after_best["Train_Loss"] < best_row["Train_Loss"]
-    signature = val_increase & train_decrease
-    return {
-        "History_Epochs": int(len(numeric)),
-        "Best_Epoch": int(best_row["Epoch"]),
-        "Final_Epoch": int(final_row["Epoch"]),
-        "Best_Train_Loss": float(best_row["Train_Loss"]),
-        "Best_Val_Loss": float(best_row["Val_Loss"]),
-        "Final_Train_Loss": float(final_row["Train_Loss"]),
-        "Final_Val_Loss": float(final_row["Val_Loss"]),
-        "Late_Val_Degradation": float(
-            final_row["Val_Loss"] - best_row["Val_Loss"]
-        ),
-        "Generalization_Gap_At_Best": float(
-            best_row["Val_Loss"] - best_row["Train_Loss"]
-        ),
-        "Post_Best_Overfit_Signature_Epochs": int(signature.sum()),
-        "Post_Best_Overfit_Signature_Observed": int(signature.any()),
-        "Losses_Finite": 1,
-        "Best_Checkpoint_Exists": int(checkpoint.exists()),
-        "Test_Evaluated_From_Best_Validation_Checkpoint": 1,
-        "Model_Selection": "lowest_validation_loss_then_restore_checkpoint",
-        "Overfit_Control": "early_stopping_plus_best_validation_checkpoint_restore",
-        "Audit_Status": (
-            "PASS_BEST_VALIDATION_CHECKPOINT"
-            if checkpoint.exists()
-            else "FAIL_MISSING_CHECKPOINT"
-        ),
-    }
-
-
-def convergence_epoch_95pct(history: Sequence[dict]) -> int:
-    """Return the first epoch reaching 95% of the initial-to-best val improvement."""
-    frame = pd.DataFrame(history)
-    if frame.empty:
-        return 0
-    values = pd.to_numeric(frame["Val_Loss"], errors="coerce").to_numpy(float)
-    epochs = pd.to_numeric(frame["Epoch"], errors="coerce").to_numpy(int)
-    finite = np.isfinite(values)
-    if not finite.any():
-        return 0
-    values = values[finite]
-    epochs = epochs[finite]
-    best_index = int(np.argmin(values))
-    initial = float(values[0])
-    best = float(values[best_index])
-    improvement = initial - best
-    if improvement <= 1e-12:
-        return int(epochs[best_index])
-    threshold = initial - 0.95 * improvement
-    reached = np.flatnonzero(values <= threshold)
-    if len(reached) == 0:
-        return int(epochs[best_index])
-    return int(epochs[int(reached[0])])
-
-
-# ---------------------------------------------------------------------------
-# Test-time outputs and diagnostics of the fused representation
-# ---------------------------------------------------------------------------
-
-def predict_with_diagnostics(
-    model: DeepOnlyV16Decoder,
-    loader: DataLoader,
-    device: torch.device,
-) -> Dict[str, np.ndarray]:
-    """Predicted waveforms, targets and post-fusion features."""
-    model.eval()
-    chunks = {
-        "predictions": [],
-        "targets": [],
-        "features": [],
-    }
-    with torch.no_grad():
-        for x, y, _, _ in loader:
-            wave, fused = model.forward_with_diagnostics(x.to(device))
-            chunks["predictions"].append(wave.squeeze(1).cpu().numpy())
-            chunks["targets"].append(y.squeeze(1).numpy())
-            chunks["features"].append(fused.cpu().numpy().astype(np.float32))
-    if not chunks["predictions"]:
-        empty = np.empty((0, 0), dtype=np.float32)
-        outputs = {key: empty for key in chunks}
-        outputs["features"] = np.empty((0, 0, 0), dtype=np.float32)
-        return outputs
-    return {
-        key: np.concatenate(values).astype(np.float32)
-        for key, values in chunks.items()
-    }
-
-
-def feature_representation_summary(features: np.ndarray) -> dict:
-    """Summarize the 24-channel stem representation for one held-out subject."""
-    result = {metric: np.nan for metric in FEATURE_METRICS}
-    result["Feature_N_Windows"] = 0
-    result["Feature_N_Samples"] = 0
-    values = np.asarray(features, dtype=np.float64)
-    if values.ndim != 3 or values.shape[0] == 0:
-        return result
-    windows, channels, samples = values.shape
-    matrix = np.transpose(values, (1, 0, 2)).reshape(channels, -1)
-    matrix = np.nan_to_num(matrix, nan=0.0, posinf=0.0, neginf=0.0)
-    if channels < 2 or matrix.shape[1] < 3:
-        return result
-    matrix = matrix - np.mean(matrix, axis=1, keepdims=True)
-    covariance = (matrix @ matrix.T) / max(1, matrix.shape[1] - 1)
-    covariance = (covariance + covariance.T) / 2.0
-    eigenvalues = np.clip(np.linalg.eigvalsh(covariance), 0.0, None)
-    total = float(eigenvalues.sum())
-    if total > 1e-12:
-        probabilities = eigenvalues / total
-        positive = probabilities > 0
-        effective_rank = float(
-            np.exp(-np.sum(probabilities[positive] * np.log(probabilities[positive])))
-        )
-        result["Feature_EffectiveRank"] = effective_rank
-        result["Feature_EffectiveRank_Normalized"] = effective_rank / channels
-        denom = float(np.sum(eigenvalues**2))
-        if denom > 1e-12:
-            result["Feature_ParticipationRatio"] = float(total**2 / denom)
-    std = np.sqrt(np.maximum(np.diag(covariance), 0.0))
-    denominator = np.outer(std, std)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        correlation = covariance / denominator
-    correlation = np.where(np.isfinite(correlation), correlation, 0.0)
-    off_diagonal = correlation[~np.eye(channels, dtype=bool)]
-    if off_diagonal.size:
-        result["Feature_OffDiag_SignedMean"] = float(np.mean(off_diagonal))
-        result["Feature_OffDiag_AbsMean"] = float(np.mean(np.abs(off_diagonal)))
-    result["Feature_N_Windows"] = int(windows)
-    result["Feature_N_Samples"] = int(matrix.shape[1])
-    return result
-
-
-# ---------------------------------------------------------------------------
-# One LOSOCV fold
-# ---------------------------------------------------------------------------
-
-def make_optimizer(model: DeepOnlyV16Decoder, epochs: int, weight_decay: Optional[float] = None):
-    """AdamW. weight_decay None (261007): WEIGHT_DECAY_261007 on every
-    parameter. A value (261013): that decay (decoupled) on the convolution
-    weights only; biases and GroupNorm scale / shift are not decayed."""
-    if weight_decay is None:
-        optimizer = torch.optim.AdamW(
-            [{"params": list(model.parameters())}],
-            lr=LEARNING_RATE,
-            weight_decay=WEIGHT_DECAY_261007,
-        )
-        return optimizer, CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-    decay = [p for p in model.parameters() if p.ndim >= 2]
-    no_decay = [p for p in model.parameters() if p.ndim < 2]
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": decay, "weight_decay": float(weight_decay)},
-            {"params": no_decay, "weight_decay": 0.0},
-        ],
-        lr=LEARNING_RATE,
-    )
-    return optimizer, CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-
-
-def fit_model(
-    model: DeepOnlyV16Decoder,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
-    device: torch.device,
-    epochs: int,
-    min_epochs: int,
-    patience: int,
-    checkpoint: Path,
-    state_path: Optional[Path] = None,
-    weight_decay: Optional[float] = None,
-) -> List[dict]:
-    """Train with early stopping on the validation loss.
-
-    The best validation state is saved to `checkpoint`. The cosine schedule
-    spans `epochs`. With `state_path`, the full training state (weights,
-    optimizer, schedule, early-stopping counters, history and the random
-    number generators) is saved after every epoch, and an existing state is
-    continued from, so an interrupted run resumes exactly where it stopped.
-    """
-    criterion = WaveformLoss()
-    optimizer, scheduler = make_optimizer(model, epochs, weight_decay)
-    best_val = np.inf
-    patience_counter = 0
-    history = []
-    start_epoch = 0
-    if state_path is not None and state_path.exists():
-        state = torch.load(state_path, map_location=device, weights_only=False)
-        model.load_state_dict(state["model"])
-        optimizer.load_state_dict(state["optimizer"])
-        scheduler.load_state_dict(state["scheduler"])
-        best_val = float(state["best_val"])
-        patience_counter = int(state["patience_counter"])
-        history = list(state["history"])
-        start_epoch = int(state["epoch"])
-        random.setstate(state["python_rng"])
-        np.random.set_state(state["numpy_rng"])
-        torch.set_rng_state(state["torch_rng"])
-        if torch.cuda.is_available() and state.get("cuda_rng") is not None:
-            torch.cuda.set_rng_state_all(state["cuda_rng"])
-        if state.get("stopped", False):
-            return history
-    for epoch in range(start_epoch, epochs):
-        model.train()
-        train_loss = 0.0
-        for x, y, _, _ in train_loader:
-            optimizer.zero_grad(set_to_none=True)
-            wave = model(x.to(device))
-            loss, _ = criterion(wave, y.to(device))
-            if not torch.isfinite(loss):
-                raise RuntimeError(f"Non-finite training loss at epoch {epoch + 1}")
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            train_loss += float(loss.item())
-        train_loss /= max(1, len(train_loader))
-        val_loss, val_parts = evaluate_loader(model, val_loader, criterion, device)
-        if not np.isfinite(val_loss):
-            raise RuntimeError(f"Non-finite validation loss at epoch {epoch + 1}")
-        row = {
-            "Epoch": epoch + 1,
-            "Train_Loss": train_loss,
-            "Val_Loss": val_loss,
-            "Val_Wave_Loss": val_parts["wave"],
-        }
-        scheduler.step()
-        history.append(row)
-        if row["Val_Loss"] < best_val - 1e-4:
-            best_val = row["Val_Loss"]
-            atomic_torch_save(model.state_dict(), checkpoint)
-            patience_counter = 0
-        elif epoch + 1 >= min_epochs:
-            patience_counter += 1
-        stop = epoch + 1 >= min_epochs and patience_counter >= patience
-        if state_path is not None:
-            atomic_torch_save(
-                {
-                    "epoch": epoch + 1,
-                    "stopped": bool(stop),
-                    "model": model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "scheduler": scheduler.state_dict(),
-                    "best_val": best_val,
-                    "patience_counter": patience_counter,
-                    "history": history,
-                    "python_rng": random.getstate(),
-                    "numpy_rng": np.random.get_state(),
-                    "torch_rng": torch.get_rng_state(),
-                    "cuda_rng": torch.cuda.get_rng_state_all()
-                    if torch.cuda.is_available()
-                    else None,
-                },
-                state_path,
-            )
-        if stop:
-            break
-    return history
-
-
-def train_one(
-    dataset_key: str,
-    spec: WindowSpec,
-    test_subject: str,
-    subject_data: Dict[str, dict],
-    train_subjects: Sequence[str],
-    val_subjects: Optional[Sequence[str]],
-    member_root: Path,
-    device: torch.device,
-    epochs: int,
-    min_epochs: int,
-    patience: int,
-    batch_size: int,
-    seed: int,
-    model_options: ModelOptions,
-    save_features: bool = False,
-    resume: bool = False,
-) -> Tuple[Dict[str, np.ndarray], List[dict], dict, Path, dict]:
-    """Train one ensemble member of one LOSOCV fold and predict the held-out subject.
-
-    Validation: with val_subjects None (261007), the last 20% of each
-    training subject's windows (v16); otherwise (261013) every window of the
-    fold's validation subjects (subject-wise, see validation_subjects), and
-    the training windows are every window of the other training subjects.
-    The best validation state is restored before testing. The training state is
-    saved after every epoch; with `resume` an interrupted member continues
-    from it, otherwise it starts over.
-    """
-    set_seed(seed)
-    model_root = member_root / "Models"
-    curve_root = member_root / "Learning_Curves"
-    audit_root = member_root / "Training_Audits"
-    prediction_root = member_root / "Predictions"
-    for path in (model_root, curve_root, audit_root, prediction_root):
-        path.mkdir(parents=True, exist_ok=True)
-
-    tag = safe_tag(test_subject)
-    checkpoint = model_root / f"{tag}_best.pth"
-    history_path = curve_root / f"{tag}_Learning_Curve.csv"
-    audit_path = audit_root / f"{tag}_Training_Audit.csv"
-    prediction_path = prediction_root / f"{tag}_test_outputs.npz"
-    state_path = model_root / f"{tag}_training_state.pt"
-    if not resume and state_path.exists():
-        state_path.unlink()
-
-    if val_subjects is None:
-        train_dataset = SubjectWindowDataset(subject_data, train_subjects, "train", True, True)
-        val_dataset = SubjectWindowDataset(subject_data, train_subjects, "val", False, True)
-    else:
-        held_out = {str(subject) for subject in val_subjects}
-        fit_subjects = [subject for subject in train_subjects if str(subject) not in held_out]
-        if str(test_subject) in held_out or not fit_subjects:
-            raise RuntimeError(f"{test_subject}: invalid validation subjects {sorted(held_out)}")
-        train_dataset = SubjectWindowDataset(subject_data, fit_subjects, "train", True)
-        val_dataset = SubjectWindowDataset(subject_data, list(val_subjects), "val", False)
-    test_dataset = SubjectWindowDataset(subject_data, [test_subject], "test", False)
-    train_loader = make_train_loader(train_dataset, batch_size, device)
-    val_loader = make_eval_loader(val_dataset, batch_size, device)
-    test_loader = make_eval_loader(test_dataset, batch_size, device)
-    metadata = test_metadata(subject_data, test_subject)
-
-    model = model_options.build().to(device)
-    history = fit_model(
-        model,
-        train_loader,
-        val_loader,
-        device,
-        epochs,
-        min_epochs,
-        patience,
-        checkpoint,
-        state_path,
-        model_options.weight_decay,
-    )
-    history_frame = pd.DataFrame(history)
-    history_frame.to_csv(history_path, index=False, encoding="utf-8-sig")
-    audit = build_training_audit(history, checkpoint)
-    audit["Convergence_Epoch_95pct"] = convergence_epoch_95pct(history)
-    if audit["Audit_Status"] != "PASS_BEST_VALIDATION_CHECKPOINT":
-        raise RuntimeError(f"No valid checkpoint: {checkpoint}")
-    audit["Validation_Mode"] = (
-        "temporal (last 20% of each training subject)"
-        if val_subjects is None
-        else f"subject-wise ({len(held_out)} validation subjects, {len(fit_subjects)} training subjects)"
-    )
-    pd.DataFrame([audit]).to_csv(audit_path, index=False, encoding="utf-8-sig")
-
-    model.load_state_dict(torch.load(checkpoint, map_location=device))
-    outputs = predict_with_diagnostics(model, test_loader, device)
-    features = outputs.pop("features")
-    best_row = history_frame.loc[history_frame["Epoch"] == audit["Best_Epoch"]].iloc[0]
-    diagnostics = {"N_Params": count_parameters(model)}
-    if val_subjects is not None:
-        diagnostics.update(
-            {
-                "Weight_Decay": float(model_options.weight_decay),
-                "N_Train_Subjects": len(fit_subjects),
-                "N_Val_Subjects": len(held_out),
-                "Validation_Subjects": " ".join(sorted(held_out)),
-            }
-        )
-    diagnostics.update(
-        {
-            "Train_Windows": len(train_loader.dataset),
-            "Val_Windows": len(val_loader.dataset),
-            "Val_Wave_Loss_At_Best": float(best_row["Val_Wave_Loss"]),
-        }
-    )
-    diagnostics.update(feature_representation_summary(features))
-    arrays = {
-        "predictions": outputs["predictions"],
-        "targets": outputs["targets"],
-        "segment_ids": np.asarray(
-            [item["segment_id"] for item in metadata],
-            dtype=np.int64,
-        ),
-        "window_starts": np.asarray(
-            [item["start"] for item in metadata],
-            dtype=np.int64,
-        ),
-        "fs": np.asarray(TARGET_FS, dtype=np.int32),
-        "input_window_sec": np.asarray(spec.window_sec, dtype=np.float32),
-        "input_stride_sec": np.asarray(spec.stride_sec, dtype=np.float32),
-        "model_key": np.asarray(model_options.key),
-        "seed": np.asarray(seed, dtype=np.int64),
-    }
-    if save_features:
-        arrays["feature_representation"] = features.astype(np.float32)
-        arrays["feature_representation_location"] = np.asarray(
-            "post_stem_fusion"
-        )
-    np.savez_compressed(prediction_path, **arrays)
-    if state_path.exists():
-        state_path.unlink()
-    del features, arrays, train_loader, val_loader, test_loader
-    del model
-    release_memory(device)
-    return outputs, metadata, audit, prediction_path, diagnostics
-
-
-# ---------------------------------------------------------------------------
-# Timeline reconstruction and direct 60-second RR evaluation
-# ---------------------------------------------------------------------------
-
-def safe_pcc(x: np.ndarray, y: np.ndarray) -> float:
-    x_arr, _ = sanitize_signal(x)
-    y_arr, _ = sanitize_signal(y)
-    length = min(len(x_arr), len(y_arr))
-    x_arr = x_arr[:length]
-    y_arr = y_arr[:length]
-    if length < 2:
-        return np.nan
-    if np.std(x_arr) < 1e-8 or np.std(y_arr) < 1e-8:
-        return np.nan
-    return float(stats.pearsonr(x_arr, y_arr)[0])
-
-
-def reconstruct_segment(
-    predictions: np.ndarray,
-    targets: np.ndarray,
-    metadata: Sequence[dict],
-    segment_id: int,
-    fs: int,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    selected = [
-        index
-        for index, item in enumerate(metadata)
-        if int(item["segment_id"]) == int(segment_id)
-    ]
-    if not selected:
-        return (
-            np.empty(0, dtype=np.float64),
-            np.empty(0, dtype=np.float64),
-            np.empty(0, dtype=bool),
-        )
-    window_len = int(predictions.shape[1])
-    max_end = max(int(metadata[index]["start"]) for index in selected)
-    max_end += window_len
-    pred_sum = np.zeros(max_end, dtype=np.float64)
-    true_sum = np.zeros(max_end, dtype=np.float64)
-    coverage = np.zeros(max_end, dtype=np.int32)
-    for index in selected:
-        start = int(metadata[index]["start"])
-        end = start + window_len
-        pred = np.asarray(predictions[index], dtype=np.float64)
-        true = np.asarray(targets[index], dtype=np.float64)
-        pred, _ = sanitize_signal(pred)
-        true, _ = sanitize_signal(true)
-        pred_sum[start:end] += pred[:window_len]
-        true_sum[start:end] += true[:window_len]
-        coverage[start:end] += 1
-    valid = coverage > 0
-    pred_out = np.full(max_end, np.nan, dtype=np.float64)
-    true_out = np.full(max_end, np.nan, dtype=np.float64)
-    pred_out[valid] = pred_sum[valid] / coverage[valid]
-    true_out[valid] = true_sum[valid] / coverage[valid]
-    return pred_out, true_out, valid
-
-
-def contiguous_runs(mask: np.ndarray) -> List[Tuple[int, int]]:
-    mask = np.asarray(mask, dtype=bool)
-    if not mask.any():
-        return []
-    padded = np.concatenate([[False], mask, [False]])
-    changes = np.flatnonzero(padded[1:] != padded[:-1])
-    return [(int(left), int(right)) for left, right in changes.reshape(-1, 2)]
-
-
-REFERENCE_EXCLUSION_REASONS = (
-    "ref_structural_invalid",
-    "ref_artifact_label",
-    "ref_rr_undefined",
-    "ref_irregular_cycles",
-    "ref_disagreement",
-    "ref_out_of_band",
-)
-
-
-def _mean_or_nan(values: Sequence[float]) -> float:
-    values = np.asarray(values, dtype=np.float64)
-    values = values[np.isfinite(values)]
-    return float(np.mean(values)) if len(values) else np.nan
-
-
-def summarize_subject_minutes(frame: pd.DataFrame) -> dict:
-    """Subject-level summary of the per-minute evaluation table."""
-    summary = {
-        "N60": 0,
-        "N60_RefValid": 0,
-        "Ref_Valid_Ratio": np.nan,
-        **{f"N60_Excluded_{reason}": 0 for reason in REFERENCE_EXCLUSION_REASONS},
-        "RR_MAE_Wave_FFT": np.nan,
-        "RR_Bias_Wave_FFT": np.nan,
-        "Wave_PCC_Mean": np.nan,
-    }
-    if frame.empty:
-        return summary
-    summary["N60"] = int(len(frame))
-    for reason in REFERENCE_EXCLUSION_REASONS:
-        summary[f"N60_Excluded_{reason}"] = int(
-            (frame["Ref_Exclusion_Reason"] == reason).sum()
-        )
-    valid = frame[frame["Ref_Valid"].astype(bool)]
-    summary["N60_RefValid"] = int(len(valid))
-    summary["Ref_Valid_Ratio"] = float(len(valid) / len(frame))
-    if valid.empty:
-        return summary
-    error = valid["Pred_Wave_FFT_RR"] - valid["GT_Breath_Count"] * (60.0 / EVAL_WINDOW_SEC)
-    summary.update(
-        {
-            "RR_MAE_Wave_FFT": _mean_or_nan(valid["AE_Wave_FFT"]),
-            "RR_Bias_Wave_FFT": _mean_or_nan(error),
-            "Wave_PCC_Mean": _mean_or_nan(valid["Wave_PCC"]),
-        }
-    )
-    return summary
-
-
-def evaluate_subject_minutes(
-    outputs: Dict[str, np.ndarray],
-    metadata: Sequence[dict],
-    references: Dict[int, dict],
-    fs: int,
-) -> Tuple[dict, pd.DataFrame]:
-    """Score every complete 60 s minute of one held-out subject (waveform only).
-
-    Minutes are non-overlapping 60 s slices of each contiguous run of
-    reconstructed windows (overlap-add mean of the window outputs). Per minute:
-
-    * reference: with expert labels (CapnoBase) the labels are the ground
-      truth and a minute needs a valid reference, two labelled breaths and a
-      rate in band; otherwise the minute of the continuous reference must
-      pass the RRest agreement rule and the ground truth is the number of
-      breath onsets detected once on the continuous reference. Excluded
-      minutes keep a reason. Band and rate range follow the segment's profile;
-    * breathing rate: largest FFT peak of the predicted waveform within the
-      profile's rate band, after the profile's respiratory filter is applied
-      to the whole run;
-    * waveform agreement: Pearson r of the predicted and target waveforms.
-    """
-    predictions = outputs["predictions"]
-    targets = outputs["targets"]
-    if len(predictions) == 0:
-        return summarize_subject_minutes(pd.DataFrame()), pd.DataFrame()
-
-    eval_len = int(round(EVAL_WINDOW_SEC * fs))
-    per_minute = 60.0 / EVAL_WINDOW_SEC
-    rows = []
-    for segment_id in sorted({int(item["segment_id"]) for item in metadata}):
-        pred_series, true_series, coverage = reconstruct_segment(
-            predictions, targets, metadata, segment_id, fs
-        )
-        reference = references[segment_id]
-        ref_signal = reference["signal"]
-        ref_breaths = reference["breaths"]
-        ref_structural = reference["structural_valid"]
-        profile = reference["profile"]
-        rr_band = profile["rr_band_bpm"]
-        subharmonic = profile["fft_subharmonic_check"]
-        for run_index, (run_start, run_end) in enumerate(
-            contiguous_runs(coverage),
-            start=1,
-        ):
-            if run_end - run_start < eval_len:
-                continue
-            minute_starts = list(range(run_start, run_end - eval_len + 1, eval_len))
-            wave_run = respiratory_filter(
-                pred_series[run_start:run_end], fs, reference["band_hz"], profile
-            )
-            for local_index, start in enumerate(minute_starts, start=1):
-                end = start + eval_len
-                # Reference validity and fixed ground truth. With expert labels
-                # the labels are the ground truth: the minute needs a valid
-                # reference signal, at least two labelled breaths and an RR in
-                # the profile's band. Without labels the agreement rule decides.
-                in_minute = (ref_breaths >= start) & (ref_breaths < end)
-                gt_count = int(in_minute.sum())
-                gt_rate = gt_count * per_minute
-                minute_labels = ref_breaths[in_minute]
-                label_rr = (
-                    float(60.0 * fs / np.mean(np.diff(minute_labels)))
-                    if reference["label_based"] and len(minute_labels) >= 2
-                    else np.nan
-                )
-                structural = float(np.mean(ref_structural[start:end]))
-                ref_artifact = (
-                    float(np.mean(reference["artifact_mask"][start:end]))
-                    if reference.get("artifact_mask") is not None
-                    else 0.0
-                )
-                ppg_artifact = (
-                    float(np.mean(reference["ppg_artifact_mask"][start:end]))
-                    if reference.get("ppg_artifact_mask") is not None
-                    else 0.0
-                )
-                _, _, ref_rr_cto, _ = count_orig_breaths(ref_signal[start:end], fs)
-                ref_rr_fft = fft_rr_bpm(ref_signal[start:end], fs, rr_band, subharmonic)
-                if structural < MIN_USABLE_PROPORTION:
-                    ref_valid, reason = False, "ref_structural_invalid"
-                elif ref_artifact > 0.0:
-                    # Expert-labelled reference artifact: breaths inside it
-                    # may be unlabelled, so the minute has no ground truth.
-                    ref_valid, reason = False, "ref_artifact_label"
-                elif reference["label_based"]:
-                    if not np.isfinite(label_rr):
-                        ref_valid, reason = False, "ref_rr_undefined"
-                    elif not (rr_band[0] <= label_rr <= rr_band[1]):
-                        ref_valid, reason = False, "ref_out_of_band"
-                    else:
-                        ref_valid, reason = True, ""
-                else:
-                    ref_valid, reason, _, _ = reference_agreement(
-                        ref_signal[start:end], fs, rr_band, subharmonic
-                    )
-
-                # Breathing rate of the predicted waveform. The f/2, f/3 check
-                # is for capnogram references; on predicted waveforms it
-                # halved fast rates, so it is not used here.
-                wave_fft = fft_rr_bpm(
-                    wave_run[start - run_start : end - run_start],
-                    fs,
-                    rr_band,
-                    False,
-                )
-                rows.append(
-                    {
-                        "Segment_ID": segment_id,
-                        "Coverage_Run_Index": run_index,
-                        "RR_Window_Index": local_index,
-                        "RR_Window_Start_Sec": start / float(fs),
-                        "RR_Window_End_Sec": end / float(fs),
-                        "Ref_Valid": bool(ref_valid),
-                        "Ref_Exclusion_Reason": reason,
-                        "Ref_Structural_Fraction": structural,
-                        "Ref_Artifact_Label_Fraction": ref_artifact,
-                        "PPG_Artifact_Label_Fraction": ppg_artifact,
-                        "Ref_RR_CtO": ref_rr_cto,
-                        "Ref_RR_FFT": ref_rr_fft,
-                        "Ref_RR_Label": label_rr,
-                        "GT_Source": "expert_labels"
-                        if reference["label_based"]
-                        else "detected_breaths",
-                        "GT_Breath_Count": gt_count,
-                        "Pred_Wave_FFT_RR": wave_fft,
-                        "AE_Wave_FFT": abs(wave_fft - gt_rate)
-                        if np.isfinite(wave_fft)
-                        else np.nan,
-                        "Wave_PCC": safe_pcc(true_series[start:end], pred_series[start:end]),
-                    }
-                )
-    frame = pd.DataFrame(rows)
-    return summarize_subject_minutes(frame), frame
-
-
-# ---------------------------------------------------------------------------
-# Statistics, plots, and output tables
-# ---------------------------------------------------------------------------
-
-def safe_pvalue(function, x: np.ndarray, y: np.ndarray) -> float:
+    combine_segments = keep_every_subject
     try:
-        if len(x) < 2 or len(y) < 2:
-            return np.nan
-        if np.allclose(np.asarray(x, dtype=float), np.asarray(y, dtype=float)):
-            return 1.0
-        return float(function(x, y).pvalue)
-    except Exception:
-        return np.nan
-
-
-def bh_fdr(values: Sequence[float]) -> np.ndarray:
-    values = np.asarray(values, dtype=float)
-    output = np.full(values.shape, np.nan, dtype=float)
-    finite = np.isfinite(values)
-    if not finite.any():
-        return output
-    raw = values[finite]
-    order = np.argsort(raw)
-    ranked = raw[order]
-    adjusted = ranked * len(ranked) / np.arange(1, len(ranked) + 1)
-    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
-    adjusted = np.clip(adjusted, 0.0, 1.0)
-    restored = np.empty_like(adjusted)
-    restored[order] = adjusted
-    output[finite] = restored
-    return output
-
-
-MINUTE_KEY = ["Subject", "Segment_ID", "RR_Window_Start_Sec"]
-
-
-def scored_minutes(frame: pd.DataFrame) -> pd.DataFrame:
-    """Reference-valid minutes with the FFT rate error (breaths/min)."""
-    if frame.empty:
-        return frame.copy()
-    valid = frame[frame["Ref_Valid"].astype(bool)].copy()
-    valid["Subject"] = valid["Subject"].astype(str)
-    valid["GT_RR"] = pd.to_numeric(valid["GT_Breath_Count"], errors="coerce") * (
-        60.0 / EVAL_WINDOW_SEC
-    )
-    valid["FFT_RR"] = pd.to_numeric(valid["Pred_Wave_FFT_RR"], errors="coerce")
-    valid["FFT_Error"] = valid["FFT_RR"] - valid["GT_RR"]
-    valid["FFT_AE"] = valid["FFT_Error"].abs()
-    return valid
-
-
-def sd(values) -> float:
-    """Sample SD (ddof=1) of the finite values."""
-    values = np.asarray(values, dtype=float)
-    values = values[np.isfinite(values)]
-    return float(np.std(values, ddof=1)) if values.size > 1 else np.nan
-
-
-def fft_davies_metrics_261007(minutes: pd.DataFrame) -> dict:
-    """FFT metrics over all minutes and the Davies & Mandic (2022) medians.
-
-    mAE: median absolute error over all minutes; mMAE: median over subjects
-    of each subject's mean absolute error. Minutes without an FFT peak are
-    counted in N_Minutes_No_FFT and left out of the error statistics.
-    """
-    result = {
-        "N_Subjects": 0,
-        "N_Minutes": 0,
-        "N_Minutes_No_FFT": 0,
-        "FFT_MAE": np.nan,
-        "FFT_RMSE": np.nan,
-        "FFT_Bias": np.nan,
-        "FFT_LoA_Lower": np.nan,
-        "FFT_LoA_Upper": np.nan,
-        "FFT_Pearson_r": np.nan,
-        "FFT_Within_1_BPM_Pct": np.nan,
-        "FFT_Within_2_BPM_Pct": np.nan,
-        "FFT_Subject_MAE_Mean": np.nan,
-        "FFT_Subject_MAE_SD": np.nan,
-        "Davies_mAE": np.nan,
-        "Davies_mAE_Q1": np.nan,
-        "Davies_mAE_Q3": np.nan,
-        "Davies_mMAE": np.nan,
-        "Davies_mMAE_Q1": np.nan,
-        "Davies_mMAE_Q3": np.nan,
-        "Wave_PCC_Mean": np.nan,
-        "Wave_PCC_Median": np.nan,
-    }
-    if minutes.empty:
-        return result
-    pcc = pd.to_numeric(minutes["Wave_PCC"], errors="coerce").dropna()
-    if len(pcc):
-        result["Wave_PCC_Mean"] = float(pcc.mean())
-        result["Wave_PCC_Median"] = float(pcc.median())
-    have = minutes[np.isfinite(minutes["FFT_AE"])]
-    result["N_Minutes"] = int(len(minutes))
-    result["N_Minutes_No_FFT"] = int(len(minutes) - len(have))
-    if have.empty:
-        return result
-    errors = have["FFT_Error"].to_numpy(dtype=float)
-    absolute = np.abs(errors)
-    subject_mae = have.groupby("Subject")["FFT_AE"].mean()
-    sd = float(np.std(errors, ddof=1)) if len(errors) > 1 else np.nan
-    result.update(
-        {
-            "N_Subjects": int(subject_mae.size),
-            "FFT_MAE": float(np.mean(absolute)),
-            "FFT_RMSE": float(np.sqrt(np.mean(errors**2))),
-            "FFT_Bias": float(np.mean(errors)),
-            "FFT_LoA_Lower": float(np.mean(errors) - 1.96 * sd),
-            "FFT_LoA_Upper": float(np.mean(errors) + 1.96 * sd),
-            "FFT_Pearson_r": safe_pcc(
-                have["FFT_RR"].to_numpy(dtype=float),
-                have["GT_RR"].to_numpy(dtype=float),
-            ),
-            "FFT_Within_1_BPM_Pct": float(np.mean(absolute <= 1.0) * 100.0),
-            "FFT_Within_2_BPM_Pct": float(np.mean(absolute <= 2.0) * 100.0),
-            "FFT_Subject_MAE_Mean": float(subject_mae.mean()),
-            "FFT_Subject_MAE_SD": float(subject_mae.std(ddof=1))
-            if subject_mae.size > 1
-            else np.nan,
-            "Davies_mAE": float(np.median(absolute)),
-            "Davies_mAE_Q1": float(np.percentile(absolute, 25)),
-            "Davies_mAE_Q3": float(np.percentile(absolute, 75)),
-            "Davies_mMAE": float(subject_mae.median()),
-            "Davies_mMAE_Q1": float(subject_mae.quantile(0.25)),
-            "Davies_mMAE_Q3": float(subject_mae.quantile(0.75)),
-        }
-    )
-    return result
-
-
-SUMMARY_METRICS_261007 = (
-    "FFT_MAE",
-    "FFT_RMSE",
-    "FFT_Bias",
-    "FFT_LoA_Lower",
-    "FFT_LoA_Upper",
-    "FFT_Pearson_r",
-    "FFT_Within_1_BPM_Pct",
-    "FFT_Within_2_BPM_Pct",
-    "FFT_Subject_MAE_Mean",
-    "FFT_Subject_MAE_SD",
-    "Davies_mAE",
-    "Davies_mAE_Q1",
-    "Davies_mAE_Q3",
-    "Davies_mMAE",
-    "Davies_mMAE_Q1",
-    "Davies_mMAE_Q3",
-    "Wave_PCC_Mean",
-    "Wave_PCC_Median",
-)
-
-
-def member_average_metrics_261007(minutes: pd.DataFrame) -> dict:
-    """Metrics of each single model (member), averaged over the members."""
-    rows = [
-        fft_davies_metrics_261007(frame)
-        for _, frame in minutes.groupby("Member", sort=True)
-    ]
-    if not rows:
-        return fft_davies_metrics_261007(pd.DataFrame())
-    table = pd.DataFrame(rows)
-    result = {
-        "N_Subjects": int(table["N_Subjects"].max()),
-        "N_Minutes": int(table["N_Minutes"].max()),
-        "N_Minutes_No_FFT": float(table["N_Minutes_No_FFT"].mean()),
-        "N_Members": int(len(table)),
-    }
-    for metric in SUMMARY_METRICS_261007:
-        result[metric] = float(table[metric].mean())
-        result[f"{metric}_SD_Members"] = (
-            float(table[metric].std(ddof=1)) if len(table) > 1 else np.nan
-        )
-    return result
-
-
-def fft_davies_metrics_261013(minutes: pd.DataFrame) -> dict:
-    """FFT metrics over all minutes and the Davies & Mandic (2022) medians.
-
-    mAE: median absolute error over all minutes; mMAE: median over subjects
-    of each subject's mean absolute error. Every mean comes with its SD
-    (ddof=1): FFT_MAE_SD and FFT_Bias_SD over the minutes (LoA = bias +- 1.96
-    SD), FFT_Subject_MAE_SD over the subjects, Wave_PCC_SD over the minutes.
-    Minutes without an FFT peak are counted in N_Minutes_No_FFT and left out
-    of the error statistics.
-    """
-    result = {"N_Subjects": 0, "N_Minutes": 0, "N_Minutes_No_FFT": 0}
-    result.update({metric: np.nan for metric in SUMMARY_METRICS_261013})
-    if minutes.empty:
-        return result
-    pcc = pd.to_numeric(minutes["Wave_PCC"], errors="coerce").dropna()
-    if len(pcc):
-        result["Wave_PCC_Mean"] = float(pcc.mean())
-        result["Wave_PCC_SD"] = sd(pcc)
-        result["Wave_PCC_Median"] = float(pcc.median())
-    have = minutes[np.isfinite(minutes["FFT_AE"])]
-    result["N_Minutes"] = int(len(minutes))
-    result["N_Minutes_No_FFT"] = int(len(minutes) - len(have))
-    if have.empty:
-        return result
-    errors = have["FFT_Error"].to_numpy(dtype=float)
-    absolute = np.abs(errors)
-    subject_mae = have.groupby("Subject")["FFT_AE"].mean()
-    error_sd = sd(errors)
-    result.update(
-        {
-            "N_Subjects": int(subject_mae.size),
-            "FFT_MAE": float(np.mean(absolute)),
-            "FFT_MAE_SD": sd(absolute),
-            "FFT_RMSE": float(np.sqrt(np.mean(errors**2))),
-            "FFT_Bias": float(np.mean(errors)),
-            "FFT_Bias_SD": error_sd,
-            "FFT_LoA_Lower": float(np.mean(errors) - 1.96 * error_sd),
-            "FFT_LoA_Upper": float(np.mean(errors) + 1.96 * error_sd),
-            "FFT_Pearson_r": safe_pcc(
-                have["FFT_RR"].to_numpy(dtype=float),
-                have["GT_RR"].to_numpy(dtype=float),
-            ),
-            "FFT_Within_1_BPM_Pct": float(np.mean(absolute <= 1.0) * 100.0),
-            "FFT_Within_2_BPM_Pct": float(np.mean(absolute <= 2.0) * 100.0),
-            "FFT_Subject_MAE_Mean": float(subject_mae.mean()),
-            "FFT_Subject_MAE_SD": sd(subject_mae),
-            "Davies_mAE": float(np.median(absolute)),
-            "Davies_mAE_Q1": float(np.percentile(absolute, 25)),
-            "Davies_mAE_Q3": float(np.percentile(absolute, 75)),
-            "Davies_mMAE": float(subject_mae.median()),
-            "Davies_mMAE_Q1": float(subject_mae.quantile(0.25)),
-            "Davies_mMAE_Q3": float(subject_mae.quantile(0.75)),
-        }
-    )
-    return result
-
-
-SUMMARY_METRICS_261013 = (
-    "FFT_MAE",
-    "FFT_MAE_SD",
-    "FFT_RMSE",
-    "FFT_Bias",
-    "FFT_Bias_SD",
-    "FFT_LoA_Lower",
-    "FFT_LoA_Upper",
-    "FFT_Pearson_r",
-    "FFT_Within_1_BPM_Pct",
-    "FFT_Within_2_BPM_Pct",
-    "FFT_Subject_MAE_Mean",
-    "FFT_Subject_MAE_SD",
-    "Davies_mAE",
-    "Davies_mAE_Q1",
-    "Davies_mAE_Q3",
-    "Davies_mMAE",
-    "Davies_mMAE_Q1",
-    "Davies_mMAE_Q3",
-    "Wave_PCC_Mean",
-    "Wave_PCC_SD",
-    "Wave_PCC_Median",
-)
-
-
-def member_average_metrics_261013(minutes: pd.DataFrame) -> dict:
-    """Metrics of each single model (member), averaged over the members."""
-    rows = [
-        fft_davies_metrics_261013(frame)
-        for _, frame in minutes.groupby("Member", sort=True)
-    ]
-    if not rows:
-        return fft_davies_metrics_261013(pd.DataFrame())
-    table = pd.DataFrame(rows)
-    result = {
-        "N_Subjects": int(table["N_Subjects"].max()),
-        "N_Minutes": int(table["N_Minutes"].max()),
-        "N_Minutes_No_FFT": float(table["N_Minutes_No_FFT"].mean()),
-        "N_Members": int(len(table)),
-    }
-    for metric in SUMMARY_METRICS_261013:
-        result[metric] = float(table[metric].mean())
-        result[f"{metric}_SD_Members"] = (
-            float(table[metric].std(ddof=1)) if len(table) > 1 else np.nan
-        )
-    return result
-
-
-def subject_errors(minutes: pd.DataFrame) -> pd.Series:
-    """Per-subject FFT MAE; members are averaged per subject first."""
-    have = minutes[np.isfinite(minutes["FFT_AE"])]
-    if "Member" in have.columns:
-        return have.groupby(["Member", "Subject"])["FFT_AE"].mean().groupby("Subject").mean()
-    return have.groupby("Subject")["FFT_AE"].mean()
-
-
-def minute_errors(minutes: pd.DataFrame) -> pd.Series:
-    """Per-minute absolute FFT error; members are averaged per minute."""
-    have = minutes[np.isfinite(minutes["FFT_AE"])]
-    return have.groupby(MINUTE_KEY)["FFT_AE"].mean()
-
-
-def paired_comparison_261007(full: pd.DataFrame, other: pd.DataFrame) -> dict:
-    """Full model vs one variant: per-subject and per-minute Wilcoxon tests."""
-    a, b = subject_errors(full), subject_errors(other)
-    subjects = a.index.intersection(b.index)
-    sa, sb = a.loc[subjects].to_numpy(float), b.loc[subjects].to_numpy(float)
-    ma, mb = minute_errors(full), minute_errors(other)
-    keys = ma.index.intersection(mb.index)
-    xa, xb = ma.loc[keys].to_numpy(float), mb.loc[keys].to_numpy(float)
-    difference = sb - sa
-    return {
-        "N_Subjects_Paired": int(len(subjects)),
-        "Subject_MAE_Full": float(np.mean(sa)) if len(sa) else np.nan,
-        "Subject_MAE_Variant": float(np.mean(sb)) if len(sb) else np.nan,
-        "Subject_MAE_Diff_Variant_minus_Full": float(np.mean(difference))
-        if len(difference)
-        else np.nan,
-        "N_Subjects_Full_Better": int(np.sum(difference > 1e-9)),
-        "N_Subjects_Variant_Better": int(np.sum(difference < -1e-9)),
-        "N_Subjects_Tied": int(np.sum(np.abs(difference) <= 1e-9)),
-        "Subject_Wilcoxon_p": safe_pvalue(stats.wilcoxon, sa, sb),
-        "N_Minutes_Paired": int(len(keys)),
-        "Minute_MAE_Full": float(np.mean(xa)) if len(xa) else np.nan,
-        "Minute_MAE_Variant": float(np.mean(xb)) if len(xb) else np.nan,
-        "Minute_Wilcoxon_p": safe_pvalue(stats.wilcoxon, xa, xb),
-    }
-
-
-def paired_comparison_261013(full: pd.DataFrame, other: pd.DataFrame) -> dict:
-    """Final model vs another model: per-subject and per-minute Wilcoxon tests
-    (means with their SD)."""
-    a, b = subject_errors(full), subject_errors(other)
-    subjects = a.index.intersection(b.index)
-    sa, sb = a.loc[subjects].to_numpy(float), b.loc[subjects].to_numpy(float)
-    ma, mb = minute_errors(full), minute_errors(other)
-    keys = ma.index.intersection(mb.index)
-    xa, xb = ma.loc[keys].to_numpy(float), mb.loc[keys].to_numpy(float)
-    difference = sb - sa
-    return {
-        "N_Subjects_Paired": int(len(subjects)),
-        "Subject_MAE_Final": float(np.mean(sa)) if len(sa) else np.nan,
-        "Subject_MAE_Final_SD": sd(sa),
-        "Subject_MAE_Other": float(np.mean(sb)) if len(sb) else np.nan,
-        "Subject_MAE_Other_SD": sd(sb),
-        "Subject_MAE_Diff_Other_minus_Final": float(np.mean(difference))
-        if len(difference)
-        else np.nan,
-        "Subject_MAE_Diff_SD": sd(difference),
-        "N_Subjects_Final_Better": int(np.sum(difference > 1e-9)),
-        "N_Subjects_Other_Better": int(np.sum(difference < -1e-9)),
-        "N_Subjects_Tied": int(np.sum(np.abs(difference) <= 1e-9)),
-        "Subject_Wilcoxon_p": safe_pvalue(stats.wilcoxon, sa, sb),
-        "N_Minutes_Paired": int(len(keys)),
-        "Minute_MAE_Final": float(np.mean(xa)) if len(xa) else np.nan,
-        "Minute_MAE_Final_SD": sd(xa),
-        "Minute_MAE_Other": float(np.mean(xb)) if len(xb) else np.nan,
-        "Minute_MAE_Other_SD": sd(xb),
-        "Minute_Wilcoxon_p": safe_pvalue(stats.wilcoxon, xa, xb),
-    }
-
-
-WINDOW_COMPARISON_METRICS = (
-    "N_Minutes",
-    "FFT_MAE",
-    "FFT_RMSE",
-    "FFT_Pearson_r",
-    "FFT_Within_2_BPM_Pct",
-    "FFT_Subject_MAE_Mean",
-    "Davies_mAE",
-    "Davies_mMAE",
-    "Wave_PCC_Mean",
-)
-
-
-def compare_windows(ensemble: pd.DataFrame) -> pd.DataFrame:
-    """Each later window condition against the first one, per dataset and
-    variant, on the subjects scored in both (ensemble outputs)."""
-    rows = []
-    if ensemble.empty or "Window_Config" not in ensemble.columns:
-        return pd.DataFrame()
-    order = [spec.name for spec in WINDOW_SPECS]
-    for (dataset, variant), frame in ensemble.groupby(["Dataset", "Variant"], sort=False):
-        present = set(frame["Window_Config"])
-        windows = [name for name in order if name in present]
-        if len(windows) < 2:
-            continue
-        reference = frame[frame["Window_Config"] == windows[0]]
-        for name in windows[1:]:
-            compared = frame[frame["Window_Config"] == name]
-            a, b = subject_errors(reference), subject_errors(compared)
-            subjects = a.index.intersection(b.index)
-            metrics_a = fft_davies_metrics_261007(reference[reference["Subject"].isin(subjects)])
-            metrics_b = fft_davies_metrics_261007(compared[compared["Subject"].isin(subjects)])
-            difference = b.loc[subjects] - a.loc[subjects]
-            row = {
-                "Dataset": dataset,
-                "Variant": variant,
-                "Reference_Window": windows[0],
-                "Compared_Window": name,
-                "N_Subjects_Paired": int(len(subjects)),
-            }
-            for key in WINDOW_COMPARISON_METRICS:
-                row[f"{key}_{windows[0]}"] = metrics_a[key]
-                row[f"{key}_{name}"] = metrics_b[key]
-            row.update(
-                {
-                    "Subject_MAE_Diff_Compared_minus_Reference": float(difference.mean())
-                    if len(difference)
-                    else np.nan,
-                    "N_Subjects_Compared_Better": int(np.sum(difference < -1e-9)),
-                    "N_Subjects_Reference_Better": int(np.sum(difference > 1e-9)),
-                    "Subject_Wilcoxon_p": safe_pvalue(
-                        stats.wilcoxon,
-                        a.loc[subjects].to_numpy(float),
-                        b.loc[subjects].to_numpy(float),
-                    ),
-                }
-            )
-            rows.append(row)
-    return pd.DataFrame(rows)
-
-
-def per_subject_table_261007(minutes: pd.DataFrame) -> pd.DataFrame:
-    """Every subject: minutes, median true and predicted rate, MAE and bias."""
-    have = minutes[np.isfinite(minutes["FFT_AE"])]
-    if have.empty:
-        return pd.DataFrame()
-    if "Member" in have.columns:
-        have = have.groupby(["Subject", *MINUTE_KEY[1:]], as_index=False).agg(
-            GT_RR=("GT_RR", "first"),
-            FFT_RR=("FFT_RR", "mean"),
-            FFT_Error=("FFT_Error", "mean"),
-            FFT_AE=("FFT_AE", "mean"),
-            Wave_PCC=("Wave_PCC", "mean"),
-        )
-    return (
-        have.groupby("Subject")
-        .agg(
-            N_Minutes=("FFT_AE", "size"),
-            GT_RR_Median=("GT_RR", "median"),
-            FFT_RR_Median=("FFT_RR", "median"),
-            FFT_MAE=("FFT_AE", "mean"),
-            FFT_Bias=("FFT_Error", "mean"),
-            Wave_PCC_Mean=("Wave_PCC", "mean"),
-        )
-        .reset_index()
-    )
-
-
-def per_subject_table_261013(minutes: pd.DataFrame) -> pd.DataFrame:
-    """Every subject: minutes, median true and predicted rate, MAE, bias and
-    waveform PCC, each mean with its SD over the subject's minutes."""
-    have = minutes[np.isfinite(minutes["FFT_AE"])]
-    if have.empty:
-        return pd.DataFrame()
-    if "Member" in have.columns:
-        have = have.groupby(["Subject", *MINUTE_KEY[1:]], as_index=False).agg(
-            GT_RR=("GT_RR", "first"),
-            FFT_RR=("FFT_RR", "mean"),
-            FFT_Error=("FFT_Error", "mean"),
-            FFT_AE=("FFT_AE", "mean"),
-            Wave_PCC=("Wave_PCC", "mean"),
-        )
-    return (
-        have.groupby("Subject")
-        .agg(
-            N_Minutes=("FFT_AE", "size"),
-            GT_RR_Median=("GT_RR", "median"),
-            FFT_RR_Median=("FFT_RR", "median"),
-            FFT_MAE=("FFT_AE", "mean"),
-            FFT_MAE_SD=("FFT_AE", "std"),
-            FFT_Bias=("FFT_Error", "mean"),
-            FFT_Bias_SD=("FFT_Error", "std"),
-            Wave_PCC_Mean=("Wave_PCC", "mean"),
-            Wave_PCC_SD=("Wave_PCC", "std"),
-        )
-        .reset_index()
-    )
-
-
-def save_summary_figures(
-    summary_root: Path,
-    dataset_label: str,
-    spec: WindowSpec,
-    rows: Sequence[Tuple[str, pd.DataFrame]],
-    subject_table: Callable[[pd.DataFrame], pd.DataFrame],
-) -> None:
-    """Per-subject FFT MAE of every model, and the full model's per-subject
-    median rates against the reference (Davies & Mandic, Fig. 3b);
-    subject_table is the per-subject table of the code (261007 or 261013)."""
-    figure_root = summary_root / "Figures"
-    figure_root.mkdir(parents=True, exist_ok=True)
-    stem = f"{dataset_label}_{spec.name}"
-    labels, values = [], []
-    for label, minutes in rows:
-        errors = subject_errors(minutes)
-        if errors.size:
-            labels.append(label)
-            values.append(errors.to_numpy(float))
-    if values:
-        fig, axis = plt.subplots(figsize=(max(6.0, 1.6 * len(values)), 4.5))
-        axis.boxplot(values, showfliers=False)
-        for position, data in enumerate(values, start=1):
-            jitter = np.random.default_rng(position).uniform(-0.12, 0.12, len(data))
-            axis.scatter(position + jitter, data, s=10, alpha=0.6, color="#4c78a8")
-        axis.set_xticks(range(1, len(labels) + 1))
-        axis.set_xticklabels(labels, rotation=20, ha="right")
-        axis.set_ylabel("Per-subject FFT MAE (breaths/min)")
-        axis.set_title(f"{dataset_label}, {spec.label}")
-        fig.tight_layout()
-        fig.savefig(figure_root / f"{stem}_subject_fft_mae.png", dpi=150)
-        plt.close(fig)
-    if rows:
-        table = subject_table(rows[0][1])
-        if not table.empty:
-            fig, axis = plt.subplots(figsize=(4.8, 4.8))
-            low = float(min(table["GT_RR_Median"].min(), table["FFT_RR_Median"].min()))
-            high = float(max(table["GT_RR_Median"].max(), table["FFT_RR_Median"].max()))
-            axis.plot([low, high], [low, high], color="#888888", linewidth=1)
-            axis.scatter(table["GT_RR_Median"], table["FFT_RR_Median"], s=18, color="#4c78a8")
-            axis.set_xlabel("Reference median rate (breaths/min)")
-            axis.set_ylabel("Predicted median rate (breaths/min)")
-            axis.set_title(f"{dataset_label}: {rows[0][0]}")
-            fig.tight_layout()
-            fig.savefig(figure_root / f"{stem}_subject_median_rate.png", dpi=150)
-            plt.close(fig)
-
-
-def write_results_excel(path: Path, sheets: Dict[str, pd.DataFrame]) -> Path:
-    try:
-        with pd.ExcelWriter(path, engine="openpyxl") as writer:
-            for name, frame in sheets.items():
-                frame.to_excel(writer, index=False, sheet_name=name[:31])
-    except Exception as exc:
-        warnings.warn(f"Excel export failed: {exc}")
-    return path
-
-
-# ---------------------------------------------------------------------------
-# Main experiment runner
-# ---------------------------------------------------------------------------
-
-def write_quality_report(
-    quality_root: Path,
-    dataset_label: str,
-    subject_data: Dict[str, dict],
-) -> None:
-    rows = []
-    quality_root.mkdir(parents=True, exist_ok=True)
-    all_window_rows = []
-    for subject, record in subject_data.items():
-        quality = pd.DataFrame(record["quality"])
-        candidate = len(quality)
-        kept = int(quality["Kept"].sum()) if not quality.empty else 0
-        train_ok = int(quality["Train_OK"].sum()) if not quality.empty else 0
-        row = {
-            "Dataset": dataset_label,
-            "Subject": subject,
-            "Candidate_Windows": candidate,
-            "Kept_Windows": kept,
-            "Kept_Ratio": float(kept / candidate) if candidate else np.nan,
-            "Train_OK_Windows": train_ok,
-            "Train_OK_Ratio_Of_Kept": float(train_ok / kept) if kept else np.nan,
-            "Reference_Breaths": int(
-                sum(len(ref["breaths"]) for ref in record["references"].values())
-            ),
-            **record["reference_diagnostics"],
-            "Window_Sec": record["window_sec"],
-            "Stride_Sec": record["stride_sec"],
-        }
-        rows.append(row)
-        if not quality.empty:
-            quality.insert(0, "Subject", subject)
-            all_window_rows.append(quality)
-    pd.DataFrame(rows).to_csv(
-        quality_root / f"{dataset_label}_subject_quality.csv",
-        index=False,
-        encoding="utf-8-sig",
-    )
-    if all_window_rows:
-        pd.concat(all_window_rows, ignore_index=True).to_csv(
-            quality_root / f"{dataset_label}_window_quality.csv",
-            index=False,
-            encoding="utf-8-sig",
-        )
-
-
-def _json_default(value):
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    raise TypeError(f"Not JSON serializable: {type(value)!r}")
-
-
-def build_manifest_261007(
-    args: argparse.Namespace,
-    results_root: Path,
-    device: torch.device,
-    variants: Sequence[Variant],
-    window_specs: Sequence[WindowSpec],
-    dataset_keys: Sequence[str],
-) -> dict:
-    return {
-        "script": str(Path(__file__).resolve()),
-        "results_root": str(results_root),
-        "device": str(device),
-        "model": {
-            "path": (
-                "raw PPG (min-max per window) -> 3 stem branches (kernels "
-                f"{list(MODEL_CONFIG['stem_kernel_sizes'])} samples at {TARGET_FS} Hz, "
-                f"{MODEL_CONFIG['stem_base_channels']} filters, GroupNorm, GELU) -> "
-                "1x1 fusion + GroupNorm -> depthwise residual encoder (kernel "
-                f"{MODEL_CONFIG['encoder_kernel_size']}, dilations "
-                f"{list(MODEL_CONFIG['encoder_dilations'])}) -> decoder "
-                f"(channels {list(MODEL_CONFIG['decoder_mid_channels'])}, kernels "
-                f"{list(MODEL_CONFIG['decoder_kernel_sizes'])}, dilations "
-                f"{list(MODEL_CONFIG['decoder_dilations'])}) -> waveform head (tanh), "
-                "no breath-event head"
-            ),
-            "identity_channel": False,
-            "gating": False,
-            "model_config": MODEL_CONFIG,
-            "model_fs": TARGET_FS,
-        },
-        "variants": {
-            variant.name: {
-                "label": variant.label,
-                "model_key": variant.options.key,
-                "model_label": variant.options.label,
-                "max_epochs": variant.epochs,
-                "parameters": count_parameters(variant.options.build()),
-            }
-            for variant in variants
-        },
-        "ensemble": {
-            "members": args.members,
-            "combination": "mean of the members' waveform outputs",
-            "seed": "stable_seed('261006-ensemble-member', window, dataset, subject, member), as in 261006",
-            "same_seeds_for_every_variant": True,
-        },
-        "training": {
-            "min_epochs": args.min_epochs,
-            "patience": args.patience,
-            "epoch_cap": args.epoch_cap,
-            "batch_size": args.batch_size,
-            "learning_rate": LEARNING_RATE,
-            "weight_decay": WEIGHT_DECAY_261007,
-            "loss": "v16 hybrid waveform loss (SmoothL1, Pearson, derivative)",
-            "loss_weights": list(LOSS_WEIGHTS),
-            "validation": "last 20% of each training subject's windows, best checkpoint",
-            "window_jitter": f"shift up to {SHIFT_AUG_SEC} s, gain 0.95-1.05, noise 0.002-0.01",
-            "speed_augmentation": False,
-            "rate_balanced_sampling": False,
-        },
-        "evaluation": {
-            "unit": f"complete {EVAL_WINDOW_SEC:g} s minutes with a valid reference",
-            "rate_estimate": "largest FFT peak of the predicted waveform",
-            "waveform_agreement": "Pearson r of predicted and target waveform per minute",
-            "ground_truth": "reference breaths in the minute (CapnoBase expert labels)",
-            "fft_metrics": list(SUMMARY_METRICS_261007),
-            "davies_mandic_2022": "mAE = median minute AE, mMAE = median subject MAE",
-            "subjects_excluded": "none",
-            "smart_fusion": "not used",
-        },
-        "analysis_profiles": {
-            DATASET_CONFIGS[key]["label"]: {
-                "profile": DATASET_CONFIGS[key]["profile"],
-                **ANALYSIS_PROFILES[DATASET_CONFIGS[key]["profile"]],
-            }
-            for key in dataset_keys
-        },
-        "data_paths": {
-            DATASET_CONFIGS[key]["label"]: {
-                field: DATASET_CONFIGS[key][field]
-                for field in ("data_path", "ppg_dir", "rsp_dir")
-                if field in DATASET_CONFIGS[key]
-            }
-            for key in dataset_keys
-        },
-        "window_conditions": [spec.name for spec in window_specs],
-        "datasets": [DATASET_CONFIGS[key]["label"] for key in dataset_keys],
-        "cross_validation": "Leave-One-Subject-Out; each subject is held out once",
-    }
-
-
-def build_manifest_261013(
-    args: argparse.Namespace,
-    results_root: Path,
-    device: torch.device,
-    variants: Sequence[Variant],
-    window_specs: Sequence[WindowSpec],
-    dataset_keys: Sequence[str],
-) -> dict:
-    return {
-        "script": str(Path(__file__).resolve()),
-        "results_root": str(results_root),
-        "device": str(device),
-        "model": {
-            "path": (
-                "raw PPG (min-max per window) -> 3 stem branches (kernels "
-                f"{list(MODEL_CONFIG['stem_kernel_sizes'])} samples at {TARGET_FS} Hz, "
-                f"{MODEL_CONFIG['stem_base_channels']} filters, GroupNorm, GELU) -> "
-                "1x1 fusion + GroupNorm -> depthwise residual encoder (kernel "
-                f"{MODEL_CONFIG['encoder_kernel_size']}, dilations "
-                f"{list(MODEL_CONFIG['encoder_dilations'])}) -> decoder "
-                f"(channels {list(MODEL_CONFIG['decoder_mid_channels'])}, kernels "
-                f"{list(MODEL_CONFIG['decoder_kernel_sizes'])}, dilations "
-                f"{list(MODEL_CONFIG['decoder_dilations'])}) -> waveform head (tanh), "
-                "no breath-event head"
-            ),
-            "identity_channel": False,
-            "gating": False,
-            "model_config": MODEL_CONFIG,
-            "model_fs": TARGET_FS,
-        },
-        "variants": {
-            variant.name: {
-                "label": variant.label,
-                "model_key": variant.options.key,
-                "model_label": variant.options.label,
-                "max_epochs": variant.epochs,
-                "parameters": count_parameters(variant.options.build()),
-            }
-            for variant in variants
-        },
-        "ensemble": {
-            "members": args.members,
-            "combination": "mean of the members' waveform outputs",
-            "seed": "stable_seed('261006-ensemble-member', window, dataset, subject, member), as in 261006",
-            "members_of": "the weight decay candidate selected in the fold",
-        },
-        "weight_decay_selection": {
-            "candidates": [variant.options.weight_decay for variant in variants],
-            "applied_to": "convolution weights (AdamW, decoupled); biases and GroupNorm not decayed",
-            "criterion": f"lowest validation loss of member m{SELECTION_MEMBER} (validation subjects only)",
-        },
-        "training": {
-            "min_epochs": args.min_epochs,
-            "patience": args.patience,
-            "epoch_cap": args.epoch_cap,
-            "batch_size": args.batch_size,
-            "learning_rate": LEARNING_RATE,
-            "weight_decay": "selected per fold from the candidates (see weight_decay_selection)",
-            "loss": "v16 hybrid waveform loss (SmoothL1, Pearson, derivative)",
-            "loss_weights": list(LOSS_WEIGHTS),
-            "validation": (
-                f"subject-wise: {VAL_SUBJECT_RATIO:.0%} of the training subjects held out whole "
-                "(seeded per fold), best checkpoint"
-            ),
-            "window_jitter": f"shift up to {SHIFT_AUG_SEC} s, gain 0.95-1.05, noise 0.002-0.01",
-            "speed_augmentation": False,
-            "rate_balanced_sampling": False,
-        },
-        "evaluation": {
-            "unit": f"complete {EVAL_WINDOW_SEC:g} s minutes with a valid reference",
-            "rate_estimate": "largest FFT peak of the predicted waveform",
-            "waveform_agreement": "Pearson r of predicted and target waveform per minute",
-            "ground_truth": "reference breaths in the minute (CapnoBase expert labels)",
-            "fft_metrics": list(SUMMARY_METRICS_261013),
-            "davies_mandic_2022": "mAE = median minute AE, mMAE = median subject MAE",
-            "subjects_excluded": "none",
-            "smart_fusion": "not used",
-        },
-        "analysis_profiles": {
-            DATASET_CONFIGS[key]["label"]: {
-                "profile": DATASET_CONFIGS[key]["profile"],
-                **ANALYSIS_PROFILES[DATASET_CONFIGS[key]["profile"]],
-            }
-            for key in dataset_keys
-        },
-        "data_paths": {
-            DATASET_CONFIGS[key]["label"]: {
-                field: DATASET_CONFIGS[key][field]
-                for field in ("data_path", "ppg_dir", "rsp_dir")
-                if field in DATASET_CONFIGS[key]
-            }
-            for key in dataset_keys
-        },
-        "window_conditions": [spec.name for spec in window_specs],
-        "datasets": [DATASET_CONFIGS[key]["label"] for key in dataset_keys],
-        "cross_validation": "Leave-One-Subject-Out; each subject is held out once",
-    }
-
-
-def condition_root(results_root: Path, variant: str, spec: WindowSpec, dataset_key: str) -> Path:
-    return (
-        results_root
-        / variant
-        / f"{spec.order:02d}_{spec.name}"
-        / DATASET_CONFIGS[dataset_key]["label"]
-    )
-
-
-def member_seed(spec: WindowSpec, dataset_key: str, subject: str, member: int) -> int:
-    return stable_seed("261006-ensemble-member", spec.name, dataset_key, subject, member)
-
-
-def member_paths(root: Path, subject: str, member: int) -> Tuple[Path, Path, Path]:
-    tag = safe_tag(subject)
-    summaries = root / "Fold_Summaries"
-    return (
-        summaries / f"{tag}_m{member}_summary.json",
-        summaries / f"{tag}_m{member}_RR60s_windows.csv",
-        root / "Members" / f"m{member}" / "Predictions" / f"{tag}_test_outputs.npz",
-    )
-
-
-def ensemble_paths(root: Path, subject: str) -> Tuple[Path, Path, Path]:
-    tag = safe_tag(subject)
-    return (
-        root / "Fold_Summaries" / f"{tag}_ensemble_summary.json",
-        root / "Fold_Summaries" / f"{tag}_ensemble_RR60s_windows.csv",
-        root / "Ensemble_Predictions" / f"{tag}_ensemble_outputs.npz",
-    )
-
-
-def read_json(path: Path) -> Optional[dict]:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-
-
-def expected_profile(dataset_label: str) -> Optional[str]:
-    for config in DATASET_CONFIGS.values():
-        if config["label"] == dataset_label:
-            return config["profile"]
-    return None
-
-
-def member_done(root: Path, variant: Variant, subject: str, member: int, epochs: int) -> bool:
-    """A member is reused only when it was trained with the same model and
-    epochs; a 261013 member also with the same analysis profile (target
-    handling) of its dataset and the same inference (summaries written before
-    the profile was recorded count as adult_fixed_band)."""
-    summary_path, window_path, prediction_path = member_paths(root, subject, member)
-    summary = read_json(summary_path)
-    return bool(
-        summary is not None
-        and summary.get("Model") == variant.options.key
-        and int(summary.get("Max_Epochs", -1)) == int(epochs)
-        and (
-            not variant.options.subject_validation
-            or (
-                summary.get("Analysis_Profile", "adult_fixed_band")
-                == expected_profile(summary.get("Dataset", ""))
-                and summary.get("Inference", INFERENCE_PROTOCOL) == INFERENCE_PROTOCOL
-            )
-        )
-        and window_path.exists()
-        and prediction_path.exists()
-    )
-
-
-def run_member(
-    args: argparse.Namespace,
-    results_root: Path,
-    variant: Variant,
-    spec: WindowSpec,
-    dataset_key: str,
-    subject_data: Dict[str, dict],
-    subjects: Sequence[str],
-    test_subject: str,
-    member: int,
-    device: torch.device,
-) -> Optional[dict]:
-    """Train and score one member of one fold; returns its summary."""
-    root = condition_root(results_root, variant.name, spec, dataset_key)
-    summary_path, window_path, _ = member_paths(root, test_subject, member)
-    epochs = variant.epochs if args.epoch_cap is None else min(variant.epochs, args.epoch_cap)
-    if args.resume and member_done(root, variant, test_subject, member, epochs):
-        return None
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    dataset_label = DATASET_CONFIGS[dataset_key]["label"]
-    seed = member_seed(spec, dataset_key, test_subject, member)
-    train_subjects = [subject for subject in subjects if subject != test_subject]
-    val_subjects = (
-        validation_subjects(dataset_key, test_subject, train_subjects)
-        if variant.options.subject_validation
-        else None
-    )
-    start_time = time.time()
-    outputs, metadata, audit, prediction_path, diagnostics = train_one(
-        dataset_key,
-        spec,
-        test_subject,
-        subject_data,
-        train_subjects,
-        val_subjects,
-        root / "Members" / f"m{member}",
-        device,
-        epochs,
-        args.min_epochs,
-        args.patience,
-        args.batch_size,
-        seed,
-        variant.options,
-        args.save_features,
-        args.resume,
-    )
-    summary, window_frame = evaluate_subject_minutes(
-        outputs,
-        metadata,
-        subject_data[test_subject]["references"],
-        TARGET_FS,
-    )
-    del outputs
-    summary.update(
-        {
-            "Dataset": dataset_label,
-            "Subject": str(test_subject),
-            "Variant": variant.name,
-            "Member": int(member),
-            "Seed": int(seed),
-            "LOSO_Fold_Index": subjects.index(test_subject) + 1,
-            "Window_Config": spec.name,
-            "Model": variant.options.key,
-            "Model_Label": variant.options.label,
-        }
-    )
-    if variant.options.subject_validation:
-        summary.update(
-            {
-                "Analysis_Profile": DATASET_CONFIGS[dataset_key]["profile"],
-                "Inference": INFERENCE_PROTOCOL,
-            }
-        )
-    summary.update(
-        {
-            "Max_Epochs": int(epochs),
-            "Best_Val_Loss": audit["Best_Val_Loss"],
-            "Best_Epoch": audit["Best_Epoch"],
-            "Convergence_Epoch_95pct": audit["Convergence_Epoch_95pct"],
-            "History_Epochs": audit["History_Epochs"],
-            "Generalization_Gap_At_Best": audit["Generalization_Gap_At_Best"],
-            "Elapsed_Sec": time.time() - start_time,
-            "Prediction_File": str(prediction_path),
-        }
-    )
-    summary.update(diagnostics)
-    summary.update(subject_data[test_subject]["reference_diagnostics"])
-    if not window_frame.empty:
-        window_frame.insert(0, "Member", int(member))
-        window_frame.insert(0, "Variant", variant.name)
-        window_frame.insert(0, "Subject", str(test_subject))
-        window_frame.insert(0, "Dataset", dataset_label)
-    window_frame.to_csv(window_path, index=False, encoding="utf-8-sig")
-    # Written last: its presence marks the member as complete.
-    summary_path.write_text(
-        json.dumps(summary, indent=2, default=_json_default),
-        encoding="utf-8",
-    )
-    return summary
-
-
-def evaluate_ensemble(
-    args: argparse.Namespace,
-    results_root: Path,
-    variant: Variant,
-    spec: WindowSpec,
-    dataset_key: str,
-    subject_data: Dict[str, dict],
-    test_subject: str,
-) -> Optional[dict]:
-    """Average the members' outputs on the held-out subject and score them.
-
-    Returns None while a member is missing. A stored ensemble result newer
-    than all its members is reused.
-    """
-    root = condition_root(results_root, variant.name, spec, dataset_key)
-    epochs = variant.epochs if args.epoch_cap is None else min(variant.epochs, args.epoch_cap)
-    members = list(range(args.members))
-    if not all(member_done(root, variant, test_subject, m, epochs) for m in members):
-        return None
-    summary_path, window_path, prediction_path = ensemble_paths(root, test_subject)
-    member_files = [member_paths(root, test_subject, m) for m in members]
-    newest_member = max(path.stat().st_mtime for files in member_files for path in files)
-    stored = read_json(summary_path)
-    if (
-        stored is not None
-        and stored.get("Members") == members
-        and (
-            not variant.options.subject_validation
-            or stored.get("Inference", INFERENCE_PROTOCOL) == INFERENCE_PROTOCOL
-        )
-        and window_path.exists()
-        and summary_path.stat().st_mtime >= newest_member
-    ):
-        return stored
-    arrays = [dict(np.load(files[2], allow_pickle=False)) for files in member_files]
-    for other in arrays[1:]:
-        if not (
-            np.array_equal(other["segment_ids"], arrays[0]["segment_ids"])
-            and np.array_equal(other["window_starts"], arrays[0]["window_starts"])
-        ):
-            raise RuntimeError(f"{test_subject}: members scored different windows")
-    outputs = {
-        "predictions": np.mean([a["predictions"] for a in arrays], axis=0).astype(np.float32),
-        "targets": arrays[0]["targets"],
-    }
-    summary, window_frame = evaluate_subject_minutes(
-        outputs,
-        test_metadata(subject_data, test_subject),
-        subject_data[test_subject]["references"],
-        TARGET_FS,
-    )
-    prediction_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        prediction_path,
-        **outputs,
-        segment_ids=arrays[0]["segment_ids"],
-        window_starts=arrays[0]["window_starts"],
-        seeds=np.asarray([int(a["seed"]) for a in arrays], dtype=np.int64),
-        model_key=np.asarray(variant.options.key),
-    )
-    dataset_label = DATASET_CONFIGS[dataset_key]["label"]
-    summary.update(
-        {
-            "Dataset": dataset_label,
-            "Subject": str(test_subject),
-            "Variant": variant.name,
-            "Members": members,
-        }
-    )
-    if variant.options.subject_validation:
-        summary["Inference"] = INFERENCE_PROTOCOL
-    summary.update(
-        {
-            "Seeds": [int(a["seed"]) for a in arrays],
-            "Window_Config": spec.name,
-            "Model": variant.options.key,
-            "Model_Label": variant.options.label,
-        }
-    )
-    summary.update(subject_data[test_subject]["reference_diagnostics"])
-    if not window_frame.empty:
-        window_frame.insert(0, "Variant", variant.name)
-        window_frame.insert(0, "Subject", str(test_subject))
-        window_frame.insert(0, "Dataset", dataset_label)
-    window_frame.to_csv(window_path, index=False, encoding="utf-8-sig")
-    summary_path.write_text(
-        json.dumps(summary, indent=2, default=_json_default),
-        encoding="utf-8",
-    )
-    return summary
-
-
-def epoch_limit(args: argparse.Namespace, variant: Variant) -> int:
-    return variant.epochs if args.epoch_cap is None else min(variant.epochs, args.epoch_cap)
-
-
-def selection_path(results_root: Path, spec: WindowSpec, dataset_key: str, subject: str) -> Path:
-    return (
-        results_root
-        / "WD_Selection"
-        / f"{spec.order:02d}_{spec.name}"
-        / DATASET_CONFIGS[dataset_key]["label"]
-        / f"{safe_tag(subject)}_selection.json"
-    )
-
-
-def select_weight_decay(
-    args: argparse.Namespace,
-    results_root: Path,
-    variants: Sequence[Variant],
-    spec: WindowSpec,
-    dataset_key: str,
-    subjects: Sequence[str],
-    test_subject: str,
-) -> Optional[dict]:
-    """Weight decay of one fold: the candidate whose member m0 reached the
-    lowest validation loss (validation subjects only). Returns None while a
-    candidate is missing; the choice is stored in WD_Selection."""
-    rows = []
-    for variant in variants:
-        root = condition_root(results_root, variant.name, spec, dataset_key)
-        if not member_done(root, variant, test_subject, SELECTION_MEMBER, epoch_limit(args, variant)):
-            return None
-        summary = read_json(member_paths(root, test_subject, SELECTION_MEMBER)[0])
-        rows.append(
-            {
-                "Weight_Decay": float(variant.options.weight_decay),
-                "Variant": variant.name,
-                "Best_Val_Loss": float(summary["Best_Val_Loss"]),
-                "Best_Epoch": int(summary["Best_Epoch"]),
-                "History_Epochs": int(summary["History_Epochs"]),
-            }
-        )
-    # Lowest validation loss; on a tie the smaller weight decay.
-    best = min(rows, key=lambda row: (row["Best_Val_Loss"], row["Weight_Decay"]))
-    train_subjects = [subject for subject in subjects if subject != test_subject]
-    record = {
-        "Dataset": DATASET_CONFIGS[dataset_key]["label"],
-        "Subject": str(test_subject),
-        "Window_Config": spec.name,
-        "Selection_Member": SELECTION_MEMBER,
-        "Validation_Subjects": validation_subjects(dataset_key, test_subject, train_subjects),
-        "Candidates": rows,
-        "Selected_Weight_Decay": best["Weight_Decay"],
-        "Selected_Variant": best["Variant"],
-    }
-    path = selection_path(results_root, spec, dataset_key, test_subject)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, indent=2, default=_json_default), encoding="utf-8")
-    return record
-
-
-def stored_selection(
-    results_root: Path, variants: Sequence[Variant], spec: WindowSpec, dataset_key: str, subject: str
-) -> Optional[Tuple[dict, Variant]]:
-    """The stored weight decay choice of a fold and its variant."""
-    record = read_json(selection_path(results_root, spec, dataset_key, subject))
-    if record is None:
-        return None
-    by_name = {variant.name: variant for variant in variants}
-    variant = by_name.get(record.get("Selected_Variant"))
-    candidates = sorted(row["Variant"] for row in record.get("Candidates", []))
-    if variant is None or candidates != sorted(by_name):
-        return None
-    return record, variant
-
-
-def fold_done(
-    args: argparse.Namespace,
-    results_root: Path,
-    variants: Sequence[Variant],
-    spec: WindowSpec,
-    dataset_key: str,
-    subject: str,
-) -> bool:
-    found = stored_selection(results_root, variants, spec, dataset_key, subject)
-    if found is None:
-        return False
-    _, variant = found
-    root = condition_root(results_root, variant.name, spec, dataset_key)
-    return all(
-        member_done(root, variant, subject, member, epoch_limit(args, variant))
-        for member in range(args.members)
-    ) and ensemble_paths(root, subject)[0].exists()
-
-
-def run_fold(
-    args: argparse.Namespace,
-    results_root: Path,
-    variants: Sequence[Variant],
-    spec: WindowSpec,
-    dataset_key: str,
-    subject_data: Dict[str, dict],
-    subjects: Sequence[str],
-    test_subject: str,
-    device: torch.device,
-) -> Optional[dict]:
-    """One LOSOCV fold: member m0 with every weight decay candidate, the
-    choice by validation loss, members m1.. with the chosen one, ensemble."""
-    label = DATASET_CONFIGS[dataset_key]["label"]
-
-    def report(summary: Optional[dict], variant: Variant, member: int) -> None:
-        if summary is not None:
-            print(
-                f"[{time.strftime('%H:%M:%S')}] {label} {test_subject} wd {variant.options.weight_decay:g} "
-                f"m{member}: val loss {summary['Best_Val_Loss']:.4f}, FFT MAE="
-                f"{summary['RR_MAE_Wave_FFT']:.3f}, best epoch {summary['Best_Epoch']}/"
-                f"{summary['History_Epochs']}, {summary['Elapsed_Sec'] / 60.0:.1f} min"
-            )
-
-    for variant in variants:
-        report(
-            run_member(args, results_root, variant, spec, dataset_key, subject_data, subjects,
-                       test_subject, SELECTION_MEMBER, device),
-            variant,
-            SELECTION_MEMBER,
-        )
-    selection = select_weight_decay(args, results_root, variants, spec, dataset_key, subjects, test_subject)
-    if selection is None:
-        raise RuntimeError(f"{label} {test_subject}: weight decay candidates incomplete")
-    chosen = {variant.name: variant for variant in variants}[selection["Selected_Variant"]]
-    losses = ", ".join(f"{row['Weight_Decay']:g}: {row['Best_Val_Loss']:.4f}" for row in selection["Candidates"])
-    print(f"    {label} {test_subject}: validation loss {losses} -> weight decay {chosen.options.weight_decay:g}")
-    for member in range(args.members):
-        if member == SELECTION_MEMBER:
-            continue
-        report(
-            run_member(args, results_root, chosen, spec, dataset_key, subject_data, subjects,
-                       test_subject, member, device),
-            chosen,
-            member,
-        )
-    ensemble = evaluate_ensemble(args, results_root, chosen, spec, dataset_key, subject_data, test_subject)
-    if ensemble is not None:
-        print(
-            f"    {label} {test_subject}: ensemble of {args.members} (wd {chosen.options.weight_decay:g}) "
-            f"FFT MAE={ensemble['RR_MAE_Wave_FFT']:.3f}"
-        )
-    return ensemble
-
-
-def read_minutes(paths: Sequence[Path]) -> pd.DataFrame:
-    frames = []
-    for path in paths:
-        if path.exists() and path.stat().st_size > 0:
-            frame = pd.read_csv(path, dtype={"Subject": str}, encoding="utf-8-sig")
-            if not frame.empty:
-                frames.append(frame)
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
-
-def mean_sd_text(mean: float, spread: float, digits: int = 3) -> str:
-    if not np.isfinite(mean):
-        return "n/a"
-    return f"{mean:.{digits}f} ± {spread:.{digits}f}" if np.isfinite(spread) else f"{mean:.{digits}f}"
-
-
-def mean_sd_table(overall: pd.DataFrame) -> pd.DataFrame:
-    """The final performance as "mean ± SD" (medians with IQR for mAE / mMAE)."""
-    rows = []
-    for _, r in overall.iterrows():
-        rows.append(
-            {
-                "Dataset": r["Dataset"],
-                "Window_Config": r["Window_Config"],
-                "Row": r["Row"],
-                "Model": r["Model"],
-                "N_Subjects": int(r["N_Subjects"]),
-                "N_Minutes": int(r["N_Minutes"]),
-                "MAE (mean ± SD over minutes)": mean_sd_text(r["FFT_MAE"], r["FFT_MAE_SD"]),
-                "Subject MAE (mean ± SD over subjects)": mean_sd_text(
-                    r["FFT_Subject_MAE_Mean"], r["FFT_Subject_MAE_SD"]
-                ),
-                "Bias (mean ± SD over minutes)": mean_sd_text(r["FFT_Bias"], r["FFT_Bias_SD"]),
-                "LoA": f"{r['FFT_LoA_Lower']:.2f} to {r['FFT_LoA_Upper']:.2f}",
-                "RMSE": f"{r['FFT_RMSE']:.3f}",
-                "Pearson r": f"{r['FFT_Pearson_r']:.3f}",
-                "Within 1 / 2 bpm (%)": f"{r['FFT_Within_1_BPM_Pct']:.1f} / {r['FFT_Within_2_BPM_Pct']:.1f}",
-                "mAE [IQR]": f"{r['Davies_mAE']:.3f} [{r['Davies_mAE_Q1']:.3f}-{r['Davies_mAE_Q3']:.3f}]",
-                "mMAE [IQR]": f"{r['Davies_mMAE']:.3f} [{r['Davies_mMAE_Q1']:.3f}-{r['Davies_mMAE_Q3']:.3f}]",
-                "Wave PCC (mean ± SD over minutes)": mean_sd_text(r["Wave_PCC_Mean"], r["Wave_PCC_SD"]),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def learning_curve_figure(path: Path, title: str, curves: Dict[int, List[pd.DataFrame]], max_epochs: int) -> None:
-    """Training and validation loss per epoch, mean +- SD over the folds, one
-    panel per member; dashed where fewer than half of the folds still train."""
-    members = sorted(curves)
-    if not members:
-        return
-    fig, axes = plt.subplots(1, len(members), figsize=(5.2 * len(members), 4.0), squeeze=False, sharey=True)
-    for axis, member in zip(axes[0], members):
-        frames = curves[member]
-        epochs = np.arange(1, max_epochs + 1)
-        for column, color, name in (("Train_Loss", "#1f77b4", "Train"), ("Val_Loss", "#d62728", "Validation")):
-            matrix = np.full((len(frames), max_epochs), np.nan)
-            for row, frame in enumerate(frames):
-                values = frame[column].to_numpy(float)[:max_epochs]
-                matrix[row, : len(values)] = values
-            count = np.sum(np.isfinite(matrix), axis=0)
-            with np.errstate(invalid="ignore"):
-                mean = np.nanmean(np.where(count > 0, matrix, np.nan), axis=0)
-                spread = np.nanstd(matrix, axis=0, ddof=1) if len(frames) > 1 else np.zeros(max_epochs)
-            solid = count >= max(1, len(frames) / 2.0)
-            axis.plot(epochs[solid], mean[solid], color=color, linewidth=1.8, label=name)
-            dashed = (count > 0) & ~solid
-            if dashed.any():
-                axis.plot(epochs[dashed], mean[dashed], color=color, linewidth=1.4, linestyle="--")
-            axis.fill_between(epochs, mean - spread, mean + spread, where=count > 1, color=color, alpha=0.15,
-                              linewidth=0)
-        axis.set_title(f"member m{member} (n = {len(frames)} folds)", fontsize=10)
-        axis.set_xlabel("Epoch")
-        axis.grid(True, color="#eeeeee")
-        axis.legend(fontsize=8, loc="upper right")
-    axes[0][0].set_ylabel("Loss")
-    fig.suptitle(title, fontsize=11)
-    fig.text(0.5, 0.005, "Lines: mean over the LOSOCV folds; bands: +-1 SD; dashed: fewer than half of the "
-             "folds still training. Validation = subject-wise validation subjects.", ha="center", fontsize=7)
-    fig.tight_layout(rect=(0, 0.03, 1, 0.95))
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-
-
-def summarize_results_261007(
-    args: argparse.Namespace,
-    results_root: Path,
-    variants: Sequence[Variant],
-    window_specs: Sequence[WindowSpec],
-    dataset_keys: Sequence[str],
-) -> None:
-    """Score the ensembles and write the FFT / Davies & Mandic comparison."""
-    summary_root = results_root / "Summary"
-    summary_root.mkdir(parents=True, exist_ok=True)
-    overall_rows, single_rows, comparison_rows, subject_tables = [], [], [], []
-    ensemble_frames, member_frames, missing_rows = [], [], []
-    for spec in window_specs:
-        for dataset_key in dataset_keys:
-            dataset_label = DATASET_CONFIGS[dataset_key]["label"]
-            try:
-                subject_data = load_dataset(dataset_key, spec)
-            except Exception as exc:
-                print(f"{dataset_label}: not summarized ({exc})")
-                continue
-            subjects = selected_subjects(args, subject_data)
-            minutes_by_row: List[Tuple[str, str, pd.DataFrame]] = []
-            for variant in variants:
-                root = condition_root(results_root, variant.name, spec, dataset_key)
-                epochs = (
-                    variant.epochs
-                    if args.epoch_cap is None
-                    else min(variant.epochs, args.epoch_cap)
-                )
-                ensemble_paths_done, member_paths_done = [], []
-                for subject in subjects:
-                    done = [
-                        m
-                        for m in range(args.members)
-                        if member_done(root, variant, subject, m, epochs)
-                    ]
-                    member_paths_done += [member_paths(root, subject, m)[1] for m in done]
-                    if len(done) == args.members:
-                        evaluate_ensemble(
-                            args, results_root, variant, spec, dataset_key, subject_data, subject
-                        )
-                        ensemble_paths_done.append(ensemble_paths(root, subject)[1])
-                    else:
-                        missing_rows.append(
-                            {
-                                "Dataset": dataset_label,
-                                "Window_Config": spec.name,
-                                "Variant": variant.name,
-                                "Subject": subject,
-                                "Members_Done": len(done),
-                                "Members_Required": args.members,
-                            }
-                        )
-                ensemble = scored_minutes(read_minutes(ensemble_paths_done))
-                members = scored_minutes(read_minutes(member_paths_done))
-                if not ensemble.empty:
-                    ensemble["Window_Config"] = spec.name
-                if not members.empty:
-                    members["Window_Config"] = spec.name
-                if not ensemble.empty:
-                    ensemble_frames.append(ensemble)
-                if not members.empty:
-                    member_frames.append(members)
-                    single = member_average_metrics_261007(members)
-                    single.update(
-                        {
-                            "Dataset": dataset_label,
-                            "Window_Config": spec.name,
-                            "Variant": variant.name,
-                            "Model": f"{variant.label}, single models",
-                            "Subjects_Complete": int(len(ensemble_paths_done)),
-                        }
-                    )
-                    single_rows.append(single)
-                if variant.name == "full" and not ensemble.empty:
-                    minutes_by_row.append(
-                        (f"{variant.label} (ensemble of {args.members})", "full", ensemble)
-                    )
-                    if not members.empty:
-                        complete = members[members["Subject"].isin(ensemble["Subject"].unique())]
-                        minutes_by_row.append((NO_ENSEMBLE_LABEL, "no_ensemble", complete))
-                elif not ensemble.empty:
-                    minutes_by_row.append(
-                        (f"{variant.label} (ensemble of {args.members})", variant.name, ensemble)
-                    )
-            del subject_data
-            release_memory()
-            if not minutes_by_row:
-                continue
-            for label, row_name, minutes in minutes_by_row:
-                metrics = (
-                    member_average_metrics_261007(minutes)
-                    if row_name == "no_ensemble"
-                    else fft_davies_metrics_261007(minutes)
-                )
-                metrics.update(
-                    {
-                        "Dataset": dataset_label,
-                        "Window_Config": spec.name,
-                        "Row": row_name,
-                        "Model": label,
-                    }
-                )
-                overall_rows.append(metrics)
-                table = per_subject_table_261007(minutes)
-                if not table.empty:
-                    table.insert(0, "Model", label)
-                    table.insert(0, "Row", row_name)
-                    table.insert(0, "Window_Config", spec.name)
-                    table.insert(0, "Dataset", dataset_label)
-                    subject_tables.append(table)
-            full_rows = [item for item in minutes_by_row if item[1] == "full"]
-            if full_rows:
-                full_minutes = full_rows[0][2]
-                block = []
-                for label, row_name, minutes in minutes_by_row:
-                    if row_name == "full":
-                        continue
-                    result = paired_comparison_261007(full_minutes, minutes)
-                    result.update(
-                        {
-                            "Dataset": dataset_label,
-                            "Window_Config": spec.name,
-                            "Comparison": f"Full model vs {label}",
-                            "Row": row_name,
-                        }
-                    )
-                    block.append(result)
-                for key in ("Subject_Wilcoxon_p", "Minute_Wilcoxon_p"):
-                    adjusted = bh_fdr([row[key] for row in block])
-                    for row, value in zip(block, adjusted):
-                        row[key.replace("_p", "_FDR_p")] = value
-                comparison_rows += block
-            save_summary_figures(
-                summary_root,
-                dataset_label,
-                spec,
-                [(label, minutes) for label, _, minutes in minutes_by_row],
-                per_subject_table_261007,
-            )
-
-    def ordered(frame: pd.DataFrame, first: Sequence[str]) -> pd.DataFrame:
-        if frame.empty:
-            return frame
-        columns = [c for c in first if c in frame.columns]
-        return frame[columns + [c for c in frame.columns if c not in columns]]
-
-    overall = ordered(
-        pd.DataFrame(overall_rows),
-        ["Dataset", "Window_Config", "Row", "Model", "N_Subjects", "N_Minutes"],
-    )
-    single = ordered(
-        pd.DataFrame(single_rows),
-        ["Dataset", "Window_Config", "Variant", "Model", "N_Members", "N_Subjects", "N_Minutes"],
-    )
-    comparison = ordered(
-        pd.DataFrame(comparison_rows),
-        ["Dataset", "Window_Config", "Comparison", "Row"],
-    )
-    per_subject = pd.concat(subject_tables, ignore_index=True) if subject_tables else pd.DataFrame()
-    ensemble_all = pd.concat(ensemble_frames, ignore_index=True) if ensemble_frames else pd.DataFrame()
-    member_all = pd.concat(member_frames, ignore_index=True) if member_frames else pd.DataFrame()
-    missing = pd.DataFrame(missing_rows)
-    windows_table = compare_windows(ensemble_all)
-    tables = {
-        "fft_davies_overall": overall,
-        "fft_davies_single_models": single,
-        "ablation_comparison": comparison,
-        "window_comparison": windows_table,
-        "per_subject_fft": per_subject,
-        "minutes_ensemble": ensemble_all,
-        "minutes_single_models": member_all,
-        "incomplete_folds": missing,
-    }
-    for name, frame in tables.items():
-        frame.to_csv(summary_root / f"{name}.csv", index=False, encoding="utf-8-sig")
-    excel_path = write_results_excel(
-        summary_root / "261007_RRWaveNet_Ensemble_NoEvent_results.xlsx",
-        {
-            "Overall_FFT_Davies": overall,
-            "Single_models": single,
-            "Ablation_comparison": comparison,
-            "Window_comparison": windows_table,
-            "Per_subject": per_subject,
-            "Minutes_ensemble": ensemble_all,
-            "Incomplete_folds": missing,
-        },
-    )
-    if overall.empty:
-        print("\nNo complete fold to summarize yet.")
-        return
-    print(
-        "\nFFT and Davies & Mandic metrics (breaths/min; all reference-valid minutes; "
-        "PCC = waveform Pearson r):"
-    )
-    header = (
-        f"  {'Dataset':<10s} {'Model':<44s} {'Subj':>4s} {'Min':>5s} {'MAE':>6s} "
-        f"{'RMSE':>6s} {'r':>5s} {'<=2':>5s} {'subjMAE':>12s} {'mAE [IQR]':>18s} "
-        f"{'mMAE [IQR]':>18s} {'PCC':>5s}"
-    )
-    print(header)
-    for _, row in overall.iterrows():
-        print(
-            f"  {row['Dataset'][:5]:<5s}{row['Window_Config'][1:4]:<5s} "
-            f"{str(row['Model'])[:44]:<44s} {int(row['N_Subjects']):>4d} "
-            f"{int(row['N_Minutes']):>5d} {row['FFT_MAE']:>6.3f} {row['FFT_RMSE']:>6.3f} "
-            f"{row['FFT_Pearson_r']:>5.2f} {row['FFT_Within_2_BPM_Pct']:>4.0f}% "
-            f"{row['FFT_Subject_MAE_Mean']:>5.2f}+-{row['FFT_Subject_MAE_SD']:<5.2f} "
-            f"{row['Davies_mAE']:>5.2f} [{row['Davies_mAE_Q1']:.2f}-{row['Davies_mAE_Q3']:.2f}] "
-            f"{row['Davies_mMAE']:>5.2f} [{row['Davies_mMAE_Q1']:.2f}-{row['Davies_mMAE_Q3']:.2f}] "
-            f"{row['Wave_PCC_Mean']:>5.2f}"
-        )
-    if not comparison.empty:
-        print("\nAblation (paired with the full model; per-subject FFT MAE):")
-        for _, row in comparison.iterrows():
-            print(
-                f"  {row['Dataset'][:5]:<5s}{row['Window_Config'][1:4]:<5s} "
-                f"{row['Comparison']:<60s} "
-                f"diff {row['Subject_MAE_Diff_Variant_minus_Full']:+.3f}, full better "
-                f"{row['N_Subjects_Full_Better']}/{row['N_Subjects_Paired']}, "
-                f"p={row['Subject_Wilcoxon_p']:.3g} (FDR {row['Subject_Wilcoxon_FDR_p']:.3g}); "
-                f"minutes p={row['Minute_Wilcoxon_p']:.3g}"
-            )
-    if not windows_table.empty:
-        print("\nWindow length (ensembles; subjects scored with both windows):")
-        for _, row in windows_table.iterrows():
-            ref, cmp_ = row["Reference_Window"], row["Compared_Window"]
-            print(
-                f"  {row['Dataset']:<10s} {row['Variant']:<16s} FFT MAE "
-                f"{ref[:4]} {row[f'FFT_MAE_{ref}']:.3f} vs {cmp_[:4]} {row[f'FFT_MAE_{cmp_}']:.3f}; "
-                f"mMAE {row[f'Davies_mMAE_{ref}']:.3f} vs {row[f'Davies_mMAE_{cmp_}']:.3f}; "
-                f"{cmp_[:4]} better in {row['N_Subjects_Compared_Better']}/"
-                f"{row['N_Subjects_Paired']} subjects, p={row['Subject_Wilcoxon_p']:.3g}"
-            )
-    if not missing.empty:
-        print(f"\n{len(missing)} fold(s) incomplete; see {summary_root / 'incomplete_folds.csv'}")
-    print(f"\nSaved the summary under: {summary_root}")
-    print(f"Excel workbook: {excel_path}")
-
-
-def summarize_results_261013(
-    args: argparse.Namespace,
-    results_root: Path,
-    variants: Sequence[Variant],
-    window_specs: Sequence[WindowSpec],
-    dataset_keys: Sequence[str],
-) -> None:
-    """Score the ensembles of the selected weight decay and write the summary,
-    the weight decay selection, the learning curves and the comparison with
-    261007."""
-    summary_root = results_root / "Summary"
-    figure_root = summary_root / "Figures"
-    figure_root.mkdir(parents=True, exist_ok=True)
-    reference_root = Path(args.reference_root) if args.reference_root else None
-    overall_rows, comparison_rows, reference_rows, subject_tables = [], [], [], []
-    ensemble_frames, member_frames, missing_rows, selection_rows, gap_rows = [], [], [], [], []
-    for spec in window_specs:
-        for dataset_key in dataset_keys:
-            dataset_label = DATASET_CONFIGS[dataset_key]["label"]
-            try:
-                subject_data = load_dataset(dataset_key, spec)
-            except Exception as exc:
-                print(f"{dataset_label}: not summarized ({exc})")
-                continue
-            subjects = selected_subjects(args, subject_data)
-            final_paths, member_paths_done, final_subjects = [], [], []
-            curves: Dict[int, List[pd.DataFrame]] = {}
-            for subject in subjects:
-                found = stored_selection(results_root, variants, spec, dataset_key, subject)
-                if found is None:
-                    missing_rows.append({"Dataset": dataset_label, "Window_Config": spec.name,
-                                         "Subject": subject, "Missing": "weight decay selection"})
-                    continue
-                record, chosen = found
-                root = condition_root(results_root, chosen.name, spec, dataset_key)
-                done = [
-                    m for m in range(args.members)
-                    if member_done(root, chosen, subject, m, epoch_limit(args, chosen))
-                ]
-                selection_row = {
-                    "Dataset": dataset_label,
-                    "Window_Config": spec.name,
-                    "Subject": subject,
-                    "Selected_Weight_Decay": record["Selected_Weight_Decay"],
-                    "Validation_Subjects": " ".join(record["Validation_Subjects"]),
-                }
-                for row in record["Candidates"]:
-                    selection_row[f"Val_Loss_wd{row['Weight_Decay']:g}"] = row["Best_Val_Loss"]
-                    selection_row[f"Best_Epoch_wd{row['Weight_Decay']:g}"] = row["Best_Epoch"]
-                selection_rows.append(selection_row)
-                if len(done) < args.members:
-                    missing_rows.append({"Dataset": dataset_label, "Window_Config": spec.name,
-                                         "Subject": subject, "Missing": f"members {len(done)}/{args.members}"})
-                    continue
-                evaluate_ensemble(args, results_root, chosen, spec, dataset_key, subject_data, subject)
-                final_paths.append(ensemble_paths(root, subject)[1])
-                final_subjects.append(subject)
-                for member in range(args.members):
-                    summary_path, window_path, _ = member_paths(root, subject, member)
-                    member_paths_done.append(window_path)
-                    summary = read_json(summary_path) or {}
-                    gap_rows.append({
-                        "Dataset": dataset_label, "Window_Config": spec.name, "Subject": subject,
-                        "Member": member, "Weight_Decay": chosen.options.weight_decay,
-                        "Best_Epoch": summary.get("Best_Epoch"), "History_Epochs": summary.get("History_Epochs"),
-                        "Best_Val_Loss": summary.get("Best_Val_Loss"),
-                        "Generalization_Gap_At_Best": summary.get("Generalization_Gap_At_Best"),
-                        "Train_Windows": summary.get("Train_Windows"), "Val_Windows": summary.get("Val_Windows"),
-                    })
-                    curve_path = root / "Members" / f"m{member}" / "Learning_Curves" / f"{safe_tag(subject)}_Learning_Curve.csv"
-                    if curve_path.exists():
-                        curves.setdefault(member, []).append(pd.read_csv(curve_path, encoding="utf-8-sig"))
-            del subject_data
-            release_memory()
-
-            rows: List[Tuple[str, str, pd.DataFrame]] = []
-            final = scored_minutes(read_minutes(final_paths))
-            members = scored_minutes(read_minutes(member_paths_done))
-            if not final.empty:
-                final["Window_Config"] = spec.name
-                ensemble_frames.append(final)
-                rows.append((f"Final: subject-wise validation, selected weight decay (ensemble of {args.members})",
-                             "final", final))
-            if not members.empty:
-                members["Window_Config"] = spec.name
-                member_frames.append(members)
-                rows.append(("w/o ensemble (single models of the final model)", "no_ensemble", members))
-            for variant in variants:
-                root = condition_root(results_root, variant.name, spec, dataset_key)
-                paths = [
-                    member_paths(root, subject, SELECTION_MEMBER)[1]
-                    for subject in subjects
-                    if member_done(root, variant, subject, SELECTION_MEMBER, epoch_limit(args, variant))
-                ]
-                candidate = scored_minutes(read_minutes(paths))
-                if not candidate.empty:
-                    rows.append((f"Weight decay {variant.options.weight_decay:g}, member m{SELECTION_MEMBER} only "
-                                 "(single model)", f"wd{variant.options.weight_decay:g}_m{SELECTION_MEMBER}", candidate))
-            reference = pd.DataFrame()
-            if reference_root is not None and final_subjects:
-                ref_root = condition_root(reference_root, "full", spec, dataset_key)
-                ref_paths = [ensemble_paths(ref_root, subject)[1] for subject in final_subjects]
-                reference = scored_minutes(read_minutes(ref_paths))
-                if not reference.empty:
-                    rows.append(("261007 full model (temporal validation, weight decay 5e-5, ensemble of 3)",
-                                 "reference_261007", reference))
-            for label, row_name, minutes in rows:
-                metrics = member_average_metrics_261013(minutes) if row_name == "no_ensemble" else fft_davies_metrics_261013(minutes)
-                overall_rows.append({"Dataset": dataset_label, "Window_Config": spec.name, "Row": row_name,
-                                     "Model": label, **metrics})
-            if not final.empty:
-                table = per_subject_table_261013(final)
-                if not table.empty:
-                    table.insert(0, "Window_Config", spec.name)
-                    table.insert(0, "Dataset", dataset_label)
-                    subject_tables.append(table)
-                if not members.empty:
-                    result = paired_comparison_261013(final, members)
-                    result.update({"Dataset": dataset_label, "Window_Config": spec.name,
-                                   "Comparison": "Final ensemble vs its single models"})
-                    comparison_rows.append(result)
-                if not reference.empty:
-                    result = paired_comparison_261013(final, reference)
-                    result.update({"Dataset": dataset_label, "Window_Config": spec.name,
-                                   "Comparison": "Final ensemble vs 261007 full ensemble"})
-                    reference_rows.append(result)
-                save_summary_figures(summary_root, dataset_label, spec,
-                                     [(label, minutes) for label, _, minutes in rows],
-                                     per_subject_table_261013)
-            if curves:
-                learning_curve_figure(
-                    figure_root / f"{dataset_label}_{spec.name}_learning_curves.png",
-                    f"{dataset_label}, {spec.label}: learning curves of the final model "
-                    "(selected weight decay, subject-wise validation)",
-                    curves,
-                    max(int(frame["Epoch"].max()) for frames in curves.values() for frame in frames),
-                )
-
-    def ordered(frame: pd.DataFrame, first: Sequence[str]) -> pd.DataFrame:
-        if frame.empty:
-            return frame
-        columns = [c for c in first if c in frame.columns]
-        return frame[columns + [c for c in frame.columns if c not in columns]]
-
-    overall = pd.DataFrame(overall_rows)
-    mean_sd = mean_sd_table(overall) if not overall.empty else pd.DataFrame()
-    comparison = ordered(pd.DataFrame(comparison_rows), ["Dataset", "Window_Config", "Comparison"])
-    reference_table = ordered(pd.DataFrame(reference_rows), ["Dataset", "Window_Config", "Comparison"])
-    selection = pd.DataFrame(selection_rows)
-    selection_counts = (
-        selection.groupby(["Dataset", "Window_Config", "Selected_Weight_Decay"]).size()
-        .rename("N_Folds").reset_index()
-        if not selection.empty else pd.DataFrame()
-    )
-    gaps = pd.DataFrame(gap_rows)
-    per_subject = pd.concat(subject_tables, ignore_index=True) if subject_tables else pd.DataFrame()
-    ensemble_all = pd.concat(ensemble_frames, ignore_index=True) if ensemble_frames else pd.DataFrame()
-    member_all = pd.concat(member_frames, ignore_index=True) if member_frames else pd.DataFrame()
-    missing = pd.DataFrame(missing_rows)
-    tables = {
-        "fft_davies_overall": overall,
-        "fft_davies_overall_mean_sd": mean_sd,
-        "ablation_comparison": comparison,
-        "reference_comparison": reference_table,
-        "weight_decay_selection": selection,
-        "weight_decay_selection_counts": selection_counts,
-        "training_gap": gaps,
-        "per_subject_fft": per_subject,
-        "minutes_ensemble": ensemble_all,
-        "minutes_single_models": member_all,
-        "incomplete_folds": missing,
-    }
-    for name, frame in tables.items():
-        frame.to_csv(summary_root / f"{name}.csv", index=False, encoding="utf-8-sig")
-    excel_path = write_results_excel(
-        summary_root / "261013_RRWaveNet_Adult_SubjectVal_WD_results.xlsx",
-        {
-            "Overall_mean_SD": mean_sd,
-            "Overall_FFT_Davies": overall,
-            "Ensemble_comparison": comparison,
-            "vs_261007": reference_table,
-            "WD_selection": selection,
-            "WD_selection_counts": selection_counts,
-            "Training_gap": gaps,
-            "Per_subject": per_subject,
-            "Minutes_ensemble": ensemble_all,
-            "Incomplete_folds": missing,
-        },
-    )
-    if overall.empty:
-        print("\nNo complete fold to summarize yet.")
-        return
-    print("\nFFT and Davies & Mandic metrics (breaths/min; mean ± SD, medians with IQR; PCC = waveform r):")
-    for _, row in mean_sd.iterrows():
-        print(f"  {row['Dataset']:<8s} {str(row['Model'])[:70]:<70s} subj {row['N_Subjects']:>3d}  "
-              f"MAE {row['MAE (mean ± SD over minutes)']:<15s} subject MAE "
-              f"{row['Subject MAE (mean ± SD over subjects)']:<15s} mAE {row['mAE [IQR]']}  "
-              f"mMAE {row['mMAE [IQR]']}  PCC {row['Wave PCC (mean ± SD over minutes)']}")
-    if not selection_counts.empty:
-        print("\nWeight decay selected per fold (validation subjects only):")
-        for dataset, frame in selection_counts.groupby("Dataset", sort=False):
-            print("  " + dataset + ": " + ", ".join(
-                f"{row['Selected_Weight_Decay']:g} in {row['N_Folds']} folds" for _, row in frame.iterrows()))
-    for title, table in (("Final ensemble vs its single models", comparison),
-                         ("Final ensemble vs 261007 full ensemble", reference_table)):
-        if table.empty:
-            continue
-        print(f"\n{title} (per-subject MAE, mean ± SD; Wilcoxon):")
-        for _, row in table.iterrows():
-            print(f"  {row['Dataset']:<8s} final {mean_sd_text(row['Subject_MAE_Final'], row['Subject_MAE_Final_SD'])}"
-                  f" vs {mean_sd_text(row['Subject_MAE_Other'], row['Subject_MAE_Other_SD'])}, diff (other - final) "
-                  f"{mean_sd_text(row['Subject_MAE_Diff_Other_minus_Final'], row['Subject_MAE_Diff_SD'])}; final "
-                  f"better in {row['N_Subjects_Final_Better']}/{row['N_Subjects_Paired']}, "
-                  f"p={row['Subject_Wilcoxon_p']:.3g}; minutes p={row['Minute_Wilcoxon_p']:.3g}")
-    if not missing.empty:
-        print(f"\n{len(missing)} fold(s) incomplete; see {summary_root / 'incomplete_folds.csv'}")
-    print(f"\nSaved the summary under: {summary_root}")
-    print(f"Excel workbook: {excel_path}")
-
-
-def selected_subjects(args: argparse.Namespace, subject_data: Dict[str, dict]) -> List[str]:
-    subjects = sorted(subject_data)
-    if args.subjects:
-        wanted = {str(subject) for subject in args.subjects}
-        subjects = [subject for subject in subjects if subject in wanted]
-    return subjects
-
-
-def parse_shard(value: Optional[str]) -> Tuple[int, int]:
-    if not value:
-        return 0, 1
-    index, count = (int(part) for part in value.split("/"))
-    if count < 1 or not 0 <= index < count:
-        raise ValueError("--shard must be K/N with 0 <= K < N")
-    return index, count
-
-
-def run_experiment_261007(args: argparse.Namespace, results_root: Path, dataset_keys: Sequence[str]) -> None:
-    """The 261007 code (CapnoBase): every variant and window of the
-    arguments, three-model ensembles, LOSOCV."""
-    results_root.mkdir(parents=True, exist_ok=True)
-    if args.threads:
-        torch.set_num_threads(int(args.threads))
-    if args.require_cuda and not torch.cuda.is_available() and not args.summary_only:
-        raise RuntimeError(
-            "CUDA is required by default. Use --no-require-cuda to run on the CPU."
-        )
-    device = torch.device(
-        f"cuda:{args.gpu}" if torch.cuda.is_available() and not args.force_cpu else "cpu"
-    )
-    variants = [VARIANTS_261007[name] for name in VARIANTS_261007 if name in args.variants]
-    window_specs = [spec for spec in WINDOW_SPECS if spec.name in args.windows]
-    shard_index, shard_count = parse_shard(args.shard)
-    manifest = build_manifest_261007(args, results_root, device, variants, window_specs, dataset_keys)
-    manifest_name = "run_manifest.json" if shard_count == 1 else f"run_manifest_shard{shard_index}.json"
-    (results_root / manifest_name).write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False, default=_json_default),
-        encoding="utf-8",
-    )
-    for variant in variants:
-        print(
-            f"{variant.name}: {variant.options.label}; up to {variant.epochs} epochs; "
-            f"{count_parameters(variant.options.build())} parameters"
-        )
-    print(f"Ensemble of {args.members} models per fold; device={device}")
-
-    if args.dry_run:
-        for spec in window_specs:
-            for dataset_key in dataset_keys:
-                label = DATASET_CONFIGS[dataset_key]["label"]
-                try:
-                    data = load_dataset(dataset_key, spec)
-                except Exception as exc:
-                    print(f"{label}: could not be loaded ({exc})")
-                    continue
-                print(
-                    f"{label} ({spec.label}): "
-                    f"{len(data)} valid subjects = {len(data)} LOSOCV folds"
-                )
-                del data
-                release_memory()
-        return
-
-    if not args.summary_only:
-        failed_path = results_root / (
-            "failed_members.csv" if shard_count == 1 else f"failed_members_shard{shard_index}.csv"
-        )
-        failed_rows = []
-        for spec in window_specs:
-            for dataset_key in dataset_keys:
-                dataset_label = DATASET_CONFIGS[dataset_key]["label"]
-                try:
-                    subject_data = load_dataset(dataset_key, spec)
-                except Exception as exc:
-                    print(f"{dataset_label}: could not be loaded, skipped ({exc})")
-                    failed_rows.append(
-                        {"Dataset": dataset_label, "Subject": "", "Error": repr(exc)}
-                    )
-                    continue
-                all_subjects = sorted(subject_data)
-                if len(all_subjects) < 3:
-                    raise RuntimeError(f"{dataset_label}: fewer than three valid subjects")
-                if shard_index == 0:
-                    write_quality_report(
-                        results_root / "Data_Quality" / f"{spec.order:02d}_{spec.name}",
-                        dataset_label,
-                        subject_data,
-                    )
-                subjects = selected_subjects(args, subject_data)
-                jobs = [
-                    (variant, subject, member)
-                    for variant in variants
-                    for subject in subjects
-                    for member in range(args.members)
-                ]
-                if args.resume:
-                    # Only the members still to train are shared out, so the
-                    # workers stay balanced when members are added to folds
-                    # that already have some.
-                    jobs = [
-                        (variant, subject, member)
-                        for variant, subject, member in jobs
-                        if not member_done(
-                            condition_root(results_root, variant.name, spec, dataset_key),
-                            variant,
-                            subject,
-                            member,
-                            variant.epochs
-                            if args.epoch_cap is None
-                            else min(variant.epochs, args.epoch_cap),
-                        )
-                    ]
-                mine = [job for index, job in enumerate(jobs) if index % shard_count == shard_index]
-                print(
-                    f"\n{dataset_label} ({spec.label}): {len(all_subjects)} LOSOCV folds, "
-                    f"{len(jobs)} member runs to do ({len(mine)} in this worker)"
-                )
-                for variant, subject, member in mine:
-                    try:
-                        summary = run_member(
-                            args,
-                            results_root,
-                            variant,
-                            spec,
-                            dataset_key,
-                            subject_data,
-                            all_subjects,
-                            subject,
-                            member,
-                            device,
-                        )
-                        if summary is not None:
-                            print(
-                                f"[{time.strftime('%H:%M:%S')}] {dataset_label} {variant.name} "
-                                f"{subject} m{member}: FFT MAE={summary['RR_MAE_Wave_FFT']:.3f} "
-                                f"(valid min {summary['N60_RefValid']}), best epoch "
-                                f"{summary['Best_Epoch']}/{summary['History_Epochs']}, "
-                                f"{summary['Elapsed_Sec'] / 60.0:.1f} min"
-                            )
-                        ensemble = evaluate_ensemble(
-                            args, results_root, variant, spec, dataset_key, subject_data, subject
-                        )
-                        if ensemble is not None and summary is not None:
-                            print(
-                                f"    {dataset_label} {variant.name} {subject}: ensemble of "
-                                f"{args.members} FFT MAE={ensemble['RR_MAE_Wave_FFT']:.3f}"
-                            )
-                    except Exception as exc:
-                        failed_rows.append(
-                            {
-                                "Dataset": dataset_label,
-                                "Window_Config": spec.name,
-                                "Variant": variant.name,
-                                "Subject": subject,
-                                "Member": member,
-                                "Error": repr(exc),
-                            }
-                        )
-                        print(f"{dataset_label} {variant.name} {subject} m{member}: FAILED {exc}")
-                    finally:
-                        release_memory(device)
-                del subject_data
-                release_memory(device)
-        pd.DataFrame(failed_rows).to_csv(failed_path, index=False, encoding="utf-8-sig")
-        if shard_count > 1:
-            print(
-                "\nWorker finished. When every worker is done, run with "
-                "--resume --summary-only to build the summary."
-            )
-            return
-    summarize_results_261007(args, results_root, variants, window_specs, dataset_keys)
-
-
-def run_experiment_261013(args: argparse.Namespace, results_root: Path, dataset_keys: Sequence[str]) -> None:
-    """The 261013 code (BIDMC, STEAM2): subject-wise validation, weight decay
-    selected per fold, three-model ensembles of 10 s windows, LOSOCV."""
-    global VARIANTS_261013, VAL_SUBJECT_RATIO
-    VARIANTS_261013 = build_variants_261013(args.weight_decays)
-    VAL_SUBJECT_RATIO = float(args.val_subject_ratio)
-    if not 0 <= SELECTION_MEMBER < args.members:
-        raise ValueError("--members must include the selection member m0")
-    results_root.mkdir(parents=True, exist_ok=True)
-    if args.threads:
-        torch.set_num_threads(int(args.threads))
-    if args.require_cuda and not torch.cuda.is_available() and not args.summary_only:
-        raise RuntimeError(
-            "CUDA is required by default. Use --no-require-cuda to run on the CPU."
-        )
-    device = torch.device(
-        f"cuda:{args.gpu}" if torch.cuda.is_available() and not args.force_cpu else "cpu"
-    )
-    variants = list(VARIANTS_261013.values())
-    window_specs = [spec for spec in WINDOW_SPECS if spec.name in WINDOWS_261013]
-    shard_index, shard_count = parse_shard(args.shard)
-    manifest = build_manifest_261013(args, results_root, device, variants, window_specs, dataset_keys)
-    manifest_name = "run_manifest.json" if shard_count == 1 else f"run_manifest_shard{shard_index}.json"
-    (results_root / manifest_name).write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False, default=_json_default),
-        encoding="utf-8",
-    )
-    for variant in variants:
-        print(
-            f"{variant.name}: {variant.options.label}; up to {variant.epochs} epochs; "
-            f"{count_parameters(variant.options.build())} parameters"
-        )
-    print(
-        f"Subject-wise validation ({VAL_SUBJECT_RATIO:.0%} of the training subjects); weight decay "
-        f"candidates {', '.join(f'{v.options.weight_decay:g}' for v in variants)} (selected per fold "
-        f"by the validation loss of m{SELECTION_MEMBER}); ensemble of {args.members}; device={device}"
-    )
-
-    if args.dry_run:
-        for spec in window_specs:
-            for dataset_key in dataset_keys:
-                label = DATASET_CONFIGS[dataset_key]["label"]
-                try:
-                    data = load_dataset(dataset_key, spec)
-                except Exception as exc:
-                    print(f"{label}: could not be loaded ({exc})")
-                    continue
-                print(
-                    f"{label} ({spec.label}): "
-                    f"{len(data)} valid subjects = {len(data)} LOSOCV folds"
-                )
-                del data
-                release_memory()
-        return
-
-    if not args.summary_only:
-        failed_path = results_root / (
-            "failed_members.csv" if shard_count == 1 else f"failed_members_shard{shard_index}.csv"
-        )
-        failed_rows = []
-        for spec in window_specs:
-            for dataset_key in dataset_keys:
-                dataset_label = DATASET_CONFIGS[dataset_key]["label"]
-                try:
-                    subject_data = load_dataset(dataset_key, spec)
-                except Exception as exc:
-                    print(f"{dataset_label}: could not be loaded, skipped ({exc})")
-                    failed_rows.append(
-                        {"Dataset": dataset_label, "Subject": "", "Error": repr(exc)}
-                    )
-                    continue
-                all_subjects = sorted(subject_data)
-                if len(all_subjects) < 3:
-                    raise RuntimeError(f"{dataset_label}: fewer than three valid subjects")
-                if shard_index == 0:
-                    write_quality_report(
-                        results_root / "Data_Quality" / f"{spec.order:02d}_{spec.name}",
-                        dataset_label,
-                        subject_data,
-                    )
-                subjects = selected_subjects(args, subject_data)
-                # Whole folds are the jobs: the members m1.. of a fold need the
-                # weight decay chosen from its m0 candidates.
-                jobs = list(subjects)
-                if args.resume:
-                    jobs = [
-                        subject for subject in jobs
-                        if not fold_done(args, results_root, variants, spec, dataset_key, subject)
-                    ]
-                mine = [job for index, job in enumerate(jobs) if index % shard_count == shard_index]
-                print(
-                    f"\n{dataset_label} ({spec.label}): {len(all_subjects)} LOSOCV folds, "
-                    f"{len(jobs)} folds to do ({len(mine)} in this worker)"
-                )
-                for subject in mine:
-                    try:
-                        run_fold(args, results_root, variants, spec, dataset_key, subject_data,
-                                 all_subjects, subject, device)
-                    except Exception as exc:
-                        failed_rows.append(
-                            {
-                                "Dataset": dataset_label,
-                                "Window_Config": spec.name,
-                                "Subject": subject,
-                                "Error": repr(exc),
-                            }
-                        )
-                        print(f"{dataset_label} {subject}: FAILED {exc}")
-                    finally:
-                        release_memory(device)
-                del subject_data
-                release_memory(device)
-        pd.DataFrame(failed_rows).to_csv(failed_path, index=False, encoding="utf-8-sig")
-        if shard_count > 1:
-            print(
-                "\nWorker finished. When every worker is done, run with "
-                "--resume --summary-only to build the summary."
-            )
-            return
-    summarize_results_261013(args, results_root, variants, window_specs, dataset_keys)
-
-
-# ---------------------------------------------------------------------------
-# Reference QC window counts (Compare_Reference_QC_Window_Counts)
-# ---------------------------------------------------------------------------
-
-QC_COUNT_COLUMNS = [
-    "Candidate_Windows",
-    "Kept_Windows",
-    "Train_OK_Windows",
-    "QC_Windows_Total",
-    "QC_Windows_Passed",
-]
-QC_GROUP_COLS = ["Dataset", "Input_Window", "Input_Stride"]
-QC_SUBJECT_GROUP_COLS = QC_GROUP_COLS + ["Subject"]
-
-
-def count_subject(subject: str, data: dict, dataset_label: str, spec, condition: str,
-                  qc_window: float, qc_stride: float) -> dict:
-    quality = pd.DataFrame(data["quality"])
-    candidate = len(quality)
-    kept = int(quality["Kept"].sum()) if candidate else 0
-    train_ok = int(quality["Train_OK"].sum()) if candidate else 0
-
-    # RSP_Resp_QC_Windows and RSP_Resp_QC_Pass_Windows are SEGMENT-level
-    # diagnostics, repeated on each input candidate window. Do NOT sum them
-    # across every candidate: count each Segment_ID exactly once.
-    qc_total = qc_passed = 0
-    if candidate:
+        return load_dataset(dataset_key, spec)
+    finally:
+        combine_segments = combine
+
+
+def subject_counts(dataset_key: str, spec: WindowSpec, subject: str, record: dict) -> dict:
+    quality = pd.DataFrame(record["quality"])
+    before = len(quality)
+    signal = int(quality["Kept"].sum()) if before else 0
+    reference = int(quality["Reference_QC_OK"].sum()) if before else 0
+    # Segment-level values, repeated on every window of a segment.
+    qc_windows = qc_passed = 0
+    if before:
         segments = quality.drop_duplicates(subset=["Segment_ID"])
-        qc_total = int(segments["RSP_Resp_QC_Windows"].fillna(0).sum())
+        qc_windows = int(segments["RSP_Resp_QC_Windows"].fillna(0).sum())
         qc_passed = int(segments["RSP_Resp_QC_Pass_Windows"].fillna(0).sum())
-
     return {
-        "QC_Setting": condition,
-        "QC_Window_Sec": qc_window,
-        "QC_Stride_Sec": qc_stride,
-        "Dataset": dataset_label,
+        "Dataset": DATASET_CONFIGS[dataset_key]["label"],
+        "QC_Code": DATASET_PROTOCOL[dataset_key],
+        "Input_Window_Sec": spec.window_sec,
+        "Input_Stride_Sec": spec.stride_sec,
         "Subject": str(subject),
-        "Input_Window": spec.window_sec,
-        "Input_Stride": spec.stride_sec,
-        "Candidate_Windows": candidate,
-        "Kept_Windows": kept,
-        "Train_OK_Windows": train_ok,
-        "Rejected_Initial_QC": candidate - kept,
-        "Rejected_Reference_QC": kept - train_ok,
-        "Total_Excluded_Windows": candidate - train_ok,
-        "Kept_Pct": 100 * kept / candidate if candidate else np.nan,
-        "Train_OK_Pct": 100 * train_ok / candidate if candidate else np.nan,
-        "QC_Windows_Total": qc_total,
-        "QC_Windows_Passed": qc_passed,
-        "QC_Windows_Failed": qc_total - qc_passed,
-        "QC_Pass_Pct": 100 * qc_passed / qc_total if qc_total else np.nan,
+        "Windows_Before_QC": before,
+        "Windows_After_Signal_QC": signal,
+        "Windows_After_Reference_QC": reference,
+        "Removed_By_Signal_QC": before - signal,
+        "Removed_By_Reference_QC": signal - reference,
+        "Removed_Total": before - reference,
+        "Pct_Left_After_Signal_QC": 100.0 * signal / before if before else np.nan,
+        "Pct_Left_After_Reference_QC": 100.0 * reference / before if before else np.nan,
+        "Reference_QC_30s_Windows": qc_windows,
+        "Reference_QC_30s_Windows_Passed": qc_passed,
     }
 
 
-def aggregate_dataset_counts(per_subject: pd.DataFrame) -> pd.DataFrame:
-    columns = ["Candidate_Windows", "Kept_Windows", "Train_OK_Windows",
-               "QC_Windows_Total", "QC_Windows_Passed"]
-    group_cols = ["QC_Setting", "QC_Window_Sec", "QC_Stride_Sec", *QC_GROUP_COLS]
-    totals = (
-        per_subject.groupby(group_cols, as_index=False)[columns].sum()
-    )
-    totals["N_Subjects_Loaded"] = (
-        per_subject.groupby(group_cols)["Subject"].nunique().to_numpy()
-    )
-    totals["Rejected_Initial_QC"] = totals["Candidate_Windows"] - totals["Kept_Windows"]
-    totals["Rejected_Reference_QC"] = totals["Kept_Windows"] - totals["Train_OK_Windows"]
-    totals["Total_Excluded_Windows"] = totals["Candidate_Windows"] - totals["Train_OK_Windows"]
-    totals["QC_Windows_Failed"] = totals["QC_Windows_Total"] - totals["QC_Windows_Passed"]
-    totals["Train_OK_Pct"] = np.where(
-        totals["Candidate_Windows"] > 0,
-        100 * totals["Train_OK_Windows"] / totals["Candidate_Windows"], np.nan,
-    )
-    totals["QC_Pass_Pct"] = np.where(
-        totals["QC_Windows_Total"] > 0,
-        100 * totals["QC_Windows_Passed"] / totals["QC_Windows_Total"], np.nan,
-    )
-    return totals
+def dataset_counts(rows: pd.DataFrame, found: Dict[str, int]) -> pd.DataFrame:
+    """Subjects and windows of every dataset and input window."""
+    table = []
+    keys = ["Dataset", "QC_Code", "Input_Window_Sec", "Input_Stride_Sec"]
+    for key, frame in rows.groupby(keys, sort=False):
+        before = int(frame["Windows_Before_QC"].sum())
+        signal = int(frame["Windows_After_Signal_QC"].sum())
+        reference = int(frame["Windows_After_Reference_QC"].sum())
+        qc_windows = int(frame["Reference_QC_30s_Windows"].sum())
+        qc_passed = int(frame["Reference_QC_30s_Windows_Passed"].sum())
+        table.append({
+            **dict(zip(keys, key)),
+            "Subjects_Found": found.get(key[0], np.nan),
+            "Subjects_Read": int(len(frame)),
+            "Subjects_Before_QC": int((frame["Windows_Before_QC"] > 0).sum()),
+            "Subjects_After_Signal_QC": int((frame["Windows_After_Signal_QC"] > 0).sum()),
+            "Subjects_After_Reference_QC": int((frame["Windows_After_Reference_QC"] > 0).sum()),
+            "Windows_Before_QC": before,
+            "Windows_After_Signal_QC": signal,
+            "Windows_After_Reference_QC": reference,
+            "Removed_By_Signal_QC": before - signal,
+            "Removed_By_Reference_QC": signal - reference,
+            "Removed_Total": before - reference,
+            "Pct_Left_After_Signal_QC": 100.0 * signal / before if before else np.nan,
+            "Pct_Left_After_Reference_QC": 100.0 * reference / before if before else np.nan,
+            "Reference_QC_30s_Windows": qc_windows,
+            "Reference_QC_30s_Windows_Passed": qc_passed,
+            "Pct_Reference_QC_30s_Windows_Passed": 100.0 * qc_passed / qc_windows if qc_windows else np.nan,
+        })
+    return pd.DataFrame(table)
 
 
-def compare_settings(frame: pd.DataFrame, group_cols: List[str]) -> pd.DataFrame:
-    previous = frame.loc[frame["QC_Setting"] == "old", group_cols + QC_COUNT_COLUMNS]
-    updated = frame.loc[frame["QC_Setting"] == "new", group_cols + QC_COUNT_COLUMNS]
-    result = previous.merge(updated, on=group_cols, how="outer", suffixes=("_old", "_new"),
-                            validate="one_to_one", indicator="_source_match")
-    for name in QC_COUNT_COLUMNS:
-        result[name + "_Change"] = result[name + "_new"] - result[name + "_old"]
-    return result
-
-
-def save_csv(df: pd.DataFrame, path: Path):
-    df.to_csv(path, index=False, encoding="utf-8-sig")
+def save_csv(frame: pd.DataFrame, path: Path) -> None:
+    frame.to_csv(path, index=False, encoding="utf-8-sig")
     print("Saved:", path)
 
 
-def compare_reference_qc(args: argparse.Namespace, results_dir: Path) -> None:
-    """Window counts of every dataset (its loader: CapnoBase 261007, BIDMC and
-    STEAM2 261013) under the old and the new reference QC window and stride;
-    only REF_QC_WINDOW_SEC and REF_QC_HOP_SEC change, and they are restored
-    afterwards. No training."""
-    global REF_QC_WINDOW_SEC, REF_QC_HOP_SEC
-    if min(args.old_qc_window, args.old_qc_stride,
-           args.new_qc_window, args.new_qc_stride) <= 0:
-        raise ValueError("QC window and stride must be positive seconds")
-
+def count_qc(args: argparse.Namespace) -> None:
+    results_root = Path(args.results_root).resolve()
+    results_root.mkdir(parents=True, exist_ok=True)
     dataset_keys = [key for key in DATASET_ORDER if key in args.datasets]
-    specs_by_name = {s.name: s for s in WINDOW_SPECS}
-    missing = set(args.qc_windows) - set(specs_by_name)
-    if missing:
-        raise ValueError(f"Unknown input-window specification: {sorted(missing)}")
-    specs = [specs_by_name[name] for name in args.qc_windows]
-    results_dir = results_dir.resolve()
-    results_dir.mkdir(parents=True, exist_ok=True)
+    specs = [spec for spec in WINDOW_SPECS if spec.name in args.windows]
+    print(f"Respiratory reference QC: {REF_QC_WINDOW_SEC:g} s windows every {REF_QC_HOP_SEC:g} s")
 
-    rows = []
-    detail_parts = []
-    failures = []
-    runs = (("old", args.old_qc_window, args.old_qc_stride),
-            ("new", args.new_qc_window, args.new_qc_stride))
-    saved_qc = (REF_QC_WINDOW_SEC, REF_QC_HOP_SEC)
-    try:
-        for input_spec in specs:
-            for dataset_key in dataset_keys:
-                label = DATASET_CONFIGS[dataset_key]["label"]
-                for qc_label, qc_win, qc_stride in runs:
-                    REF_QC_WINDOW_SEC = float(qc_win)
-                    REF_QC_HOP_SEC = float(qc_stride)
-                    print(f"\n{label} ({DATASET_PROTOCOL[dataset_key]}) | model input "
-                          f"{input_spec.window_sec:g}s/{input_spec.stride_sec:g}s | reference QC "
-                          f"{qc_win:g}s/{qc_stride:g}s ({qc_label})")
-                    try:
-                        records = load_dataset(dataset_key, input_spec)
-                        for subject, record in sorted(records.items()):
-                            rows.append(count_subject(subject, record, label,
-                                                      input_spec, qc_label, qc_win, qc_stride))
-                            if args.save_window_detail:
-                                detail = pd.DataFrame(record["quality"])
-                                if not detail.empty:
-                                    detail.insert(0, "Subject", str(subject))
-                                    detail.insert(0, "Dataset", label)
-                                    detail.insert(0, "QC_Setting", qc_label)
-                                    detail.insert(0, "QC_Window_Sec", qc_win)
-                                    detail.insert(0, "QC_Stride_Sec", qc_stride)
-                                    detail.insert(0, "Input_Window", input_spec.window_sec)
-                                    detail_parts.append(detail)
-                        selected_rows = [r for r in rows if r["QC_Setting"] == qc_label and
-                                         r["Dataset"] == label and
-                                         r["Input_Window"] == input_spec.window_sec]
-                        print(f"  Loaded subjects: {len(records)}; candidate windows "
-                              f"{sum(r['Candidate_Windows'] for r in selected_rows)}; "
-                              f"first-stage kept {sum(r['Kept_Windows'] for r in selected_rows)}; "
-                              f"training eligible {sum(r['Train_OK_Windows'] for r in selected_rows)}")
-                        del records
-                        gc.collect()
-                    except Exception as exc:
-                        failures.append({"Dataset": label, "Input_Window": input_spec.window_sec,
-                                         "QC_Setting": qc_label, "Error": repr(exc)})
-                        print(f"ERROR: unable to load/process data: {exc}")
-    finally:
-        REF_QC_WINDOW_SEC, REF_QC_HOP_SEC = saved_qc
+    rows, unread, details, found = [], [], [], {}
+    for dataset_key in dataset_keys:
+        label = DATASET_CONFIGS[dataset_key]["label"]
+        try:
+            subjects = source_subjects(dataset_key)
+        except Exception as exc:
+            print(f"{label}: data not found ({exc})")
+            continue
+        found[label] = len(subjects)
+        for spec in specs:
+            print(f"\n{label} ({DATASET_PROTOCOL[dataset_key]} data reading and QC), {spec.label}: "
+                  f"{len(subjects)} subjects found")
+            records = load_all_subjects(dataset_key, spec)
+            for subject in subjects:
+                if subject not in records:
+                    unread.append({"Dataset": label, "Input_Window_Sec": spec.window_sec, "Subject": subject})
+            for subject in sorted(records):
+                rows.append(subject_counts(dataset_key, spec, subject, records[subject]))
+                if args.save_window_detail and records[subject]["quality"]:
+                    detail = pd.DataFrame(records[subject]["quality"]).rename(
+                        columns={"Kept": "After_Signal_QC", "Reference_QC_OK": "After_Reference_QC"}
+                    )
+                    detail.insert(0, "Subject", str(subject))
+                    detail.insert(0, "Input_Window_Sec", spec.window_sec)
+                    detail.insert(0, "Dataset", label)
+                    details.append(detail)
+            mine = [row for row in rows if row["Dataset"] == label and row["Input_Window_Sec"] == spec.window_sec]
+            print(
+                f"  windows: before QC {sum(r['Windows_Before_QC'] for r in mine)}, after signal QC "
+                f"{sum(r['Windows_After_Signal_QC'] for r in mine)}, after reference QC "
+                f"{sum(r['Windows_After_Reference_QC'] for r in mine)}"
+            )
+            del records
 
     if not rows:
-        raise SystemExit("No data loaded. Check original dataset paths. No counts were invented.")
-    subject_counts = pd.DataFrame(rows).sort_values(
-        ["Dataset", "Input_Window", "Subject", "QC_Setting"]
-    )
-    dataset_counts = aggregate_dataset_counts(subject_counts)
-    subject_comparison = compare_settings(subject_counts, QC_SUBJECT_GROUP_COLS)
-    dataset_comparison = compare_settings(dataset_counts, QC_GROUP_COLS)
+        raise SystemExit("No data read; check the dataset paths.")
+    per_subject = pd.DataFrame(rows)
+    per_dataset = dataset_counts(per_subject, found)
+    save_csv(per_dataset, results_root / "qc_counts_by_dataset.csv")
+    save_csv(per_subject, results_root / "qc_counts_by_subject.csv")
+    save_csv(pd.DataFrame(unread, columns=["Dataset", "Input_Window_Sec", "Subject"]),
+             results_root / "qc_unread_subjects.csv")
+    if details:
+        save_csv(pd.concat(details, ignore_index=True), results_root / "qc_window_detail.csv")
 
-    save_csv(subject_counts, results_dir / "qc_counts_by_subject.csv")
-    save_csv(dataset_counts, results_dir / "qc_counts_by_dataset.csv")
-    save_csv(subject_comparison, results_dir / "qc_counts_change.csv")
-    save_csv(dataset_comparison, results_dir / "qc_counts_change_summary.csv")
-    if detail_parts:
-        save_csv(pd.concat(detail_parts, ignore_index=True),
-                 results_dir / "qc_window_detail.csv")
-    if failures:
-        save_csv(pd.DataFrame(failures), results_dir / "qc_load_failures.csv")
-    print(f"\nDataset totals: old ({args.old_qc_window:g}s/{args.old_qc_stride:g}s) vs "
-          f"new ({args.new_qc_window:g}s/{args.new_qc_stride:g}s)")
-    show_cols = ["Dataset", "Input_Window", "QC_Setting", "Candidate_Windows",
-                 "Kept_Windows", "Train_OK_Windows", "QC_Windows_Total",
-                 "QC_Windows_Passed", "Train_OK_Pct"]
-    print(dataset_counts[show_cols].to_string(index=False))
-    print("\nDifference in training-eligible input windows (NEW - OLD):")
-    print(dataset_comparison[[*QC_GROUP_COLS, "Train_OK_Windows_Change"]].to_string(index=False))
-    print("\nNOTE: Model input-window length, overlap, and 60-s RR evaluation remain unchanged.")
-    print("NOTE: Counting includes subjects returned by original loaders (>=1 kept input window).")
+    print("\nSubjects and windows before / after QC:")
+    show = ["Dataset", "Input_Window_Sec", "Subjects_Found", "Subjects_Before_QC", "Subjects_After_Signal_QC",
+            "Subjects_After_Reference_QC", "Windows_Before_QC", "Windows_After_Signal_QC",
+            "Windows_After_Reference_QC", "Pct_Left_After_Reference_QC"]
+    print(per_dataset[show].to_string(index=False, float_format=lambda value: f"{value:.1f}"))
 
 
 # ---------------------------------------------------------------------------
@@ -6378,125 +2376,19 @@ def compare_reference_qc(args: argparse.Namespace, results_dir: Path) -> None:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--results-root",
-        type=Path,
-        default=DEFAULT_RESULTS_ROOT,
-        help="Root of all results (the 261007 and 261013 outputs and the QC counts each in a subfolder).",
-    )
-    parser.add_argument(
-        "--datasets",
-        nargs="+",
-        choices=DATASET_ORDER,
-        default=list(DEFAULT_DATASETS),
-        help="CapnoBase runs the 261007 code, BIDMC and STEAM2 the 261013 code (default: all three).",
-    )
+    parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
+    parser.add_argument("--datasets", nargs="+", choices=DATASET_ORDER, default=list(DATASET_ORDER))
     parser.add_argument(
         "--windows",
         nargs="+",
         choices=[spec.name for spec in WINDOW_SPECS],
-        default=list(DEFAULT_WINDOWS_261007),
-        help="261007 (CapnoBase) input windows (default %(default)s); 261013 uses 10 s windows.",
+        default=["w10s_nonoverlap"],
+        help="Input windows counted (default %(default)s).",
     )
-    parser.add_argument(
-        "--variants",
-        nargs="+",
-        choices=list(VARIANTS_261007),
-        default=list(VARIANTS_261007),
-        help="261007 (CapnoBase) ablation variants to run (default: all). 'full' is the final model.",
-    )
-    parser.add_argument(
-        "--weight-decays",
-        nargs="+",
-        type=float,
-        default=list(WEIGHT_DECAY_CANDIDATES),
-        help="261013 (BIDMC, STEAM2) weight decay candidates (default %(default)s); one value = no selection.",
-    )
-    parser.add_argument(
-        "--val-subject-ratio",
-        type=float,
-        default=VAL_SUBJECT_RATIO,
-        help="261013: share of the training subjects held out as validation subjects (default %(default)s).",
-    )
-    parser.add_argument(
-        "--reference-root",
-        type=Path,
-        default=REFERENCE_261007_ROOT,
-        help="261013: 261007 results root for the paired comparison (skipped when not found).",
-    )
-    parser.add_argument(
-        "--members",
-        type=int,
-        default=ENSEMBLE_MEMBERS,
-        help="Models per fold in the ensemble (default %(default)s).",
-    )
-    parser.add_argument("--min-epochs", type=int, default=MIN_EPOCHS)
-    parser.add_argument("--patience", type=int, default=PATIENCE)
-    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
-    parser.add_argument(
-        "--epoch-cap",
-        type=int,
-        default=None,
-        help="Upper limit on every variant's epochs (quick tests only).",
-    )
-    parser.add_argument(
-        "--subjects",
-        nargs="+",
-        default=None,
-        help="Only these held-out subjects (quick tests); training still uses all others.",
-    )
-    parser.add_argument("--gpu", type=int, default=0)
-    parser.add_argument("--force-cpu", action="store_true")
-    parser.add_argument(
-        "--threads",
-        type=int,
-        default=None,
-        help="torch CPU threads per process (e.g. 1 with several --shard workers).",
-    )
-    parser.add_argument(
-        "--no-require-cuda",
-        dest="require_cuda",
-        action="store_false",
-    )
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help=(
-            "Reuse members whose summary, minutes and predictions already exist "
-            "and continue interrupted members from their last epoch."
-        ),
-    )
-    parser.add_argument(
-        "--shard",
-        default=None,
-        help="K/N: parallel workers (261007: every N-th member run, 261013: every N-th fold, starting at K).",
-    )
-    parser.add_argument(
-        "--summary-only",
-        action="store_true",
-        help="Do not train; score the ensembles and write the summary.",
-    )
-    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--capnobase-path", type=Path, default=None)
     parser.add_argument("--bidmc-path", type=Path, default=None)
     parser.add_argument("--steam2-ppg-dir", type=Path, default=None)
     parser.add_argument("--steam2-rsp-dir", type=Path, default=None)
-    parser.add_argument(
-        "--inspect-capnobase",
-        action="store_true",
-        help=(
-            "Only read every CapnoBase case, print how it was loaded and save "
-            "capnobase_loading_check.csv (no training, no GPU needed)."
-        ),
-    )
-    parser.add_argument(
-        "--inspect-steam2",
-        action="store_true",
-        help=(
-            "Only read every STEAM2 session, print how it was loaded and save "
-            "steam2_loading_check.csv (no training, no GPU needed)."
-        ),
-    )
     parser.add_argument(
         "--ignore-capnobase-artifacts",
         dest="capnobase_artifacts",
@@ -6504,47 +2396,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Do not use the expert artifact labels of CapnoBase.",
     )
     parser.add_argument(
-        "--save-features",
-        action="store_true",
-        help="Also store the post-fusion features in each prediction file.",
-    )
-    qc = parser.add_argument_group("reference QC window counts (--compare-qc)")
-    qc.add_argument(
-        "--compare-qc",
-        action="store_true",
-        help="Only count the windows under the old and the new reference QC setting (no training).",
-    )
-    qc.add_argument(
-        "--qc-windows",
-        nargs="+",
-        choices=[spec.name for spec in WINDOW_SPECS],
-        default=["w10s_nonoverlap"],
-        help="Model input windows counted (default %(default)s).",
-    )
-    qc.add_argument("--old-qc-window", type=float, default=32.0)
-    qc.add_argument("--old-qc-stride", type=float, default=8.0)
-    qc.add_argument("--new-qc-window", type=float, default=REF_QC_WINDOW_SEC)
-    qc.add_argument("--new-qc-stride", type=float, default=REF_QC_HOP_SEC)
-    qc.add_argument(
-        "--qc-results-dir",
-        type=Path,
-        default=None,
-        help=f"Folder of the counts (default: results root\\{QC_COMPARISON_FOLDER}).",
-    )
-    qc.add_argument(
         "--save-window-detail",
         action="store_true",
-        help="Also save a per-input-window quality/selection CSV",
+        help="Also save every window with its QC values (qc_window_detail.csv).",
     )
-    parser.set_defaults(
-        capnobase_artifacts=DATASET_CONFIGS["capnobase"]["use_artifact_labels"],
-        require_cuda=True,
-    )
+    parser.set_defaults(capnobase_artifacts=DATASET_CONFIGS["capnobase"]["use_artifact_labels"])
     return parser.parse_args(argv)
 
 
-def configure_datasets(args: argparse.Namespace) -> None:
-    """Dataset paths and the CapnoBase artifact labels from the arguments."""
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    args = parse_args(argv)
     DATASET_CONFIGS["capnobase"]["use_artifact_labels"] = args.capnobase_artifacts
     if args.capnobase_path:
         DATASET_CONFIGS["capnobase"]["data_path"] = str(args.capnobase_path)
@@ -6554,34 +2415,7 @@ def configure_datasets(args: argparse.Namespace) -> None:
         DATASET_CONFIGS["steam2"]["ppg_dir"] = str(args.steam2_ppg_dir)
     if args.steam2_rsp_dir:
         DATASET_CONFIGS["steam2"]["rsp_dir"] = str(args.steam2_rsp_dir)
-
-
-def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = parse_args(argv)
-    configure_datasets(args)
-    results_root = Path(args.results_root).resolve()
-    if args.compare_qc:
-        qc_root = Path(args.qc_results_dir) if args.qc_results_dir else results_root / QC_COMPARISON_FOLDER
-        compare_reference_qc(args, qc_root)
-        return
-    if args.inspect_capnobase or args.inspect_steam2:
-        if args.inspect_capnobase:
-            root = results_root / PROTOCOL_FOLDERS["261007"]
-            root.mkdir(parents=True, exist_ok=True)
-            inspect_capnobase(root)
-        if args.inspect_steam2:
-            root = results_root / PROTOCOL_FOLDERS["261013"]
-            root.mkdir(parents=True, exist_ok=True)
-            inspect_steam2(root)
-        return
-    dataset_keys = [key for key in DATASET_ORDER if key in args.datasets]
-    for protocol, run in (("261007", run_experiment_261007), ("261013", run_experiment_261013)):
-        keys = [key for key in dataset_keys if DATASET_PROTOCOL[key] == protocol]
-        if not keys:
-            continue
-        labels = ", ".join(DATASET_CONFIGS[key]["label"] for key in keys)
-        print(f"\n=== {protocol} code: {labels} -> {results_root / PROTOCOL_FOLDERS[protocol]} ===")
-        run(args, results_root / PROTOCOL_FOLDERS[protocol], keys)
+    count_qc(args)
 
 
 if __name__ == "__main__":
