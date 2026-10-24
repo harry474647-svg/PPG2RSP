@@ -2,8 +2,8 @@ r"""261020_RespDiff: RespDiff (Miao, Chen, Li & Mandic, "RespDiff: An End-to-End
 Multi-scale RNN Diffusion Model for Respiratory Waveform Estimation from PPG
 Signals", arXiv:2410.04366, 2024) on CapnoBase, BIDMC and STEAM2, reproduced
 as in the paper and its official code (github.com/MYY311/RespDiff, commit
-3ff0554: model_fft.py / breathing_bidmc_fft.py with the spectral loss,
-model.py / breathing_bidmc.py without it). LOSOCV, one model per fold.
+3ff0554: model_fft.py / breathing_bidmc_fft.py, the model with the spectral
+loss). LOSOCV, one model per fold.
 
 Model (official code)
 ---------------------
@@ -61,16 +61,12 @@ code divides the summed window errors by (number of windows - 1); that
 value is reported as RR_MAE_Official_Code (the number the paper's 1.18 bpm
 corresponds to), RR_MAE is the mean over the windows.
 
-Models (paper, Tables I and II and the multi-scale ablation)
--------------------------------------------------------------
+Model (paper, Tables I and II)
+------------------------------
   folder             model                                     sampling
   respdiff           RespDiff (spectral loss; model_fft.py)    DDPM 50, DDIM 6
-  no_spectral_loss   w/o spectral loss (model.py)              DDPM 50, DDIM 6
-  no_multiscale      w/o spectral loss, E_fine kernels all 3   DDPM 50
-The official model.py (w/o spectral loss) also adds the step embedding to
-the features of y_t; this is kept. Paper (BIDMC): RespDiff 1.18 / 1.30 bpm
-(NFE 50 / 6), w/o spectral loss 1.44 / 1.46, kernel sizes all 3 1.53;
-waveform MAE 0.307 (0.316 w/o spectral loss).
+Only RespDiff with the spectral loss is trained (no ablation models). Paper
+(BIDMC): RespDiff 1.18 / 1.30 bpm (NFE 50 / 6); waveform MAE 0.307.
 
 Needed for these datasets (not in the paper or the official code)
 -----------------------------------------------------------------
@@ -117,13 +113,12 @@ Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261020_RespDiff)
                                                         and PPG per recording
   {model}\{dataset}\Fold_Results\{subject}_{sampling}.json / _windows.csv
   Summary\respdiff_results.csv        every dataset, model and sampling
-  Summary\table_spectral_loss.csv     Table II layout
-  Summary\table_multiscale.csv        multi-scale encoder ablation
+  Summary\table_respdiff.csv          Table II layout
   Summary\per_subject.csv, windows.csv, data_check.csv (--dry-run)
 
 Run (GPU):                       python 261020_RespDiff.py
 Resume after an interruption:    python 261020_RespDiff.py --resume
-Some datasets / models:          --datasets bidmc --variants respdiff
+Some datasets:                   --datasets bidmc
 Less GPU memory (slower):        --train-micro-batch 8 --sample-micro-batch 8
 Summary of stored results only:  --summary-only
 Check the data without training: --dry-run --no-require-cuda
@@ -269,12 +264,6 @@ class Variant:
 
 VARIANTS = {
     "respdiff": Variant("respdiff", "RespDiff", True, False, FINE_KERNELS, ("ddpm50", "ddim6")),
-    "no_spectral_loss": Variant(
-        "no_spectral_loss", "w/o spectral loss", False, True, FINE_KERNELS, ("ddpm50", "ddim6")
-    ),
-    "no_multiscale": Variant(
-        "no_multiscale", "w/o spectral loss, kernel sizes all 3", False, True, (3,) * 6, ("ddpm50",)
-    ),
 }
 # sampling -> (sampler, number of function evaluations)
 SAMPLERS = {"ddpm50": ("DDPM", 50), "ddim6": ("DDIM", 6)}
@@ -1588,12 +1577,8 @@ def summarize_results(results_root: Path, dataset_keys: Sequence[str], variants:
             out.append(row)
         return pd.DataFrame(out)
 
-    layout([VARIANTS["respdiff"].label, VARIANTS["no_spectral_loss"].label]).to_csv(
-        summary_root / "table_spectral_loss.csv", index=False, encoding="utf-8-sig")
-    multiscale = layout([VARIANTS["no_spectral_loss"].label, VARIANTS["no_multiscale"].label])
-    if not multiscale.empty:
-        multiscale = multiscale[multiscale["NFE"] == SAMPLERS["ddpm50"][1]]
-    multiscale.to_csv(summary_root / "table_multiscale.csv", index=False, encoding="utf-8-sig")
+    layout([VARIANTS["respdiff"].label]).to_csv(
+        summary_root / "table_respdiff.csv", index=False, encoding="utf-8-sig")
 
     print("\nRespDiff (60 s windows; mean ± SD over subjects):")
     for _, row in results.iterrows():
