@@ -70,20 +70,33 @@ Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261028_Deep_correncoder)
              data_check.csv, run_settings.json,
              261028_Deep_correncoder_results.xlsx
 
+GPU memory: the model is small (18,441 parameters; a batch needs well under
+1 MB), so a CUDA out-of-memory error means that the GPU is occupied by other
+programs (e.g. another training on the same GPU). The GPU is used only when
+at least MIN_FREE_GPU_MB are free and a test allocation succeeds, otherwise
+the CPU (the paper trains on a CPU in under 6 minutes per model); a fold that
+still fails on the GPU (CUDA out of memory / CUDA error) is run again from
+the start on the CPU, and so are the following folds. GPU memory kept by an
+earlier run stopped by an error in the same console (Spyder) is released at
+the start. None of this changes the model or the training.
+
 Run (GPU or CPU):                python 261028_Deep_correncoder.py
 Resume after an interruption:    --resume (finished folds are kept)
 Some datasets:                   --datasets capnobase bidmc
 Summary of stored folds only:    --summary-only
 Data paths:                      --capnobase-path, --bidmc-path,
                                  --steam2-ppg-dir, --steam2-rsp-dir
+CPU only:                        --force-cpu
 """
 
 import argparse
 import csv
+import gc
 import json
 import math
 import random
 import re
+import sys
 import time
 from fractions import Fraction
 from pathlib import Path
@@ -542,6 +555,8 @@ REFERENCE_RANGE = (0.0, 1.0)  # every reference window re-scaled to between 0 an
 EVAL_WINDOWS_SEC = (30.6, 60.6)
 FFT_POINTS = 16384  # zero-padded FFT: 0.11 breaths/min per bin at 30 Hz
 PREDICT_BATCH = 512
+# The GPU is used only with at least this much free memory (MB); otherwise the CPU.
+MIN_FREE_GPU_MB = 256
 
 
 def fill_missing(signal: np.ndarray) -> Tuple[np.ndarray, int]:
@@ -696,6 +711,60 @@ def test_starts(length: int) -> List[int]:
     """Testing: a sliding window of 9.6 s shifted 1 s each time (CapnoBase 480
     s: 471 test windows per subject)."""
     return list(range(0, length - SEGMENT_LEN + 1, TEST_HOP)) if length >= SEGMENT_LEN else []
+
+
+# ---------------------------------------------------------------------------
+# GPU memory
+# ---------------------------------------------------------------------------
+
+def release_memory(release_traceback: bool = False) -> None:
+    """Free unused memory. With release_traceback: also an earlier run stopped
+    by an error in the same console (Spyder), whose stored traceback keeps its
+    GPU tensors alive."""
+    if release_traceback:
+        for name in ("last_type", "last_value", "last_traceback"):
+            if hasattr(sys, name):
+                setattr(sys, name, None)
+    gc.collect()
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+        except RuntimeError:
+            pass
+
+
+def cuda_failure(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {exc}"
+    return any(word in text for word in ("out of memory", "CUDA", "CUBLAS", "cuDNN", "CUDNN"))
+
+
+def choose_device(args: argparse.Namespace) -> torch.device:
+    """The GPU when it has at least MIN_FREE_GPU_MB free and a test allocation
+    succeeds; otherwise the CPU."""
+    if args.force_cpu or not torch.cuda.is_available():
+        return torch.device("cpu")
+    device = torch.device(f"cuda:{args.gpu}")
+    reason = ""
+    try:
+        mem_get_info = getattr(torch.cuda, "mem_get_info", None)
+        if mem_get_info is not None:
+            free, total = mem_get_info(device)
+            if free < MIN_FREE_GPU_MB * 2 ** 20:
+                reason = (f"only {free / 2 ** 20:.0f} MB of {total / 2 ** 20:.0f} MB free "
+                          "(used by other programs)")
+        if not reason:
+            probe = torch.empty(MIN_FREE_GPU_MB * 2 ** 20 // 4, dtype=torch.float32, device=device)
+            nn.functional.dropout(probe[:4096], dropout_val, True)
+            torch.cuda.synchronize(device)
+            del probe
+    except RuntimeError as exc:
+        reason = str(exc).splitlines()[0]
+    release_memory()
+    if reason:
+        print(f"GPU {args.gpu} not used: {reason}. The CPU is used (close the other programs on the GPU, "
+              "or restart the console, to use it).", flush=True)
+        return torch.device("cpu")
+    return device
 
 
 # ---------------------------------------------------------------------------
@@ -913,14 +982,42 @@ def run_settings(args: argparse.Namespace) -> dict:
     }
 
 
-def run_dataset(args: argparse.Namespace, dataset_key: str, results_root: Path, device: torch.device) -> List[dict]:
+def run_fold(recordings: Sequence[dict], label: str, subject: str, trainX: np.ndarray, trainy: np.ndarray,
+             testX: np.ndarray, testy: np.ndarray, epochs: int, device: torch.device):
+    """Train the model of one fold and test it on the held-out subject's
+    recordings: model, training log, evaluation rows, waveforms, seconds."""
+    started = time.time()
+    model, history = train_fold(trainX, trainy, testX, testy, epochs, device)
+    training_seconds = time.time() - started
+    rows, arrays = [], {}
+    for k, recording in enumerate(recordings):
+        starts = test_starts(len(recording["ppg"]))
+        if not starts:
+            continue
+        x = scale(np.stack([recording["ppg"][s:s + SEGMENT_LEN] for s in starts]), PPG_RANGE)[0]
+        y = scale(np.stack([recording["resp"][s:s + SEGMENT_LEN] for s in starts]), REFERENCE_RANGE)[0]
+        outputs = predict(model, x, device)
+        for window_sec in EVAL_WINDOWS_SEC:
+            rows += [{"Dataset": label, "Subject": subject, **row}
+                     for row in evaluate_recording(recording, starts, outputs, y, window_sec)]
+        length = starts[-1] + SEGMENT_LEN
+        arrays[f"recording{k}_output"] = fuse(outputs, starts, length).astype(np.float32)
+        arrays[f"recording{k}_reference"] = fuse(y, starts, length).astype(np.float32)
+        arrays[f"recording{k}_ppg"] = recording["ppg"][:length].astype(np.float32)
+    return model.cpu(), history, rows, arrays, training_seconds
+
+
+def run_dataset(args: argparse.Namespace, dataset_key: str, results_root: Path,
+                device: torch.device) -> Tuple[List[dict], torch.device]:
+    """LOSOCV of one dataset; returns the data check and the device in use
+    (the CPU after a GPU failure)."""
     label = DATASET_CONFIGS[dataset_key]["label"]
     print(f"\n[{time.strftime('%H:%M:%S')}] {label}: reading the data ...", flush=True)
     data, checks = load_dataset(dataset_key)
     subjects_all = sorted(data)
     if len(subjects_all) < 2:
         print(f"{label}: fewer than two subjects, skipped")
-        return checks
+        return checks, device
     segments = {}
     for subject in subjects_all:
         x, y = training_segments(data[subject])
@@ -940,26 +1037,21 @@ def run_dataset(args: argparse.Namespace, dataset_key: str, results_root: Path, 
         trainy = np.concatenate([segments[s][1] for s in train_subjects])
         testX, testy = segments[subject]
         print(f"[{time.strftime('%H:%M:%S')}] {label} test subject {subject}: training on {len(trainX)} windows of "
-              f"{len(train_subjects)} subjects, {args.epochs} epochs", flush=True)
-        started = time.time()
-        model, history = train_fold(trainX, trainy, testX, testy, args.epochs, device)
-        training_seconds = time.time() - started
-
-        rows, arrays = [], {}
-        for k, recording in enumerate(data[subject]):
-            starts = test_starts(len(recording["ppg"]))
-            if not starts:
-                continue
-            x = scale(np.stack([recording["ppg"][s:s + SEGMENT_LEN] for s in starts]), PPG_RANGE)[0]
-            y = scale(np.stack([recording["resp"][s:s + SEGMENT_LEN] for s in starts]), REFERENCE_RANGE)[0]
-            outputs = predict(model, x, device)
-            for window_sec in EVAL_WINDOWS_SEC:
-                rows += [{"Dataset": label, "Subject": subject, **row}
-                         for row in evaluate_recording(recording, starts, outputs, y, window_sec)]
-            length = starts[-1] + SEGMENT_LEN
-            arrays[f"recording{k}_output"] = fuse(outputs, starts, length).astype(np.float32)
-            arrays[f"recording{k}_reference"] = fuse(y, starts, length).astype(np.float32)
-            arrays[f"recording{k}_ppg"] = recording["ppg"][:length].astype(np.float32)
+              f"{len(train_subjects)} subjects, {args.epochs} epochs ({device.type})", flush=True)
+        try:
+            fold = run_fold(data[subject], label, subject, trainX, trainy, testX, testy, args.epochs, device)
+        except RuntimeError as exc:
+            if device.type != "cuda" or not cuda_failure(exc):
+                raise
+            print(f"[{time.strftime('%H:%M:%S')}] {label} test subject {subject}: GPU failed "
+                  f"({str(exc).splitlines()[0]}); this fold is run again on the CPU, and so are the "
+                  "following folds", flush=True)
+            fold = None
+        if fold is None:
+            release_memory()
+            device = torch.device("cpu")
+            fold = run_fold(data[subject], label, subject, trainX, trainy, testX, testy, args.epochs, device)
+        model, history, rows, arrays, training_seconds = fold
         windows = pd.DataFrame(rows)
         for path in paths.values():
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -984,10 +1076,9 @@ def run_dataset(args: argparse.Namespace, dataset_key: str, results_root: Path, 
         print(f"[{time.strftime('%H:%M:%S')}] {label} test subject {subject}: {tag} windows MAE "
               f"{summary[f'MAE_{tag}']:.3f} breaths/min, PCC {summary[f'PCC_{tag}']:.3f}, waveform MAE "
               f"{summary[f'Waveform_MAE_{tag}']:.3f}; training {training_seconds / 60:.1f} min", flush=True)
-        del model
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-    return checks
+        del model, fold
+        release_memory()
+    return checks, device
 
 
 def write_excel(path: Path, sheets: Dict[str, pd.DataFrame]) -> None:
@@ -1095,7 +1186,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         torch.set_num_threads(int(args.threads))
     results_root = Path(args.results_root).resolve()
     (results_root / "Summary").mkdir(parents=True, exist_ok=True)
-    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() and not args.force_cpu else "cpu")
+    release_memory(release_traceback=True)
+    device = choose_device(args)
     dataset_keys = [key for key in DATASET_ORDER if key in args.datasets]
     labels = [DATASET_CONFIGS[key]["label"] for key in dataset_keys]
     (results_root / "Summary" / "run_settings.json").write_text(
@@ -1111,7 +1203,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     else:
         rows = []
         for key in dataset_keys:
-            rows += run_dataset(args, key, results_root, device)
+            dataset_rows, device = run_dataset(args, key, results_root, device)
+            rows += dataset_rows
         checks = pd.DataFrame(rows)
     summarize(results_root, labels, checks)
 
