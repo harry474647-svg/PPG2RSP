@@ -1,11 +1,24 @@
-r"""261011_RRWaveNet_Feature_Results_10s: feature-level analyses of the
-261007_RRWaveNet_Ensemble_NoEvent results, 10 s windows, for every dataset
-(CapnoBase, BIDMC, STEAM2) and for all datasets together, in one script:
+r"""261011_RRWaveNet_Feature_Results_10s: feature-level analyses of the stored
+models, 10 s windows, CapnoBase from 261007_RRWaveNet_Ensemble_NoEvent and
+BIDMC / STEAM2 from 261013_RRWaveNet_Adult_SubjectVal_WD, for every dataset
+and for all datasets together, in one script:
   1. stem fusion: effective rank and off-diagonal correlation of the
      encoder input, Stem Fusion O (full) vs X (no_stem_fusion);
   2. the four residual encoder blocks of the full model: channel
      correlation with the target, PC1 respiratory-band power, PC1
      autocorrelation.
+
+Models per dataset (3 members per held-out subject):
+* CapnoBase: the 261007_RRWaveNet_Ensemble_NoEvent results
+  (--results-root-261007): full\ and no_stem_fusion\, members m0-m2, read
+  with the 261007 code;
+* BIDMC, STEAM2: the 261013_RRWaveNet_Adult_SubjectVal_WD results
+  (--results-root-261013): the full model of the weight decay 261013
+  selected in the fold (WD_Selection\01_w10s_nonoverlap\<Dataset>\
+  <subject>_selection.json -> full_wd<wd>\), members m0-m2, read with the
+  261013 code (its STEAM2 reader and target polarity), so the windows are
+  those the models were tested on. 261013 trained only the full model, so
+  part 1 (stem fusion O vs X) is CapnoBase only.
 
 Nothing is trained. Every stored model (3 members per held-out subject) is
 reloaded and run on the test windows of its held-out subject, so the
@@ -13,8 +26,8 @@ windows are exactly the ones the models were tested on. Every value is
 computed per model and averaged over the 3 models of a subject. Statistics
 are over subjects with the paired Wilcoxon signed-rank test (two-sided),
 for each dataset and for all datasets together (every subject of the three
-datasets once). Subjects whose 3 models are not all stored yet are left out
-and listed.
+datasets once). Subjects whose 3 models are not all stored yet (261013: or
+without a weight decay selection) are left out and listed.
 
 1. Stem fusion O vs X (encoder input)
    Stem Fusion O = the full model (three stem branches -> 1x1 conv +
@@ -36,7 +49,8 @@ and listed.
    p (**** p < 1e-4, *** < 1e-3, ** < 1e-2, * < 0.05, ns). Box plots: Stem
    Fusion X (left, red) vs Stem Fusion O (right, blue) with the
    significance bracket, per dataset and for all datasets, and one overview
-   figure per metric. Skipped when the no_stem_fusion models are not stored.
+   figure per metric. CapnoBase only (261007); skipped when the
+   no_stem_fusion models are not stored.
 2. Residual encoder blocks (full model)
    The 24-channel feature map at five stages: Stem = the stem fusion output
    (encoder input), B1 (d=1), B2 (d=2), B3 (d=4), B4 (d=8) = the output of
@@ -85,13 +99,19 @@ Outputs: <261007 results root>\Summary_10s\
             _pc1_acf_summary.png
   with <Dataset> = CapnoBase, BIDMC, STEAM2 and All_datasets.
 
-It uses the 261007 file as it is (data paths, model and results root are
-taken from it; default results root
-D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1). Run next to
-261007_RRWaveNet_Ensemble_NoEvent.py (Spyder: just run the file):
+It uses the 261007 and 261013 files as they are (data paths, reading and
+model are taken from them: CapnoBase from 261007, BIDMC and STEAM2 from
+261013). Results roots (default):
+  --results-root-261007  D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1
+  --results-root-261013  D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWavNet_STEAM_BIDMC_v1
+The outputs go to <261007 results root>\Summary_10s\ (encoder_coverage.csv
+lists the source and the weight decays of every dataset). Run next to
+261007_RRWaveNet_Ensemble_NoEvent.py and
+261013_RRWaveNet_Adult_SubjectVal_WD.py (Spyder: just run the file):
   python 261011_RRWaveNet_Feature_Results_10s.py
-Options: --results-root <261007 results>, --datasets capnobase bidmc steam2,
-  --force-cpu, --gpu, and the data path options of 261007.
+Options: --results-root-261007 / --results-root-261013 <results>,
+  --datasets capnobase bidmc steam2, --force-cpu, --gpu, and the data path
+  options of 261007 / 261013.
 
 Reference: Roy O, Vetterli M. The effective rank: a measure of effective
 dimensionality. EUSIPCO 2007.
@@ -117,7 +137,13 @@ from scipy import stats
 from scipy.signal import periodogram
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-BACKBONE = SCRIPT_DIR / "261007_RRWaveNet_Ensemble_NoEvent.py"
+BACKBONE_261007 = SCRIPT_DIR / "261007_RRWaveNet_Ensemble_NoEvent.py"
+BACKBONE_261013 = SCRIPT_DIR / "261013_RRWaveNet_Adult_SubjectVal_WD.py"
+RESULTS_ROOT_261007 = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1")
+RESULTS_ROOT_261013 = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWavNet_STEAM_BIDMC_v1")
+# Results of every dataset: CapnoBase from 261007, BIDMC and STEAM2 from 261013
+# (the full model of the weight decay 261013 selected in every fold).
+DATASET_SOURCES = {"capnobase": "261007", "bidmc": "261013", "steam2": "261013"}
 WINDOW = "w10s_nonoverlap"
 WINDOW_TAG = "10s"
 MEMBERS = 3
@@ -158,11 +184,11 @@ ACF_MIN_RUN_SEC = 24.0
 PSD_PLOT_MAX_HZ = 1.0
 
 
-def load_backbone(path: Path):
-    """Import the 261007 script as a module (no training is started)."""
-    spec = importlib.util.spec_from_file_location("rrwavenet_261007_features_10s", str(path))
+def load_backbone(path: Path, name: str):
+    """Import the 261007 or 261013 script as a module (no training is started)."""
+    spec = importlib.util.spec_from_file_location(name, str(path))
     module = importlib.util.module_from_spec(spec)
-    sys.modules["rrwavenet_261007_features_10s"] = module
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -377,12 +403,21 @@ def checkpoints_of(backbone, root: Path, subject: str) -> Optional[List[Path]]:
     return paths if complete else None
 
 
-def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, args) -> dict:
-    configs = backbone.DATASET_CONFIGS
-    spec = next(s for s in backbone.WINDOW_SPECS if s.name == WINDOW)
-    fs = float(backbone.TARGET_FS)
-    max_lag = int(round(ACF_MAX_LAG_SEC * fs))
-    min_length = int(round(ACF_MIN_RUN_SEC * fs))
+def full_model_root(backbone, source: str, results_root: Path, spec, dataset_key: str,
+                    subject: str) -> Tuple[Optional[Path], Optional[float]]:
+    """Folder of the full model of a held-out subject and, for 261013, the
+    weight decay selected in its fold (None, None without a selection)."""
+    if source == "261007":
+        return backbone.condition_root(results_root, ENCODER_VARIANT, spec, dataset_key), None
+    found = backbone.stored_selection(results_root, list(backbone.VARIANTS.values()), spec, dataset_key, subject)
+    if found is None:
+        return None, None
+    record, variant = found
+    return (backbone.condition_root(results_root, variant.name, spec, dataset_key),
+            float(record["Selected_Weight_Decay"]))
+
+
+def collect(sources: Dict[str, Tuple[object, Path]], dataset_keys: Sequence[str], device, args) -> dict:
     stem_rows: List[dict] = []
     stem_skipped: List[dict] = []
     member_rows: List[dict] = []
@@ -391,15 +426,33 @@ def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, a
     curves: Dict[Tuple[str, str], Dict[str, List[np.ndarray]]] = {}
     frequencies = None
     for dataset_key in dataset_keys:
+        source = DATASET_SOURCES[dataset_key]
+        backbone, results_root = sources[source]
+        configs = backbone.DATASET_CONFIGS
+        spec = next(s for s in backbone.WINDOW_SPECS if s.name == WINDOW)
+        fs = float(backbone.TARGET_FS)
+        max_lag = int(round(ACF_MAX_LAG_SEC * fs))
+        min_length = int(round(ACF_MIN_RUN_SEC * fs))
         label = configs[dataset_key]["label"]
-        root_o = backbone.condition_root(results_root, ENCODER_VARIANT, spec, dataset_key)
-        root_x = backbone.condition_root(results_root, STEM_X_VARIANT, spec, dataset_key)
-        has_o = (root_o / "Members").exists()
-        has_x = (root_x / "Members").exists()
+        if source == "261007":
+            root_o = backbone.condition_root(results_root, ENCODER_VARIANT, spec, dataset_key)
+            root_x = backbone.condition_root(results_root, STEM_X_VARIANT, spec, dataset_key)
+            has_o = (root_o / "Members").exists()
+            has_x = (root_x / "Members").exists()
+            encoder_variant = backbone.VARIANTS[ENCODER_VARIANT]
+        else:
+            # 261013: the weight decay selected in every fold; only the full model.
+            root_o = results_root / "WD_Selection" / f"{spec.order:02d}_{spec.name}" / label
+            root_x = None
+            has_o = root_o.exists()
+            has_x = False
+            encoder_variant = next(iter(backbone.VARIANTS.values()))
         if not has_o:
-            print(f"{label}: no {ENCODER_VARIANT} results under {root_o}, skipped")
+            print(f"{label}: no {source} {ENCODER_VARIANT} results under {root_o}, skipped")
             continue
-        if not has_x:
+        if source == "261013":
+            print(f"{label}: 261013 stored only the full model; stem fusion O vs X skipped")
+        elif not has_x:
             print(f"{label}: no {STEM_X_VARIANT} results under {root_x}; stem fusion O vs X skipped")
         try:
             subject_data = backbone.load_dataset(dataset_key, spec)
@@ -409,11 +462,12 @@ def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, a
         subjects = sorted(subject_data)
         if args.subjects:
             subjects = [s for s in subjects if s in set(args.subjects)]
-        model_o = backbone.VARIANTS[ENCODER_VARIANT].options.build().to(device)
+        model_o = encoder_variant.options.build().to(device)
         model_x = backbone.VARIANTS[STEM_X_VARIANT].options.build().to(device) if has_x else None
-        analysed, left_out, paired = [], [], 0
+        analysed, left_out, paired, decays = [], [], 0, []
         for subject in subjects:
-            checkpoints_o = checkpoints_of(backbone, root_o, subject)
+            subject_root, weight_decay = full_model_root(backbone, source, results_root, spec, dataset_key, subject)
+            checkpoints_o = checkpoints_of(backbone, subject_root, subject) if subject_root is not None else None
             checkpoints_x = checkpoints_of(backbone, root_x, subject) if has_x else None
             if has_x:
                 for name, found in (("Stem Fusion O", checkpoints_o), ("Stem Fusion X", checkpoints_x)):
@@ -423,6 +477,8 @@ def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, a
             if checkpoints_o is None:
                 left_out.append(subject)
                 continue
+            if weight_decay is not None:
+                decays.append(weight_decay)
             loader = backbone.make_eval_loader(
                 backbone.SubjectWindowDataset(subject_data, [subject], "test", False), args.batch_size, device
             )
@@ -477,13 +533,17 @@ def collect(backbone, results_root: Path, dataset_keys: Sequence[str], device, a
             del loader
         coverage_rows.append({
             "Dataset": label,
+            "Source": f"{source} ({results_root})",
+            "Weight_Decays": ", ".join(
+                f"{value:g}: {decays.count(value)}" for value in sorted(set(decays))
+            ),
             "N_Subjects_in_Dataset": len(subjects),
             "N_Subjects_Analysed": len(analysed),
             "N_Subjects_Left_Out": len(left_out),
             "Left_Out_Subjects": " ".join(left_out),
             "N_Subjects_Stem_Fusion_OX": paired,
         })
-        print(f"{label}: encoder blocks {len(analysed)} of {len(subjects)} subjects"
+        print(f"{label} ({source}): encoder blocks {len(analysed)} of {len(subjects)} subjects"
               + (f" (models not all stored: {' '.join(left_out)})" if left_out else "")
               + (f"; stem fusion O vs X {paired} subjects" if has_x else ""))
         del subject_data, model_o, model_x
@@ -927,27 +987,37 @@ def encoder_outputs(backbone, collected: dict, datasets: List[str], out_root: Pa
 # ---------------------------------------------------------------------------
 
 def main(args: argparse.Namespace) -> None:
-    backbone = load_backbone(Path(args.backbone).resolve())
-    configs = backbone.DATASET_CONFIGS
-    if args.capnobase_path:
-        configs["capnobase"]["data_path"] = str(args.capnobase_path)
-    if args.bidmc_path:
-        configs["bidmc"]["data_path"] = str(args.bidmc_path)
-    if args.steam2_ppg_dir:
-        configs["steam2"]["ppg_dir"] = str(args.steam2_ppg_dir)
-    if args.steam2_rsp_dir:
-        configs["steam2"]["rsp_dir"] = str(args.steam2_rsp_dir)
+    backbones = {
+        "261007": load_backbone(Path(args.backbone_261007).resolve(), "rrwavenet_261007_features_10s"),
+        "261013": load_backbone(Path(args.backbone_261013).resolve(), "rrwavenet_261013_features_10s"),
+    }
+    for module in backbones.values():
+        configs = module.DATASET_CONFIGS
+        if args.capnobase_path and "capnobase" in configs:
+            configs["capnobase"]["data_path"] = str(args.capnobase_path)
+        if args.bidmc_path:
+            configs["bidmc"]["data_path"] = str(args.bidmc_path)
+        if args.steam2_ppg_dir:
+            configs["steam2"]["ppg_dir"] = str(args.steam2_ppg_dir)
+        if args.steam2_rsp_dir:
+            configs["steam2"]["rsp_dir"] = str(args.steam2_rsp_dir)
     if args.threads:
         torch.set_num_threads(int(args.threads))
-    results_root = Path(args.results_root or backbone.DEFAULT_RESULTS_ROOT).resolve()
-    out_root = results_root / OUTPUT_FOLDER
+    sources = {
+        "261007": (backbones["261007"], Path(args.results_root_261007).resolve()),
+        "261013": (backbones["261013"], Path(args.results_root_261013).resolve()),
+    }
+    backbone = backbones["261007"]
+    out_root = sources["261007"][1] / OUTPUT_FOLDER
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() and not args.force_cpu else "cpu")
     dataset_keys = [key for key in backbone.DATASET_ORDER if key in args.datasets]
-    datasets = [configs[key]["label"] for key in dataset_keys]
-    print(f"Results: {results_root}\n{WINDOW}, {MEMBERS} members per subject; "
-          f"stem fusion O = {STEM_O_VARIANT}, X = {STEM_X_VARIANT}; encoder: {ENCODER_VARIANT}; device: {device}")
+    datasets = [backbones[DATASET_SOURCES[key]].DATASET_CONFIGS[key]["label"] for key in dataset_keys]
+    print(f"Results: CapnoBase {sources['261007'][1]} (261007)\n"
+          f"         BIDMC, STEAM2 {sources['261013'][1]} (261013, weight decay selected per fold)\n"
+          f"{WINDOW}, {MEMBERS} members per subject; stem fusion O = {STEM_O_VARIANT}, X = {STEM_X_VARIANT} "
+          f"(261007 only); encoder: {ENCODER_VARIANT}; device: {device}")
 
-    collected = collect(backbone, results_root, dataset_keys, device, args)
+    collected = collect(sources, dataset_keys, device, args)
     if collected["members"].empty:
         print("No subject with all members of the full model stored.")
         return
@@ -957,10 +1027,15 @@ def main(args: argparse.Namespace) -> None:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--backbone", type=Path, default=BACKBONE,
-                        help="Path of 261007_RRWaveNet_Ensemble_NoEvent.py (data paths and model).")
-    parser.add_argument("--results-root", type=Path, default=None,
-                        help="Results root of the 261007 run (default: its PROJECT_ROOT).")
+    parser.add_argument("--backbone-261007", "--backbone", dest="backbone_261007", type=Path,
+                        default=BACKBONE_261007,
+                        help="Path of 261007_RRWaveNet_Ensemble_NoEvent.py (CapnoBase: data and model).")
+    parser.add_argument("--backbone-261013", type=Path, default=BACKBONE_261013,
+                        help="Path of 261013_RRWaveNet_Adult_SubjectVal_WD.py (BIDMC, STEAM2: data and model).")
+    parser.add_argument("--results-root-261007", "--results-root", dest="results_root_261007", type=Path,
+                        default=RESULTS_ROOT_261007, help="Results root of the 261007 run (CapnoBase).")
+    parser.add_argument("--results-root-261013", type=Path, default=RESULTS_ROOT_261013,
+                        help="Results root of the 261013 run (BIDMC, STEAM2).")
     parser.add_argument("--datasets", nargs="+", default=["capnobase", "bidmc", "steam2"],
                         choices=["capnobase", "bidmc", "steam2"])
     parser.add_argument("--subjects", nargs="+", default=None, help="Only these subjects (quick tests).")
