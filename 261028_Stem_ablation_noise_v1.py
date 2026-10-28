@@ -1,11 +1,15 @@
 r"""261028_Stem_ablation_noise_v1: the full model with and without the 1x1
 stem fusion under noise added to the input PPG of the held-out subject; 10 s
 non-overlapping input windows, the single model m0 of every LOSOCV fold (no
-ensemble), CapnoBase, BIDMC and STEAM2. Nothing is trained or tuned here: the
-noise is added at test time only, to the models trained on the clean data
-(CapnoBase: 261007_RRWaveNet_Ensemble_NoEvent; BIDMC and STEAM2: the settings
-of 261013_RRWaveNet_Adult_SubjectVal_WD). Box plots and paired tests of both
-models at every noise type and level.
+ensemble), CapnoBase, BIDMC and STEAM2. The models are those of 261007 /
+261013 where these stored them; the others (the BIDMC and STEAM2 models
+without stem fusion) are trained here first, with the settings of
+261007_RRWaveNet_Ensemble_NoEvent (CapnoBase) and
+261013_RRWaveNet_Adult_SubjectVal_WD (BIDMC, STEAM2), and stored for
+261028_Stem_ablation_quantative_result, which reads them from here. The noise
+is added at test time only, to the models trained on the clean data (no
+training or tuning with noise). Box plots and paired tests of both models at
+every noise type and level.
 
   model (name in the results)       stem -> encoder                                       folder
   with stem fusion (full)           3 branches x 8 filters -> 1x1 Conv1d(24 -> 24)        full
@@ -13,21 +17,67 @@ models at every noise type and level.
   without stem fusion               3 branches x 8 filters -> concatenation (24           no_stem_fusion
                                     channels) -> encoder
 
-Everything else (network, input normalization, target and the 60 s
-evaluation) is that of 261028_Stem_ablation_quantative_result, unchanged.
+Everything else (stem branches, residual encoder, decoder, head, dropout
+0.10), the input normalization (min-max per window), the target, the loss,
+the training schedule and the 60 s evaluation are those of the full model;
+the network without stem fusion is the no_stem_fusion ablation of 261007
+(9,377 and 8,729 parameters).
 
-Models (read, not trained)
---------------------------
-The single model m0 of a fold (seed of member m0 of 261007 / 261013), read as
-in 261028_Stem_ablation_quantative_result: first from its results
-(--models-root), otherwise from where 261007 / 261013 stored it:
+Models (read from 261007 / 261013, otherwise trained here)
+-----------------------------------------------------------
+The single model m0 of a fold (seed of member m0, 10 s windows) is read
+where 261007 / 261013 stored it, being the same model, seed and training:
 * CapnoBase: both models from the 261007 results (full and its ablation
   no_stem_fusion; --reference-261007-root);
 * BIDMC, STEAM2: the full model from the 261013 results (member m0 of the
-  weight decay 261013 selected in the fold; --reference-261013-root) and the
-  model without stem fusion trained by 261028_Stem_ablation_quantative_result
-  with the same settings (--models-root).
-A fold without both models is left out (Summary/noise_missing_folds.csv).
+  weight decay 261013 selected in the fold; --reference-261013-root).
+A model not found there is trained here (--variants: no_stem_fusion by
+default, i.e. the BIDMC and STEAM2 models without stem fusion; full as well
+with --variants full no_stem_fusion) and stored under PROJECT_ROOT with its
+learning curve, restored best checkpoint and fold summary, which
+261028_Stem_ablation_quantative_result reads (its --models-root). A fold
+without both models is left out of the noise evaluation
+(Summary/noise_missing_folds.csv).
+
+Differences from 261007 (CapnoBase) / 261013 (BIDMC, STEAM2):
+* input windows: 10 s, non-overlapping;
+* one model per LOSOCV fold, scored alone: no ensemble and no averaging
+  of models. Its seed is the seed of member m0 in 261007 / 261013
+  (stable_seed('261006-ensemble-member', 'w10s_nonoverlap', dataset,
+  subject, 0)), the same for both models;
+* with or without the 1x1 stem fusion;
+* every mean in the summary comes with its SD (ddof=1).
+
+Training settings per dataset (the same for both models of a fold)
+-------------------------------------------------------------------
+* CapnoBase (261007): validation = the last 20% of every training
+  subject's windows; AdamW weight decay 5e-5 on every parameter; CapnoBase
+  read and processed as in 261007.
+* BIDMC and STEAM2 (261013, tuned for these datasets): subject-wise
+  validation, i.e. 20% of the training subjects of the fold held out whole
+  (the validation subjects 261013 drew for the fold), all windows of the
+  other training subjects for training; AdamW weight decay on the
+  convolution weights only, with the value 261013 selected in that fold
+  by the validation loss of these validation subjects (candidates 1e-2,
+  1e-1, 1). The value is read from the 261013 results
+  (--reference-261013-root, WD_Selection\01_w10s_nonoverlap\{dataset}\
+  {subject}_selection.json); a fold without a selection, or whose 261013
+  validation subjects differ (other data), is skipped and listed in
+  failed_members*.csv and Summary/noise_missing_folds.csv. STEAM2 is read
+  with the 261013 reader (EEGLAB sessions at 200 Hz, channels by label, PPG
+  and RSP paired by identical file names, sessions split at internal
+  boundary events, all sessions of a person in one subject) and its belt
+  reference keeps the polarity it was recorded with (profile
+  adult_belt_as_recorded); BIDMC is read as in 261007 and 261013.
+261028_Stem_ablation_quantative_result lists the weight decay of every fold
+(Summary/training_by_fold.csv).
+Otherwise for all datasets: raw PPG input without a band-pass, target =
+respiratory-phase waveform from the expert CO2 breath labels (CapnoBase) or
+the respiratory-band reference (BIDMC, STEAM2), the v16 waveform loss
+(SmoothL1 + Pearson + derivative), learning rate 2e-4 with cosine decay, up
+to 240 epochs, at least 20, patience 25, best validation epoch restored,
+v16 jitter of training windows (random shift up to 0.094 s, gain
+0.95-1.05, small noise); no speed augmentation, no rate-balanced sampling.
 
 Noise
 -----
@@ -121,12 +171,33 @@ Limitations
 * The SNR is set per 10 s window from the power of that window, so every
   window has the same SNR; in a recording it would vary.
 
+Memory and progress
+-------------------
+Every dataset and model is trained in its own Python process (started by
+the main process, which then evaluates the noise and writes the summary),
+so its host and GPU memory is returned before the next one. Out of host or GPU
+memory or a CUDA / cuDNN failure stops the worker instead of failing every
+following fold; the worker is started again with --resume, which keeps
+every stored run and continues an interrupted one from its last epoch.
+The output of every worker is printed by the main process (also in IDE
+consoles such as Spyder). None of this changes the models or the training:
+data, preprocessing, network (apart from the stem fusion), loss, optimizer,
+schedule, seeds, cuDNN settings and evaluation are those of 261007
+(CapnoBase) and 261013 (BIDMC, STEAM2). --single-process trains everything
+in one process.
+
 Data and outputs
 ----------------
 Datasets: CapnoBase, BIDMC and STEAM2 (paths in DATASET_CONFIGS, or
---capnobase-path / --bidmc-path / --steam2-ppg-dir / --steam2-rsp-dir), read
-as in 261028_Stem_ablation_quantative_result. All results go to PROJECT_ROOT
+--capnobase-path / --bidmc-path / --steam2-ppg-dir / --steam2-rsp-dir).
+All results go to PROJECT_ROOT
 (D:\PPG2RSP_RRWaveNet_Inspired\261028_Stem_ablation_noise_v1):
+  {model}\01_w10s_nonoverlap\{dataset}\Members\m0\   model, learning
+      curve, training audit and test predictions of each fold trained here
+  {model}\01_w10s_nonoverlap\{dataset}\Fold_Summaries\   per-subject
+      JSON and per-minute CSV
+  Data_Quality\   window and subject quality of every dataset
+  failed_members*.csv   folds not trained, with the reason
   Noise_Evaluation\01_w10s_nonoverlap\{dataset}\{subject}_minutes.csv   every
       scored minute of both models, every noise type, level and draw (and
       clean); {subject}_fold.json the noise settings, checkpoints and checks
@@ -137,13 +208,17 @@ as in 261028_Stem_ablation_quantative_result. All results go to PROJECT_ROOT
       Figures\noise_{dataset}.png, Figures\noise_degradation_summary.png and
       261028_Stem_ablation_noise_v1_results.xlsx
 
-Run (GPU or CPU):              python 261028_Stem_ablation_noise_v1.py
-Resume after an interruption:  python 261028_Stem_ablation_noise_v1.py --resume
-Some datasets:                 --datasets capnobase bidmc
-Some noise types / levels:     --noise-types motion bw_resp --snr-db 20 10 0
-Models:                        --models-root <261028_Stem_ablation_quantative_result results>
-                               --reference-261007-root <261007 results>
-                               --reference-261013-root <261013 results>
+Run (GPU):                       python 261028_Stem_ablation_noise_v1.py
+Resume after an interruption:    python 261028_Stem_ablation_noise_v1.py --resume
+Noise evaluation only:           --resume --summary-only
+Some datasets:                   --datasets capnobase bidmc
+Some noise types / levels:       --noise-types motion bw_resp --snr-db 20 10 0
+Results of 261007 / 261013:      --reference-261007-root <261007 results>
+                                 --reference-261013-root <261013 results>
+Parallel workers (e.g. 2):       --resume --shard 0/2, --resume --shard 1/2,
+                                 then --resume --summary-only
+Check the data without training: --dry-run --no-require-cuda
+Then:                            python 261028_Stem_ablation_quantative_result.py
 """
 
 import argparse
@@ -152,8 +227,11 @@ import gc
 import hashlib
 import json
 import math
+import os
 import random
 import re
+import subprocess
+import sys
 import textwrap
 import time
 import warnings
@@ -184,6 +262,7 @@ from scipy.signal import (
     sosfiltfilt,
     welch,
 )
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -194,9 +273,6 @@ from torch.utils.data import DataLoader, Dataset
 PROJECT_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261028_Stem_ablation_noise_v1")
 # Every result of this script is written under PROJECT_ROOT.
 DEFAULT_RESULTS_ROOT = PROJECT_ROOT
-# Results of 261028_Stem_ablation_quantative_result: the BIDMC / STEAM2 models
-# without stem fusion trained there (and any model it trained) are read here.
-MODELS_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261028_Stem_ablation_quantative_result")
 # 261007 results: the 10 s single model m0 of the full model and of its
 # ablation no_stem_fusion (CapnoBase) is read from here (not trained again).
 REFERENCE_261007_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1")
@@ -279,7 +355,11 @@ EVAL_WINDOW_SEC = 60.0
 BATCH_SIZE = 48
 # Maximum epochs of the final model (model A: 120).
 DEFAULT_EPOCHS = 240
+MIN_EPOCHS = 20
+PATIENCE = 25
+LEARNING_RATE = 2e-4
 WEIGHT_DECAY = 5e-5
+LOSS_WEIGHTS = (0.45, 0.45, 0.10)
 VAL_WINDOW_RATIO = 0.20
 # Training settings per dataset. "261007" (CapnoBase): temporal validation
 # (last VAL_WINDOW_RATIO of every training subject's windows) and AdamW weight
@@ -440,6 +520,14 @@ MODEL_CONFIG = {
 # One model per LOSOCV fold, scored alone (no ensemble). Its index is 0, so
 # its seed is the seed of ensemble member m0 in 261007.
 SINGLE_MEMBER = 0
+# Post-fusion representation diagnostics written per member.
+FEATURE_METRICS = (
+    "Feature_OffDiag_SignedMean",
+    "Feature_OffDiag_AbsMean",
+    "Feature_EffectiveRank",
+    "Feature_EffectiveRank_Normalized",
+    "Feature_ParticipationRatio",
+)
 
 
 # Decoder layers of the full model: (output channels, kernel, dilation).
@@ -549,11 +637,23 @@ VARIANTS = {
     "full": fusion_variant("full", "with stem fusion (full)", "conv1x1"),
     "no_stem_fusion": fusion_variant("no_stem_fusion", "without stem fusion", "none"),
 }
+# Trained by default when not found in 261007 / 261013: the model without
+# stem fusion.
+ABLATION_VARIANTS = tuple(name for name in VARIANTS if name != "full")
 
 
 # ---------------------------------------------------------------------------
 # Small utilities and signal preprocessing
 # ---------------------------------------------------------------------------
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = False
+        torch.backends.cudnn.benchmark = True
 
 
 def stable_seed(*parts: object) -> int:
@@ -2316,6 +2416,116 @@ def load_capnobase_subjects(spec: WindowSpec) -> Dict[str, dict]:
     return data
 
 
+def capnobase_label_checks(case: dict) -> dict:
+    """Checks that the labels sit where the signals say they should.
+
+    A start of expiration is where CO2 rises (mean of the 0.5 s after the
+    label above the 0.5 s before it), a start of inspiration is where it
+    falls, the two alternate, and an expert pulse peak is the PPG maximum
+    within +-0.1 s (offset 0 means index base and sampling rate agree).
+    """
+    co2 = np.asarray(case["co2"], dtype=np.float64)
+    ppg = np.asarray(case["ppg"], dtype=np.float64)
+    half = int(round(0.5 * case["co2_fs"]))
+
+    def co2_step(labels: np.ndarray) -> np.ndarray:
+        labels = labels[(labels >= half) & (labels < len(co2) - half)]
+        return np.asarray(
+            [
+                np.nanmean(co2[index : index + half]) - np.nanmean(co2[index - half : index])
+                for index in labels
+            ]
+        )
+
+    breaths = case["breaths"] if case["breaths"] is not None else np.empty(0, dtype=np.int64)
+    exp_step = co2_step(breaths)
+    insp_step = co2_step(case["startinsp"])
+    alternation = np.nan
+    if len(breaths) > 1 and len(case["startinsp"]):
+        between = np.searchsorted(case["startinsp"], breaths[1:]) - np.searchsorted(
+            case["startinsp"], breaths[:-1]
+        )
+        alternation = float(np.mean(between == 1))
+    reach = int(round(0.1 * case["ppg_fs"]))
+    offsets = [
+        int(np.nanargmax(ppg[p - reach : p + reach + 1])) - reach
+        for p in case["pleth_peaks"]
+        if reach <= p < len(ppg) - reach and np.any(np.isfinite(ppg[p - reach : p + reach + 1]))
+    ]
+    offsets = np.asarray(offsets, dtype=np.float64)
+    return {
+        "Check_CO2_Rises_At_Breath_Label": float(np.mean(exp_step > 0)) if len(exp_step) else np.nan,
+        "Check_CO2_Falls_At_StartInsp": float(np.mean(insp_step < 0)) if len(insp_step) else np.nan,
+        "Check_One_StartInsp_Per_Breath": alternation,
+        "Check_Pleth_Peak_Labels": int(len(case["pleth_peaks"])),
+        "Check_Pleth_Peak_Offset_Median_Samples": float(np.median(offsets)) if len(offsets) else np.nan,
+        "Check_Pleth_Peak_Within_10ms": float(
+            np.mean(np.abs(offsets) <= 0.01 * case["ppg_fs"])
+        )
+        if len(offsets)
+        else np.nan,
+        "Check_Label_HR_Median_BPM": float(
+            60.0 * case["ppg_fs"] / np.median(np.diff(case["pleth_peaks"]))
+        )
+        if len(case["pleth_peaks"]) > 1
+        else np.nan,
+    }
+
+
+def inspect_capnobase(results_root: Path) -> pd.DataFrame:
+    """Print and save how every CapnoBase case is read (no training).
+
+    Writes capnobase_loading_check.csv. A correct load shows 300 Hz, a
+    480 s record, label RR equal to the reference-file RR, CO2 rising at
+    nearly every breath label, and a median pulse-peak offset of 0 samples.
+    """
+    cfg = DATASET_CONFIGS["capnobase"]
+    csv_dir = Path(cfg["data_path"])
+    case_ids = capnobase_case_ids(csv_dir)
+    print(f"CapnoBase directory: {csv_dir} ({len(case_ids)} cases)")
+    rows = []
+    for case_id in case_ids:
+        try:
+            case = read_capnobase_case(csv_dir, case_id, cfg["default_fs"])
+            row = {
+                "Case": case_id,
+                **case["diagnostics"],
+                **capnobase_label_checks(case),
+                "CapnoBase_Label_Fields": " ".join(case["label_fields"]),
+            }
+        except Exception as exc:
+            row = {"Case": case_id, "CapnoBase_Loading_Warnings": f"failed: {exc}"}
+        rows.append(row)
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        print("No {case}_8min_signal.csv files found.")
+        return frame
+    results_root.mkdir(parents=True, exist_ok=True)
+    path = results_root / "capnobase_loading_check.csv"
+    frame.to_csv(path, index=False, encoding="utf-8-sig")
+    shown = {
+        "Case": "case",
+        "CapnoBase_FS_Pleth": "fs",
+        "CapnoBase_Record_Sec": "sec",
+        "CapnoBase_Breath_Labels": "breaths",
+        "CapnoBase_Label_RR_Median_BPM": "RR_lab",
+        "CapnoBase_Reference_RR_Median_BPM": "RR_ref",
+        "Check_CO2_Rises_At_Breath_Label": "CO2up",
+        "Check_Pleth_Peak_Offset_Median_Samples": "pk_off",
+        "CapnoBase_PPG_Artifact_Sec": "ppg_art_s",
+        "CapnoBase_CO2_Artifact_Sec": "co2_art_s",
+        "CapnoBase_Ventilation": "vent",
+    }
+    table = frame[[column for column in shown if column in frame.columns]].rename(columns=shown)
+    with pd.option_context("display.max_rows", None, "display.width", 160):
+        print(table.to_string(index=False, float_format=lambda value: f"{value:.2f}"))
+    warned = frame[frame["CapnoBase_Loading_Warnings"].fillna("").astype(str) != ""]
+    for _, row in warned.iterrows():
+        print(f"[CapnoBase {row['Case']}] {row['CapnoBase_Loading_Warnings']}")
+    print(f"Saved: {path}")
+    return frame
+
+
 # STEAM2 sessions are EEGLAB structures saved as .mat files (EEG.data,
 # EEG.srate, EEG.chanlocs.labels, EEG.event), one channel per file: the
 # PPG file and the RSP (belt) file of a session have the same name in the
@@ -2484,6 +2694,53 @@ def load_steam2_subjects(spec: WindowSpec) -> Dict[str, dict]:
     return data
 
 
+def inspect_steam2(results_root: Path) -> pd.DataFrame:
+    """Read every STEAM2 session, print how it was loaded and save
+    steam2_loading_check.csv (no training)."""
+    cfg = DATASET_CONFIGS["steam2"]
+    rows = []
+    sessions = steam2_session_files(Path(cfg["ppg_dir"]), Path(cfg["rsp_dir"]))
+    for subject, items in sessions.items():
+        for name, ppg_path, rsp_path in items:
+            row = {"Subject": subject, "Session": name, "PPG_File": str(ppg_path), "RSP_File": str(rsp_path)}
+            try:
+                ppg = read_eeglab_channel(ppg_path, "PPG", cfg["default_fs"])
+                rsp = read_eeglab_channel(rsp_path, "RSP", cfg["default_fs"])
+                pieces, info = steam2_session_pieces(ppg, rsp)
+                row.update(info)
+                # Zero-lag correlation of PPG and belt in 0.1-0.5 Hz: the sign
+                # the v16 rule would have given the target of this session.
+                p, r, ppg_fs, rsp_fs = max(pieces, key=lambda piece: piece[0].size)
+                if int(round(ppg_fs)) != int(round(rsp_fs)):
+                    r = resample_signal_poly(r, rsp_fs, ppg_fs)
+                length = min(p.size, r.size)
+                band = ANALYSIS_PROFILES[cfg["profile"]]["band_hz"]
+                corr = safe_pcc(bandpass_filter(p[:length], ppg_fs, *band)[0],
+                                bandpass_filter(r[:length], ppg_fs, *band)[0])
+                row.update({"ZeroLag_r_PPG_RSP": corr, "v16_Sign": -1.0 if corr < 0 else 1.0, "Error": ""})
+            except Exception as exc:
+                row["Error"] = repr(exc)
+            rows.append(row)
+    frame = pd.DataFrame(rows)
+    path = results_root / "steam2_loading_check.csv"
+    frame.to_csv(path, index=False, encoding="utf-8-sig")
+    if frame.empty:
+        print("No STEAM2 session found.")
+        return frame
+    ok = frame[frame["Error"] == ""]
+    print(f"STEAM2: {frame['Subject'].nunique()} subjects, {len(frame)} sessions ({len(frame) - len(ok)} unreadable)")
+    if not ok.empty:
+        print(f"  sampling rate PPG {sorted(ok['PPG_FS'].unique())}, RSP {sorted(ok['RSP_FS'].unique())} Hz; "
+              f"session length {ok['PPG_Sec'].median():.1f} s (median); sessions split at internal boundaries: "
+              f"{int((ok['Internal_Boundaries'] > 0).sum())}")
+        absolute = ok["ZeroLag_r_PPG_RSP"].abs()
+        print(f"  zero-lag |r| PPG vs belt: median {absolute.median():.3f}, below 0.2 in "
+              f"{int((absolute < 0.2).sum())}/{len(ok)} sessions; the v16 rule would flip "
+              f"{int((ok['v16_Sign'] < 0).sum())}/{len(ok)} sessions")
+    print(f"Saved: {path}")
+    return frame
+
+
 def load_dataset(dataset_key: str, spec: WindowSpec) -> Dict[str, dict]:
     if dataset_key == "bidmc":
         return load_bidmc_subjects(spec)
@@ -2639,6 +2896,21 @@ class SubjectWindowDataset(Dataset):
             e_tensor.unsqueeze(0),
             torch.tensor(norm, dtype=torch.float32),
         )
+
+
+def make_train_loader(
+    dataset: SubjectWindowDataset,
+    batch_size: int,
+    device: torch.device,
+) -> DataLoader:
+    return DataLoader(
+        dataset,
+        batch_size=int(batch_size),
+        shuffle=True,
+        drop_last=False,
+        num_workers=0,
+        pin_memory=device.type == "cuda",
+    )
 
 
 def make_eval_loader(dataset: SubjectWindowDataset, batch_size: int, device: torch.device) -> DataLoader:
@@ -2903,6 +3175,190 @@ class DeepOnlyV16Decoder(nn.Module):
         return waveform
 
 
+def count_parameters(model: nn.Module) -> int:
+    return int(sum(p.numel() for p in model.parameters() if p.requires_grad))
+
+
+# ---------------------------------------------------------------------------
+# Exact v16 loss, training, checkpointing, and audit
+# ---------------------------------------------------------------------------
+
+class PearsonLoss(nn.Module):
+    def forward(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+    ) -> torch.Tensor:
+        pred = pred.squeeze(1)
+        target = target.squeeze(1)
+        pred_centered = pred - pred.mean(dim=1, keepdim=True)
+        target_centered = target - target.mean(dim=1, keepdim=True)
+        covariance = (pred_centered * target_centered).sum(dim=1)
+        denominator = torch.sqrt(
+            (pred_centered**2).sum(dim=1)
+            * (target_centered**2).sum(dim=1)
+        ) + 1e-6
+        return 1.0 - (covariance / denominator).mean()
+
+
+class DerivativeLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.base = nn.SmoothL1Loss()
+
+    def forward(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.base(
+            pred[:, :, 1:] - pred[:, :, :-1],
+            target[:, :, 1:] - target[:, :, :-1],
+        )
+
+
+class HybridLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.time_loss = nn.SmoothL1Loss()
+        self.corr_loss = PearsonLoss()
+        self.shape_loss = DerivativeLoss()
+
+    def forward(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+    ) -> torch.Tensor:
+        w_time, w_corr, w_shape = LOSS_WEIGHTS
+        return (
+            w_time * self.time_loss(pred, target)
+            + w_corr * self.corr_loss(pred, target)
+            + w_shape * self.shape_loss(pred, target)
+        )
+
+
+class WaveformLoss(nn.Module):
+    """The v16 hybrid waveform loss (the 260928 loss), with its parts."""
+
+    def __init__(self):
+        super().__init__()
+        self.wave_loss = HybridLoss()
+
+    def forward(
+        self,
+        wave_pred: torch.Tensor,
+        wave_target: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        wave = self.wave_loss(wave_pred, wave_target)
+        return wave, {"wave": wave.detach()}
+
+
+def evaluate_loader(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: WaveformLoss,
+    device: torch.device,
+) -> Tuple[float, Dict[str, float]]:
+    """Mean validation loss over the loader."""
+    model.eval()
+    sums = {"total": 0.0, "wave": 0.0}
+    batches = 0
+    with torch.no_grad():
+        for x, y, _, _ in loader:
+            wave = model(x.to(device))
+            loss, parts = criterion(wave, y.to(device))
+            sums["total"] += float(loss.item())
+            for key, value in parts.items():
+                sums[key] += float(value.item())
+            batches += 1
+    if batches == 0:
+        return np.nan, {key: np.nan for key in sums}
+    means = {key: value / batches for key, value in sums.items()}
+    return means["total"], means
+
+
+def atomic_torch_save(state: dict, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    torch.save(state, temporary)
+    if path.exists():
+        path.unlink()
+    os.replace(temporary, path)
+
+
+def build_training_audit(history: Sequence[dict], checkpoint: Path) -> dict:
+    frame = pd.DataFrame(history)
+    required = {"Epoch", "Train_Loss", "Val_Loss"}
+    if frame.empty or not required.issubset(frame.columns):
+        raise RuntimeError(f"Invalid training history for {checkpoint}")
+    numeric = frame[["Epoch", "Train_Loss", "Val_Loss"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    if not np.isfinite(numeric.to_numpy(dtype=float)).all():
+        raise RuntimeError(f"Non-finite loss detected: {checkpoint}")
+    best_index = int(numeric["Val_Loss"].idxmin())
+    best_row = numeric.loc[best_index]
+    final_row = numeric.iloc[-1]
+    best_position = int(numeric.index.get_loc(best_index))
+    after_best = numeric.iloc[best_position + 1 :]
+    val_increase = after_best["Val_Loss"] > best_row["Val_Loss"]
+    train_decrease = after_best["Train_Loss"] < best_row["Train_Loss"]
+    signature = val_increase & train_decrease
+    return {
+        "History_Epochs": int(len(numeric)),
+        "Best_Epoch": int(best_row["Epoch"]),
+        "Final_Epoch": int(final_row["Epoch"]),
+        "Best_Train_Loss": float(best_row["Train_Loss"]),
+        "Best_Val_Loss": float(best_row["Val_Loss"]),
+        "Final_Train_Loss": float(final_row["Train_Loss"]),
+        "Final_Val_Loss": float(final_row["Val_Loss"]),
+        "Late_Val_Degradation": float(
+            final_row["Val_Loss"] - best_row["Val_Loss"]
+        ),
+        "Generalization_Gap_At_Best": float(
+            best_row["Val_Loss"] - best_row["Train_Loss"]
+        ),
+        "Post_Best_Overfit_Signature_Epochs": int(signature.sum()),
+        "Post_Best_Overfit_Signature_Observed": int(signature.any()),
+        "Losses_Finite": 1,
+        "Best_Checkpoint_Exists": int(checkpoint.exists()),
+        "Test_Evaluated_From_Best_Validation_Checkpoint": 1,
+        "Model_Selection": "lowest_validation_loss_then_restore_checkpoint",
+        "Overfit_Control": "early_stopping_plus_best_validation_checkpoint_restore",
+        "Audit_Status": (
+            "PASS_BEST_VALIDATION_CHECKPOINT"
+            if checkpoint.exists()
+            else "FAIL_MISSING_CHECKPOINT"
+        ),
+    }
+
+
+def convergence_epoch_95pct(history: Sequence[dict]) -> int:
+    """Return the first epoch reaching 95% of the initial-to-best val improvement."""
+    frame = pd.DataFrame(history)
+    if frame.empty:
+        return 0
+    values = pd.to_numeric(frame["Val_Loss"], errors="coerce").to_numpy(float)
+    epochs = pd.to_numeric(frame["Epoch"], errors="coerce").to_numpy(int)
+    finite = np.isfinite(values)
+    if not finite.any():
+        return 0
+    values = values[finite]
+    epochs = epochs[finite]
+    best_index = int(np.argmin(values))
+    initial = float(values[0])
+    best = float(values[best_index])
+    improvement = initial - best
+    if improvement <= 1e-12:
+        return int(epochs[best_index])
+    threshold = initial - 0.95 * improvement
+    reached = np.flatnonzero(values <= threshold)
+    if len(reached) == 0:
+        return int(epochs[best_index])
+    return int(epochs[int(reached[0])])
+
+
 # ---------------------------------------------------------------------------
 # Test-time outputs and diagnostics of the fused representation
 # ---------------------------------------------------------------------------
@@ -2934,6 +3390,330 @@ def predict_with_diagnostics(
         key: np.concatenate(values).astype(np.float32)
         for key, values in chunks.items()
     }
+
+
+def feature_representation_summary(features: np.ndarray) -> dict:
+    """Summarize the 24-channel stem representation for one held-out subject."""
+    result = {metric: np.nan for metric in FEATURE_METRICS}
+    result["Feature_N_Windows"] = 0
+    result["Feature_N_Samples"] = 0
+    values = np.asarray(features, dtype=np.float64)
+    if values.ndim != 3 or values.shape[0] == 0:
+        return result
+    windows, channels, samples = values.shape
+    matrix = np.transpose(values, (1, 0, 2)).reshape(channels, -1)
+    matrix = np.nan_to_num(matrix, nan=0.0, posinf=0.0, neginf=0.0)
+    if channels < 2 or matrix.shape[1] < 3:
+        return result
+    matrix = matrix - np.mean(matrix, axis=1, keepdims=True)
+    covariance = (matrix @ matrix.T) / max(1, matrix.shape[1] - 1)
+    covariance = (covariance + covariance.T) / 2.0
+    eigenvalues = np.clip(np.linalg.eigvalsh(covariance), 0.0, None)
+    total = float(eigenvalues.sum())
+    if total > 1e-12:
+        probabilities = eigenvalues / total
+        positive = probabilities > 0
+        effective_rank = float(
+            np.exp(-np.sum(probabilities[positive] * np.log(probabilities[positive])))
+        )
+        result["Feature_EffectiveRank"] = effective_rank
+        result["Feature_EffectiveRank_Normalized"] = effective_rank / channels
+        denom = float(np.sum(eigenvalues**2))
+        if denom > 1e-12:
+            result["Feature_ParticipationRatio"] = float(total**2 / denom)
+    std = np.sqrt(np.maximum(np.diag(covariance), 0.0))
+    denominator = np.outer(std, std)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        correlation = covariance / denominator
+    correlation = np.where(np.isfinite(correlation), correlation, 0.0)
+    off_diagonal = correlation[~np.eye(channels, dtype=bool)]
+    if off_diagonal.size:
+        result["Feature_OffDiag_SignedMean"] = float(np.mean(off_diagonal))
+        result["Feature_OffDiag_AbsMean"] = float(np.mean(np.abs(off_diagonal)))
+    result["Feature_N_Windows"] = int(windows)
+    result["Feature_N_Samples"] = int(matrix.shape[1])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# One LOSOCV fold
+# ---------------------------------------------------------------------------
+
+def make_optimizer(model: DeepOnlyV16Decoder, epochs: int, weight_decay: Optional[float] = None):
+    """AdamW. Without weight_decay (261007): WEIGHT_DECAY on every parameter.
+    With weight_decay (261013): the decay on the convolution weights only;
+    biases and GroupNorm scale / shift are not decayed."""
+    if weight_decay is None:
+        optimizer = torch.optim.AdamW(
+            [{"params": list(model.parameters())}],
+            lr=LEARNING_RATE,
+            weight_decay=WEIGHT_DECAY,
+        )
+    else:
+        decay = [p for p in model.parameters() if p.ndim >= 2]
+        no_decay = [p for p in model.parameters() if p.ndim < 2]
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": decay, "weight_decay": float(weight_decay)},
+                {"params": no_decay, "weight_decay": 0.0},
+            ],
+            lr=LEARNING_RATE,
+        )
+    return optimizer, CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+
+
+def fit_model(
+    model: DeepOnlyV16Decoder,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    device: torch.device,
+    epochs: int,
+    min_epochs: int,
+    patience: int,
+    checkpoint: Path,
+    state_path: Optional[Path] = None,
+    weight_decay: Optional[float] = None,
+) -> List[dict]:
+    """Train with early stopping on the validation loss.
+
+    The best validation state is saved to `checkpoint`. The cosine schedule
+    spans `epochs`. With `state_path`, the full training state (weights,
+    optimizer, schedule, early-stopping counters, history and the random
+    number generators) is saved after every epoch, and an existing state is
+    continued from, so an interrupted run resumes exactly where it stopped.
+    """
+    criterion = WaveformLoss()
+    optimizer, scheduler = make_optimizer(model, epochs, weight_decay)
+    best_val = np.inf
+    patience_counter = 0
+    history = []
+    start_epoch = 0
+    if state_path is not None and state_path.exists():
+        state = torch.load(state_path, map_location=device, weights_only=False)
+        model.load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+        scheduler.load_state_dict(state["scheduler"])
+        best_val = float(state["best_val"])
+        patience_counter = int(state["patience_counter"])
+        history = list(state["history"])
+        start_epoch = int(state["epoch"])
+        random.setstate(state["python_rng"])
+        np.random.set_state(state["numpy_rng"])
+        torch.set_rng_state(state["torch_rng"])
+        if torch.cuda.is_available() and state.get("cuda_rng") is not None:
+            torch.cuda.set_rng_state_all(state["cuda_rng"])
+        if state.get("stopped", False):
+            return history
+        print(f"    resumed after epoch {start_epoch} (best val {best_val:.4f})", flush=True)
+    for epoch in range(start_epoch, epochs):
+        model.train()
+        train_loss = 0.0
+        for x, y, _, _ in train_loader:
+            optimizer.zero_grad(set_to_none=True)
+            wave = model(x.to(device))
+            loss, _ = criterion(wave, y.to(device))
+            if not torch.isfinite(loss):
+                raise RuntimeError(f"Non-finite training loss at epoch {epoch + 1}")
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            train_loss += float(loss.item())
+        train_loss /= max(1, len(train_loader))
+        val_loss, val_parts = evaluate_loader(model, val_loader, criterion, device)
+        if not np.isfinite(val_loss):
+            raise RuntimeError(f"Non-finite validation loss at epoch {epoch + 1}")
+        row = {
+            "Epoch": epoch + 1,
+            "Train_Loss": train_loss,
+            "Val_Loss": val_loss,
+            "Val_Wave_Loss": val_parts["wave"],
+        }
+        epoch_lr = float(optimizer.param_groups[0]["lr"])
+        scheduler.step()
+        history.append(row)
+        improved = row["Val_Loss"] < best_val - 1e-4
+        if improved:
+            best_val = row["Val_Loss"]
+            atomic_torch_save(model.state_dict(), checkpoint)
+            patience_counter = 0
+        elif epoch + 1 >= min_epochs:
+            patience_counter += 1
+        stop = epoch + 1 >= min_epochs and patience_counter >= patience
+        # Progress output only.
+        print(
+            f"    epoch {epoch + 1:3d}/{epochs}  train loss {train_loss:.4f}  val loss {val_loss:.4f}  "
+            f"lr {epoch_lr:.2e}  best val {best_val:.4f}{' *' if improved else '  '}  "
+            f"patience {patience_counter}/{patience}",
+            flush=True,
+        )
+        if stop:
+            print(
+                f"    early stop after epoch {epoch + 1}: no validation improvement for {patience} epochs",
+                flush=True,
+            )
+        if state_path is not None:
+            atomic_torch_save(
+                {
+                    "epoch": epoch + 1,
+                    "stopped": bool(stop),
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "best_val": best_val,
+                    "patience_counter": patience_counter,
+                    "history": history,
+                    "python_rng": random.getstate(),
+                    "numpy_rng": np.random.get_state(),
+                    "torch_rng": torch.get_rng_state(),
+                    "cuda_rng": torch.cuda.get_rng_state_all()
+                    if torch.cuda.is_available()
+                    else None,
+                },
+                state_path,
+            )
+        if stop:
+            break
+    return history
+
+
+def train_one(
+    dataset_key: str,
+    spec: WindowSpec,
+    test_subject: str,
+    subject_data: Dict[str, dict],
+    train_subjects: Sequence[str],
+    member_root: Path,
+    device: torch.device,
+    epochs: int,
+    min_epochs: int,
+    patience: int,
+    batch_size: int,
+    seed: int,
+    model_options: ModelOptions,
+    save_features: bool = False,
+    resume: bool = False,
+    val_subjects: Optional[Sequence[str]] = None,
+    weight_decay: Optional[float] = None,
+    model_key: Optional[str] = None,
+) -> Tuple[Dict[str, np.ndarray], List[dict], dict, Path, dict]:
+    """Train the model of one LOSOCV fold and predict the held-out subject.
+
+    Validation: without val_subjects the last 20% of each training subject's
+    windows (v16, 261007); with val_subjects every window of those subjects,
+    trained on every window of the other training subjects (subject-wise,
+    261013). weight_decay: None = 261007 (WEIGHT_DECAY on every parameter),
+    else that decay on the convolution weights (261013). The best validation
+    state is restored before testing. The training state is
+    saved after every epoch; with `resume` an interrupted member continues
+    from it, otherwise it starts over.
+    """
+    set_seed(seed)
+    model_root = member_root / "Models"
+    curve_root = member_root / "Learning_Curves"
+    audit_root = member_root / "Training_Audits"
+    prediction_root = member_root / "Predictions"
+    for path in (model_root, curve_root, audit_root, prediction_root):
+        path.mkdir(parents=True, exist_ok=True)
+
+    tag = safe_tag(test_subject)
+    checkpoint = model_root / f"{tag}_best.pth"
+    history_path = curve_root / f"{tag}_Learning_Curve.csv"
+    audit_path = audit_root / f"{tag}_Training_Audit.csv"
+    prediction_path = prediction_root / f"{tag}_test_outputs.npz"
+    state_path = model_root / f"{tag}_training_state.pt"
+    if not resume and state_path.exists():
+        state_path.unlink()
+
+    if val_subjects is None:
+        fit_subjects, held_out = list(train_subjects), set()
+        train_dataset = SubjectWindowDataset(subject_data, train_subjects, "train", True)
+        val_dataset = SubjectWindowDataset(subject_data, train_subjects, "val", False)
+        validation_mode = "temporal (last 20% of each training subject)"
+    else:
+        held_out = {str(subject) for subject in val_subjects}
+        fit_subjects = [subject for subject in train_subjects if str(subject) not in held_out]
+        if str(test_subject) in held_out or not fit_subjects:
+            raise RuntimeError(f"{test_subject}: invalid validation subjects {sorted(held_out)}")
+        train_dataset = SubjectWindowDataset(subject_data, fit_subjects, "train", True, subject_wise=True)
+        val_dataset = SubjectWindowDataset(subject_data, list(val_subjects), "val", False, subject_wise=True)
+        validation_mode = (
+            f"subject-wise ({len(held_out)} validation subjects, {len(fit_subjects)} training subjects)"
+        )
+    test_dataset = SubjectWindowDataset(subject_data, [test_subject], "test", False)
+    train_loader = make_train_loader(train_dataset, batch_size, device)
+    val_loader = make_eval_loader(val_dataset, batch_size, device)
+    test_loader = make_eval_loader(test_dataset, batch_size, device)
+    metadata = test_metadata(subject_data, test_subject)
+
+    model = model_options.build().to(device)
+    history = fit_model(
+        model,
+        train_loader,
+        val_loader,
+        device,
+        epochs,
+        min_epochs,
+        patience,
+        checkpoint,
+        state_path,
+        weight_decay,
+    )
+    history_frame = pd.DataFrame(history)
+    history_frame.to_csv(history_path, index=False, encoding="utf-8-sig")
+    audit = build_training_audit(history, checkpoint)
+    audit["Convergence_Epoch_95pct"] = convergence_epoch_95pct(history)
+    if audit["Audit_Status"] != "PASS_BEST_VALIDATION_CHECKPOINT":
+        raise RuntimeError(f"No valid checkpoint: {checkpoint}")
+    audit["Validation_Mode"] = validation_mode
+    pd.DataFrame([audit]).to_csv(audit_path, index=False, encoding="utf-8-sig")
+
+    model.load_state_dict(torch.load(checkpoint, map_location=device))
+    outputs = predict_with_diagnostics(model, test_loader, device)
+    features = outputs.pop("features")
+    best_row = history_frame.loc[history_frame["Epoch"] == audit["Best_Epoch"]].iloc[0]
+    diagnostics = {
+        "N_Params": count_parameters(model),
+        "Weight_Decay": float(WEIGHT_DECAY if weight_decay is None else weight_decay),
+        "Weight_Decay_Scope": "all parameters" if weight_decay is None else "convolution weights",
+        "Validation_Mode": validation_mode,
+        "N_Train_Subjects": len(fit_subjects),
+        "N_Val_Subjects": len(held_out),
+        "Train_Windows": len(train_loader.dataset),
+        "Val_Windows": len(val_loader.dataset),
+        "Val_Wave_Loss_At_Best": float(best_row["Val_Wave_Loss"]),
+    }
+    if held_out:
+        diagnostics["Validation_Subjects"] = " ".join(sorted(held_out))
+    diagnostics.update(feature_representation_summary(features))
+    arrays = {
+        "predictions": outputs["predictions"],
+        "targets": outputs["targets"],
+        "segment_ids": np.asarray(
+            [item["segment_id"] for item in metadata],
+            dtype=np.int64,
+        ),
+        "window_starts": np.asarray(
+            [item["start"] for item in metadata],
+            dtype=np.int64,
+        ),
+        "fs": np.asarray(TARGET_FS, dtype=np.int32),
+        "input_window_sec": np.asarray(spec.window_sec, dtype=np.float32),
+        "input_stride_sec": np.asarray(spec.stride_sec, dtype=np.float32),
+        "model_key": np.asarray(model_key or model_options.key),
+        "seed": np.asarray(seed, dtype=np.int64),
+    }
+    if save_features:
+        arrays["feature_representation"] = features.astype(np.float32)
+        arrays["feature_representation_location"] = np.asarray(
+            "post_stem_fusion"
+        )
+    np.savez_compressed(prediction_path, **arrays)
+    if state_path.exists():
+        state_path.unlink()
+    del features, arrays, train_loader, val_loader, test_loader
+    del model
+    release_memory(device)
+    return outputs, metadata, audit, prediction_path, diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -3327,6 +4107,51 @@ SUMMARY_METRICS = (
 )
 
 
+def model_layer_table(variant: Variant) -> pd.DataFrame:
+    """Every convolution of one model: channels, kernel, dilation, the span
+    (k - 1) d + 1 it covers, its parameters and its multiply-accumulates for
+    one input window (bias and GroupNorm parameters are in the model total)."""
+    model = variant.options.build().eval()
+    names = {module: name for name, module in model.named_modules()}
+    rows: List[dict] = []
+
+    def record(module: nn.Conv1d, inputs, output) -> None:
+        kernel, dilation = int(module.kernel_size[0]), int(module.dilation[0])
+        span = (kernel - 1) * dilation + 1
+        rows.append(
+            {
+                "Model": variant.label,
+                "Layer": names[module],
+                "In_Channels": int(module.in_channels),
+                "Out_Channels": int(module.out_channels),
+                "Groups": int(module.groups),
+                "Kernel": kernel,
+                "Dilation": dilation,
+                "Span_Samples": span,
+                "Span_Sec": span / TARGET_FS,
+                "Parameters": int(sum(p.numel() for p in module.parameters())),
+                "MACs_Per_Window": int(
+                    output.shape[-1]
+                    * module.out_channels
+                    * (module.in_channels // module.groups)
+                    * kernel
+                ),
+            }
+        )
+
+    hooks = [
+        module.register_forward_hook(record)
+        for module in model.modules()
+        if isinstance(module, nn.Conv1d)
+    ]
+    window = int(round(WINDOW_SPECS[0].window_sec * TARGET_FS))
+    with torch.no_grad():
+        model(torch.zeros(1, 1, window))
+    for hook in hooks:
+        hook.remove()
+    return pd.DataFrame(rows)
+
+
 def write_results_excel(path: Path, sheets: Dict[str, pd.DataFrame]) -> Path:
     try:
         with pd.ExcelWriter(path, engine="openpyxl") as writer:
@@ -3338,8 +4163,52 @@ def write_results_excel(path: Path, sheets: Dict[str, pd.DataFrame]) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Stored models of every fold (as in 261028_Stem_ablation_quantative_result)
+# Main experiment runner
 # ---------------------------------------------------------------------------
+
+def write_quality_report(
+    quality_root: Path,
+    dataset_label: str,
+    subject_data: Dict[str, dict],
+) -> None:
+    rows = []
+    quality_root.mkdir(parents=True, exist_ok=True)
+    all_window_rows = []
+    for subject, record in subject_data.items():
+        quality = pd.DataFrame(record["quality"])
+        candidate = len(quality)
+        kept = int(quality["Kept"].sum()) if not quality.empty else 0
+        train_ok = int(quality["Train_OK"].sum()) if not quality.empty else 0
+        row = {
+            "Dataset": dataset_label,
+            "Subject": subject,
+            "Candidate_Windows": candidate,
+            "Kept_Windows": kept,
+            "Kept_Ratio": float(kept / candidate) if candidate else np.nan,
+            "Train_OK_Windows": train_ok,
+            "Train_OK_Ratio_Of_Kept": float(train_ok / kept) if kept else np.nan,
+            "Reference_Breaths": int(
+                sum(len(ref["breaths"]) for ref in record["references"].values())
+            ),
+            **record["reference_diagnostics"],
+            "Window_Sec": record["window_sec"],
+            "Stride_Sec": record["stride_sec"],
+        }
+        rows.append(row)
+        if not quality.empty:
+            quality.insert(0, "Subject", subject)
+            all_window_rows.append(quality)
+    pd.DataFrame(rows).to_csv(
+        quality_root / f"{dataset_label}_subject_quality.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    if all_window_rows:
+        pd.concat(all_window_rows, ignore_index=True).to_csv(
+            quality_root / f"{dataset_label}_window_quality.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
 
 
 def _json_default(value):
@@ -3350,6 +4219,122 @@ def _json_default(value):
     raise TypeError(f"Not JSON serializable: {type(value)!r}")
 
 
+def build_manifest(
+    args: argparse.Namespace,
+    results_root: Path,
+    device: torch.device,
+    variants: Sequence[Variant],
+    window_specs: Sequence[WindowSpec],
+    dataset_keys: Sequence[str],
+) -> dict:
+    return {
+        "script": str(Path(__file__).resolve()),
+        "results_root": str(results_root),
+        "device": str(device),
+        "model": {
+            "path": (
+                "raw PPG (min-max per window) -> 3 stem branches (kernels "
+                f"{list(MODEL_CONFIG['stem_kernel_sizes'])} samples at {TARGET_FS} Hz, "
+                f"{MODEL_CONFIG['stem_base_channels']} filters, GroupNorm, GELU) -> "
+                "1x1 fusion + GroupNorm -> depthwise residual encoder (4 blocks, "
+                "kernels and dilations per model) -> decoder (channels "
+                f"{list(MODEL_CONFIG['decoder_mid_channels'])}, kernels and dilations "
+                "per model) -> waveform head (tanh), no breath-event head"
+            ),
+            "identity_channel": False,
+            "gating": False,
+            "model_config": MODEL_CONFIG,
+            "model_fs": TARGET_FS,
+        },
+        "variants": {
+            variant.name: {
+                "label": variant.label,
+                "model_key": variant.options.key,
+                "model_label": variant.options.label,
+                "decoder_layers": [list(layer) for layer in variant.options.decoder_layers],
+                **variant.options.receptive_fields(),
+                "max_epochs": variant.epochs,
+                "parameters": count_parameters(variant.options.build()),
+                "macs_per_10s_window": int(model_layer_table(variant)["MACs_Per_Window"].sum()),
+            }
+            for variant in variants
+        },
+        "full_model_from": (
+            "trained here"
+            if "full" in args.variants
+            else {
+                "CapnoBase": str(args.reference_261007_root),
+                "BIDMC / STEAM2": str(args.reference_261013_root),
+            }
+        ),
+        "training_protocols": {
+            DATASET_CONFIGS[key]["label"]: (
+                "261007: temporal validation (last 20% of each training subject), "
+                f"weight decay {WEIGHT_DECAY:g} on every parameter"
+                if TRAINING_PROTOCOLS[key] == "261007"
+                else "261013: subject-wise validation "
+                f"({VAL_SUBJECT_RATIO:.0%} of the training subjects), weight decay "
+                "selected by 261013 in this fold (convolution weights), read from "
+                f"{args.reference_261013_root}"
+            )
+            for key in dataset_keys
+        },
+        "models_per_fold": {
+            "models": 1,
+            "ensemble": False,
+            "seed": (
+                "stable_seed('261006-ensemble-member', 'w10s_nonoverlap', dataset, subject, 0): "
+                "the seed of ensemble member m0 in 261007 (same for every model)"
+            ),
+        },
+        "training": {
+            "min_epochs": args.min_epochs,
+            "patience": args.patience,
+            "epoch_cap": args.epoch_cap,
+            "batch_size": args.batch_size,
+            "learning_rate": LEARNING_RATE,
+            "weight_decay": "per dataset (training_protocols)",
+            "loss": "v16 hybrid waveform loss (SmoothL1, Pearson, derivative)",
+            "loss_weights": list(LOSS_WEIGHTS),
+            "validation": "per dataset (training_protocols), best checkpoint",
+            "window_jitter": f"shift up to {SHIFT_AUG_SEC} s, gain 0.95-1.05, noise 0.002-0.01",
+            "speed_augmentation": False,
+            "rate_balanced_sampling": False,
+        },
+        "evaluation": {
+            "unit": f"complete {EVAL_WINDOW_SEC:g} s minutes with a valid reference",
+            "rate_estimate": "largest FFT peak of the predicted waveform",
+            "waveform_agreement": "Pearson r of predicted and target waveform per minute",
+            "ground_truth": "reference breaths in the minute (CapnoBase expert labels)",
+            "fft_metrics": list(SUMMARY_METRICS),
+            "davies_mandic_2022": "mAE = median minute AE, mMAE = median subject MAE",
+            "subjects_excluded": "none",
+            "smart_fusion": "not used",
+        },
+        "analysis_profiles": {
+            DATASET_CONFIGS[key]["label"]: {
+                "profile": DATASET_CONFIGS[key]["profile"],
+                **ANALYSIS_PROFILES[DATASET_CONFIGS[key]["profile"]],
+            }
+            for key in dataset_keys
+        },
+        "data_paths": {
+            DATASET_CONFIGS[key]["label"]: {
+                field: DATASET_CONFIGS[key][field]
+                for field in ("data_path", "ppg_dir", "rsp_dir")
+                if field in DATASET_CONFIGS[key]
+            }
+            for key in dataset_keys
+        },
+        "window_conditions": [
+            {"name": spec.name, "window_sec": spec.window_sec, "stride_sec": spec.stride_sec}
+            for spec in window_specs
+        ],
+        "datasets": [DATASET_CONFIGS[key]["label"] for key in dataset_keys],
+        "cross_validation": "Leave-One-Subject-Out; each subject is held out once",
+    }
+
+
 def condition_root(results_root: Path, variant: str, spec: WindowSpec, dataset_key: str) -> Path:
     return (
         results_root
@@ -3357,6 +4342,10 @@ def condition_root(results_root: Path, variant: str, spec: WindowSpec, dataset_k
         / f"{spec.order:02d}_{spec.name}"
         / DATASET_CONFIGS[dataset_key]["label"]
     )
+
+
+def member_seed(spec: WindowSpec, dataset_key: str, subject: str, member: int) -> int:
+    return stable_seed("261006-ensemble-member", spec.name, dataset_key, subject, member)
 
 
 def member_paths(root: Path, subject: str, member: int) -> Tuple[Path, Path, Path]:
@@ -3501,6 +4490,18 @@ def reference_root(
     return None
 
 
+def reference_done(
+    args: argparse.Namespace, variant: Variant, spec: WindowSpec, dataset_key: str, subject: str,
+    training: dict
+) -> bool:
+    """The model of this fold is stored, complete, by 261007 / 261013."""
+    root = reference_root(args, variant, spec, dataset_key, training)
+    return root is not None and member_done(
+        root, variant, subject, SINGLE_MEMBER, epoch_limit(args, variant), fold_model_key(variant, training),
+        DATASET_CONFIGS[dataset_key]["label"],
+    )
+
+
 def stored_member_root(
     args: argparse.Namespace,
     results_root: Path,
@@ -3523,6 +4524,112 @@ def stored_member_root(
         if root is not None and member_done(root, variant, subject, SINGLE_MEMBER, epochs, key, label):
             return root
     return None
+
+
+def run_member(
+    args: argparse.Namespace,
+    results_root: Path,
+    variant: Variant,
+    spec: WindowSpec,
+    dataset_key: str,
+    subject_data: Dict[str, dict],
+    subjects: Sequence[str],
+    test_subject: str,
+    member: int,
+    device: torch.device,
+    training: dict,
+) -> Optional[dict]:
+    """Train and score one member of one fold; returns its summary."""
+    root = condition_root(results_root, variant.name, spec, dataset_key)
+    summary_path, window_path, _ = member_paths(root, test_subject, member)
+    epochs = epoch_limit(args, variant)
+    dataset_label = DATASET_CONFIGS[dataset_key]["label"]
+    model_key = fold_model_key(variant, training)
+    if args.resume and member_done(root, variant, test_subject, member, epochs, model_key, dataset_label):
+        return None
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    seed = member_seed(spec, dataset_key, test_subject, member)
+    train_subjects = [subject for subject in subjects if subject != test_subject]
+    print(
+        f"[{time.strftime('%H:%M:%S')}] {dataset_label} {variant.label} {test_subject} "
+        f"(wd {training['Weight_Decay']:g}): "
+        f"training, up to {epochs} epochs",
+        flush=True,
+    )
+    start_time = time.time()
+    outputs, metadata, audit, prediction_path, diagnostics = train_one(
+        dataset_key,
+        spec,
+        test_subject,
+        subject_data,
+        train_subjects,
+        root / "Members" / f"m{member}",
+        device,
+        epochs,
+        args.min_epochs,
+        args.patience,
+        args.batch_size,
+        seed,
+        variant.options,
+        args.save_features,
+        args.resume,
+        val_subjects=training["Val_Subjects"],
+        weight_decay=training["Weight_Decay_Arg"],
+        model_key=model_key,
+    )
+    summary, window_frame = evaluate_subject_minutes(
+        outputs,
+        metadata,
+        subject_data[test_subject]["references"],
+        TARGET_FS,
+    )
+    del outputs
+    summary.update(
+        {
+            "Dataset": dataset_label,
+            "Subject": str(test_subject),
+            "Variant": variant.name,
+            "Model_Name": variant.label,
+            "Member": int(member),
+            "Seed": int(seed),
+            "LOSO_Fold_Index": subjects.index(test_subject) + 1,
+            "Window_Config": spec.name,
+            "Model": model_key,
+            "Model_Label": variant.options.label,
+            "Analysis_Profile": DATASET_CONFIGS[dataset_key]["profile"],
+            "Inference": INFERENCE_PROTOCOL,
+            "Training_Protocol": training["Training_Protocol"],
+            "Weight_Decay_Source": training["Weight_Decay_Source"],
+            "Max_Epochs": int(epochs),
+            "Best_Val_Loss": audit["Best_Val_Loss"],
+            "Best_Epoch": audit["Best_Epoch"],
+            "Convergence_Epoch_95pct": audit["Convergence_Epoch_95pct"],
+            "History_Epochs": audit["History_Epochs"],
+            "Generalization_Gap_At_Best": audit["Generalization_Gap_At_Best"],
+            "Elapsed_Sec": time.time() - start_time,
+            "Prediction_File": str(prediction_path),
+        }
+    )
+    summary.update(diagnostics)
+    summary.update(subject_data[test_subject]["reference_diagnostics"])
+    if not window_frame.empty:
+        window_frame.insert(0, "Member", int(member))
+        window_frame.insert(0, "Variant", variant.name)
+        window_frame.insert(0, "Subject", str(test_subject))
+        window_frame.insert(0, "Dataset", dataset_label)
+    window_frame.to_csv(window_path, index=False, encoding="utf-8-sig")
+    # Written last: its presence marks the member as complete.
+    summary_path.write_text(
+        json.dumps(summary, indent=2, default=_json_default),
+        encoding="utf-8",
+    )
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# With / without stem fusion: convergence, inference cost, generalization gap
+# and validation loss rebound
+# ---------------------------------------------------------------------------
 
 
 def stored_member_files(root: Path, subject: str) -> Dict[str, Path]:
@@ -3558,12 +4665,500 @@ def fold_trainings(
     return trainings, missing
 
 
+def task_progress(results_root: Path, spec: WindowSpec, dataset_key: str, variant: Variant) -> int:
+    """Number of trained runs stored for one dataset and model."""
+    folder = condition_root(results_root, variant.name, spec, dataset_key) / "Fold_Summaries"
+    return len(list(folder.glob("*_summary.json")))
+
+
+def run_worker(command: Sequence[str]) -> int:
+    """Run a worker process and print its output here line by line, so it is
+    seen in any console (IDE consoles such as Spyder do not show the output a
+    child process writes itself). Stopping the main process stops the worker."""
+    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
+    process = subprocess.Popen(
+        list(command),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        env=env,
+    )
+    try:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+        return process.wait()
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+
+
+def run_tasks_in_subprocesses(
+    args: argparse.Namespace,
+    results_root: Path,
+    window_specs: Sequence[WindowSpec],
+    dataset_keys: Sequence[str],
+    variants: Sequence[Variant],
+) -> List[str]:
+    """Train every dataset and model in its own Python process (at most one
+    model per subject of one dataset, i.e. 42-53 runs).
+
+    The process ends when its dataset and model are done, so all its host and
+    GPU memory is returned before the next one. A process that stops on a
+    fatal error (out of memory, CUDA / cuDNN failure) is started again with
+    --resume, which keeps the stored runs and continues an interrupted run
+    from its last epoch; after two attempts without a new stored run the task
+    is left and reported. Returns the tasks left incomplete."""
+    script = str(Path(__file__).resolve())
+    incomplete = []
+    for spec in window_specs:
+        for dataset_key in dataset_keys:
+            label = DATASET_CONFIGS[dataset_key]["label"]
+            for variant in variants:
+                attempt, stalled = 0, 0
+                while True:
+                    before = task_progress(results_root, spec, dataset_key, variant)
+                    command = [sys.executable, "-u", script, *sys.argv[1:], "--datasets", dataset_key,
+                               "--variants", variant.name, "--child-task"]
+                    if attempt > 0 and "--resume" not in command:
+                        command.append("--resume")
+                    print(f"\n=== {label}, {variant.label}: worker process (attempt {attempt + 1}) ===",
+                          flush=True)
+                    code = run_worker(command)
+                    if code == 0:
+                        break
+                    attempt += 1
+                    progress = task_progress(results_root, spec, dataset_key, variant)
+                    stalled = stalled + 1 if progress <= before else 0
+                    if stalled >= 2:
+                        print(f"{label}, {variant.label}: worker stopped (exit code {code}) twice without a "
+                              "new run; left incomplete (run again with --resume)", flush=True)
+                        incomplete.append(f"{label} / {variant.label}")
+                        break
+                    print(f"{label}, {variant.label}: worker stopped (exit code {code}); restarting with "
+                          "--resume", flush=True)
+    return incomplete
+
+
 def selected_subjects(args: argparse.Namespace, subject_data: Dict[str, dict]) -> List[str]:
     subjects = sorted(subject_data)
     if args.subjects:
         wanted = {str(subject) for subject in args.subjects}
         subjects = [subject for subject in subjects if subject in wanted]
     return subjects
+
+
+def parse_shard(value: Optional[str]) -> Tuple[int, int]:
+    if not value:
+        return 0, 1
+    index, count = (int(part) for part in value.split("/"))
+    if count < 1 or not 0 <= index < count:
+        raise ValueError("--shard must be K/N with 0 <= K < N")
+    return index, count
+
+
+def run_experiment(args: argparse.Namespace) -> None:
+    results_root = Path(args.results_root).resolve()
+    results_root.mkdir(parents=True, exist_ok=True)
+    DATASET_CONFIGS["capnobase"]["use_artifact_labels"] = args.capnobase_artifacts
+    if args.capnobase_path:
+        DATASET_CONFIGS["capnobase"]["data_path"] = str(args.capnobase_path)
+    if args.bidmc_path:
+        DATASET_CONFIGS["bidmc"]["data_path"] = str(args.bidmc_path)
+    if args.steam2_ppg_dir:
+        DATASET_CONFIGS["steam2"]["ppg_dir"] = str(args.steam2_ppg_dir)
+    if args.steam2_rsp_dir:
+        DATASET_CONFIGS["steam2"]["rsp_dir"] = str(args.steam2_rsp_dir)
+    if args.inspect_capnobase:
+        inspect_capnobase(results_root)
+        return
+    if args.inspect_steam2:
+        inspect_steam2(results_root)
+        return
+    if args.threads:
+        torch.set_num_threads(int(args.threads))
+    if args.require_cuda and not torch.cuda.is_available() and not args.summary_only:
+        raise RuntimeError(
+            "CUDA is required by default. Use --no-require-cuda to run on the CPU."
+        )
+    device = torch.device(
+        f"cuda:{args.gpu}" if torch.cuda.is_available() and not args.force_cpu else "cpu"
+    )
+    if args.noise_repeats < 1:
+        raise ValueError("--noise-repeats must be at least 1")
+    variants = [VARIANTS[name] for name in VARIANTS if name in args.variants]
+    window_specs = list(WINDOW_SPECS)
+    dataset_keys = [key for key in DATASET_ORDER if key in args.datasets]
+    shard_index, shard_count = parse_shard(args.shard)
+    manifest = build_manifest(args, results_root, device, variants, window_specs, dataset_keys)
+    manifest_name = (
+        "run_manifest.json" if shard_count == 1 else f"run_manifest_shard{shard_index}.json"
+    )
+    if args.child_task:
+        manifest_name = manifest_name.replace(".json", f"_{dataset_keys[0]}_{variants[0].name}.json")
+    (results_root / manifest_name).write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False, default=_json_default),
+        encoding="utf-8",
+    )
+    for variant in variants:
+        fields = variant.options.receptive_fields()
+        print(
+            f"{variant.label}: {variant.options.label}; receptive field "
+            f"{fields['Model_RF_Sec']:.2f} s; up to {variant.epochs} epochs; "
+            f"{count_parameters(variant.options.build())} parameters"
+        )
+    print(
+        "Single model per LOSOCV fold (no ensemble); windows: "
+        + ", ".join(spec.label for spec in window_specs)
+        + f"; device={device}"
+    )
+    if not args.child_task:
+        for noise_type in args.noise_types:
+            print(f"{NOISE_TYPES[noise_type]}: SNR {', '.join(f'{v:g}' for v in snr_levels(noise_type, args))} dB")
+        print(f"{args.noise_repeats} noise draw(s) per type and subject; clean = the stored results")
+
+    if args.dry_run:
+        for spec in window_specs:
+            for dataset_key in dataset_keys:
+                label = DATASET_CONFIGS[dataset_key]["label"]
+                try:
+                    data = load_dataset(dataset_key, spec)
+                except Exception as exc:
+                    print(f"{label}: could not be loaded ({exc})")
+                    continue
+                print(
+                    f"{label} ({spec.label}): "
+                    f"{len(data)} valid subjects = {len(data)} LOSOCV folds"
+                )
+                del data
+                release_memory()
+        return
+
+    if not args.summary_only and not args.child_task and not args.single_process:
+        # Every dataset and model in its own process (memory).
+        incomplete = run_tasks_in_subprocesses(args, results_root, window_specs, dataset_keys, variants)
+        if incomplete:
+            print("\nIncomplete tasks: " + "; ".join(incomplete))
+        if shard_count > 1:
+            print(
+                "\nWorker finished. When every worker is done, run with "
+                "--resume --summary-only for the noise evaluation."
+            )
+            return
+        summarize_noise(args, results_root, window_specs, dataset_keys, device)
+        return
+
+    if not args.summary_only:
+        task = (
+            f"_{DATASET_CONFIGS[dataset_keys[0]]['label']}_{variants[0].name}"
+            if args.child_task and len(dataset_keys) == 1 and len(variants) == 1
+            else ""
+        )
+        failed_path = results_root / (
+            f"failed_members{task}.csv" if shard_count == 1 else f"failed_members{task}_shard{shard_index}.csv"
+        )
+        failed_rows = []
+        for spec in window_specs:
+            for dataset_key in dataset_keys:
+                dataset_label = DATASET_CONFIGS[dataset_key]["label"]
+                print(f"[{time.strftime('%H:%M:%S')}] {dataset_label} ({spec.label}): reading the data ...", flush=True)
+                try:
+                    subject_data = load_dataset(dataset_key, spec)
+                except Exception as exc:
+                    if is_fatal_error(exc):
+                        failed_rows.append({"Dataset": dataset_label, "Subject": "", "Error": repr(exc)})
+                        pd.DataFrame(failed_rows).to_csv(failed_path, index=False, encoding="utf-8-sig")
+                        print(f"{dataset_label}: loading stopped by a fatal error ({exc}); "
+                              "the worker stops (run again with --resume)", flush=True)
+                        raise SystemExit(3)
+                    print(f"{dataset_label}: could not be loaded, skipped ({exc})")
+                    failed_rows.append(
+                        {"Dataset": dataset_label, "Subject": "", "Error": repr(exc)}
+                    )
+                    continue
+                all_subjects = sorted(subject_data)
+                if len(all_subjects) < 3:
+                    raise RuntimeError(f"{dataset_label}: fewer than three valid subjects")
+                if shard_index == 0:
+                    write_quality_report(
+                        results_root / "Data_Quality" / f"{spec.order:02d}_{spec.name}",
+                        dataset_label,
+                        subject_data,
+                    )
+                subjects = selected_subjects(args, subject_data)
+                trainings, no_selection = fold_trainings(
+                    args, spec, dataset_key, all_subjects, subjects
+                )
+                for subject, reason in no_selection.items():
+                    print(f"{reason}; fold skipped")
+                    failed_rows.append(
+                        {
+                            "Dataset": dataset_label,
+                            "Window_Config": spec.name,
+                            "Model": "",
+                            "Subject": subject,
+                            "Member": SINGLE_MEMBER,
+                            "Error": reason,
+                        }
+                    )
+                if trainings and TRAINING_PROTOCOLS[dataset_key] == "261013":
+                    counts = pd.Series([t["Weight_Decay"] for t in trainings.values()]).value_counts()
+                    print(
+                        f"{dataset_label}: 261013 settings, subject-wise validation, weight decay "
+                        "selected by 261013 per fold ("
+                        + ", ".join(f"{value:g}: {count}" for value, count in counts.sort_index().items())
+                        + ")"
+                    )
+                jobs = [
+                    (variant, subject, SINGLE_MEMBER)
+                    for variant in variants
+                    for subject in subjects
+                    if subject in trainings
+                    and not reference_done(args, variant, spec, dataset_key, subject, trainings[subject])
+                ]
+                read = sum(
+                    reference_done(args, variant, spec, dataset_key, subject, trainings[subject])
+                    for variant in variants
+                    for subject in subjects
+                    if subject in trainings
+                )
+                if read:
+                    print(f"{dataset_label}: {read} fold(s) read from 261007 / 261013 (not trained again)")
+                # The folds are shared out on the full job list (before the
+                # finished ones are skipped), so a fold always belongs to one
+                # worker, however far the other workers are.
+                mine = [job for index, job in enumerate(jobs) if index % shard_count == shard_index]
+                if args.resume:
+                    mine = [
+                        (variant, subject, member)
+                        for variant, subject, member in mine
+                        if not member_done(
+                            condition_root(results_root, variant.name, spec, dataset_key),
+                            variant,
+                            subject,
+                            member,
+                            epoch_limit(args, variant),
+                            fold_model_key(variant, trainings[subject]),
+                            dataset_label,
+                        )
+                    ]
+                print(
+                    f"\n{dataset_label} ({spec.label}): {len(all_subjects)} LOSOCV folds, "
+                    f"{len(mine)} folds to train in this worker"
+                )
+                for variant, subject, member in mine:
+                    try:
+                        summary = run_member(
+                            args,
+                            results_root,
+                            variant,
+                            spec,
+                            dataset_key,
+                            subject_data,
+                            all_subjects,
+                            subject,
+                            member,
+                            device,
+                            trainings[subject],
+                        )
+                        if summary is not None:
+                            print(
+                                f"[{time.strftime('%H:%M:%S')}] {dataset_label} {variant.label} "
+                                f"{subject} (wd {summary['Weight_Decay']:g}): "
+                                f"FFT MAE={summary['RR_MAE_Wave_FFT']:.3f} "
+                                f"(valid min {summary['N60_RefValid']}), best epoch "
+                                f"{summary['Best_Epoch']}/{summary['History_Epochs']}, "
+                                f"train/val windows {summary['Train_Windows']}/"
+                                f"{summary['Val_Windows']}, "
+                                f"{summary['Elapsed_Sec'] / 60.0:.1f} min"
+                            )
+                    except Exception as exc:
+                        failed_rows.append(
+                            {
+                                "Dataset": dataset_label,
+                                "Window_Config": spec.name,
+                                "Model": variant.label,
+                                "Subject": subject,
+                                "Member": member,
+                                "Error": repr(exc),
+                            }
+                        )
+                        print(f"{dataset_label} {variant.label} {subject}: FAILED {exc}")
+                        if is_fatal_error(exc):
+                            # The CUDA context and the host memory are not
+                            # reliable any more: stop instead of failing every
+                            # following run; the run is continued with --resume.
+                            pd.DataFrame(failed_rows).to_csv(failed_path, index=False, encoding="utf-8-sig")
+                            print("Fatal error (memory / CUDA): the worker stops; it continues with --resume.",
+                                  flush=True)
+                            raise SystemExit(3)
+                    finally:
+                        release_memory(device)
+                del subject_data
+                release_memory(device)
+        pd.DataFrame(failed_rows).to_csv(failed_path, index=False, encoding="utf-8-sig")
+        if args.child_task:
+            return
+        if shard_count > 1:
+            print(
+                "\nWorker finished. When every worker is done, run with "
+                "--resume --summary-only for the noise evaluation."
+            )
+            return
+    summarize_noise(args, results_root, window_specs, dataset_keys, device)
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        choices=DATASET_ORDER,
+        default=list(DEFAULT_DATASETS),
+    )
+    parser.add_argument(
+        "--variants",
+        nargs="+",
+        choices=list(VARIANTS),
+        default=list(ABLATION_VARIANTS),
+        help=(
+            "Models to train where 261007 / 261013 have not stored them (default: "
+            "no_stem_fusion; 'full' trains the full model too)."
+        ),
+    )
+    parser.add_argument(
+        "--reference-261007-root",
+        type=Path,
+        default=REFERENCE_261007_ROOT,
+        help="Results root of 261007 (CapnoBase full and no_stem_fusion, 10 s member m0).",
+    )
+    parser.add_argument(
+        "--reference-261013-root",
+        type=Path,
+        default=REFERENCE_261013_ROOT,
+        help=(
+            "Results root of 261013: the weight decay selected in every BIDMC / "
+            "STEAM2 fold (WD_Selection) and its full model (member m0 of that weight decay)."
+        ),
+    )
+    parser.add_argument("--noise-types", nargs="+", choices=list(NOISE_TYPES), default=list(NOISE_TYPES))
+    parser.add_argument(
+        "--snr-db",
+        nargs="+",
+        type=float,
+        default=list(DEFAULT_SNR_DB),
+        help="SNR levels in dB of every noise type (default %(default)s).",
+    )
+    parser.add_argument(
+        "--motion-extra-snr-db",
+        nargs="*",
+        type=float,
+        default=list(MOTION_EXTRA_SNR_DB),
+        help="Further SNR levels of the motion artifacts only (default %(default)s; none: --motion-extra-snr-db).",
+    )
+    parser.add_argument(
+        "--noise-repeats",
+        type=int,
+        default=NOISE_REPEATS,
+        help="Noise draws per type and subject, averaged per subject (default %(default)s).",
+    )
+    parser.add_argument("--min-epochs", type=int, default=MIN_EPOCHS)
+    parser.add_argument("--patience", type=int, default=PATIENCE)
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    parser.add_argument(
+        "--epoch-cap",
+        type=int,
+        default=None,
+        help="Upper limit on the epochs (quick tests only).",
+    )
+    parser.add_argument(
+        "--subjects",
+        nargs="+",
+        default=None,
+        help="Only these held-out subjects (quick tests); training still uses all others.",
+    )
+    parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument("--force-cpu", action="store_true")
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="torch CPU threads per process (e.g. 1 with several --shard workers).",
+    )
+    parser.add_argument(
+        "--no-require-cuda",
+        dest="require_cuda",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Reuse folds whose summary, minutes and predictions already exist, "
+            "continue interrupted folds from their last epoch and reuse the noise "
+            "evaluation of folds evaluated with the same settings and models."
+        ),
+    )
+    parser.add_argument(
+        "--shard",
+        default=None,
+        help="K/N: run every N-th fold starting at K (parallel workers).",
+    )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Do not train; evaluate the noise on the stored folds and write the summary.",
+    )
+    parser.add_argument(
+        "--single-process",
+        action="store_true",
+        help=(
+            "Train every dataset and model in this process (no worker processes; "
+            "a fatal error then stops the run, continue with --resume)."
+        ),
+    )
+    parser.add_argument("--child-task", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--capnobase-path", type=Path, default=None)
+    parser.add_argument("--bidmc-path", type=Path, default=None)
+    parser.add_argument("--steam2-ppg-dir", type=Path, default=None)
+    parser.add_argument("--steam2-rsp-dir", type=Path, default=None)
+    parser.add_argument(
+        "--inspect-capnobase",
+        action="store_true",
+        help=(
+            "Only read every CapnoBase case, print how it was loaded and save "
+            "capnobase_loading_check.csv (no training, no GPU needed)."
+        ),
+    )
+    parser.add_argument(
+        "--inspect-steam2",
+        action="store_true",
+        help=(
+            "Only read every STEAM2 session (261013 reader), print how it was "
+            "loaded and save steam2_loading_check.csv (no training)."
+        ),
+    )
+    parser.add_argument(
+        "--ignore-capnobase-artifacts",
+        dest="capnobase_artifacts",
+        action="store_false",
+        help="Do not use the expert artifact labels of CapnoBase.",
+    )
+    parser.add_argument(
+        "--save-features",
+        action="store_true",
+        help="Also store the post-fusion features in each prediction file.",
+    )
+    parser.set_defaults(
+        capnobase_artifacts=DATASET_CONFIGS["capnobase"]["use_artifact_labels"],
+        require_cuda=True,
+    )
+    return parser.parse_args(argv)
 
 
 # ---------------------------------------------------------------------------
@@ -3826,7 +5421,6 @@ def run_noise_evaluation(
     when made with the same noise settings and models), the per-fold checks
     and the folds left out."""
     variants = [VARIANTS["full"], VARIANTS["no_stem_fusion"]]
-    models_root = Path(args.models_root)
     config = noise_config(args)
     frames, checks, missing = [], [], []
     for spec in window_specs:
@@ -3851,7 +5445,7 @@ def run_noise_evaluation(
                 if training is None:
                     continue
                 roots = {
-                    variant.name: stored_member_root(args, models_root, variant, spec, dataset_key, subject, training)
+                    variant.name: stored_member_root(args, results_root, variant, spec, dataset_key, subject, training)
                     for variant in variants
                 }
                 absent = [variant.label for variant in variants if roots[variant.name] is None]
@@ -4209,8 +5803,7 @@ def summarize_noise(
     minutes, checks, missing = run_noise_evaluation(args, results_root, window_specs, dataset_keys, device)
     missing.to_csv(summary_root / "noise_missing_folds.csv", index=False, encoding="utf-8-sig")
     if minutes.empty:
-        print("\nNo fold with both models stored; run 261028_Stem_ablation_quantative_result first "
-              "(--models-root: its results).")
+        print("\nNo fold with both models stored (train them first: run without --summary-only).")
         return
     table = subject_noise_table(minutes)
     overall = noise_overall(minutes)
@@ -4264,110 +5857,5 @@ def summarize_noise(
     print(f"\nSaved the summary under: {summary_root}")
 
 
-# ---------------------------------------------------------------------------
-# Command line
-# ---------------------------------------------------------------------------
-
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
-    parser.add_argument(
-        "--models-root",
-        type=Path,
-        default=MODELS_ROOT,
-        help="Results root of 261028_Stem_ablation_quantative_result (the models trained there).",
-    )
-    parser.add_argument(
-        "--reference-261007-root",
-        type=Path,
-        default=REFERENCE_261007_ROOT,
-        help="Results root of 261007 (CapnoBase full and no_stem_fusion, 10 s member m0).",
-    )
-    parser.add_argument(
-        "--reference-261013-root",
-        type=Path,
-        default=REFERENCE_261013_ROOT,
-        help=(
-            "Results root of 261013: the weight decay selected in every BIDMC / "
-            "STEAM2 fold (WD_Selection) and its full model (member m0 of that weight decay)."
-        ),
-    )
-    parser.add_argument("--datasets", nargs="+", choices=DATASET_ORDER, default=list(DEFAULT_DATASETS))
-    parser.add_argument("--noise-types", nargs="+", choices=list(NOISE_TYPES), default=list(NOISE_TYPES))
-    parser.add_argument(
-        "--snr-db",
-        nargs="+",
-        type=float,
-        default=list(DEFAULT_SNR_DB),
-        help="SNR levels in dB of every noise type (default %(default)s).",
-    )
-    parser.add_argument(
-        "--motion-extra-snr-db",
-        nargs="*",
-        type=float,
-        default=list(MOTION_EXTRA_SNR_DB),
-        help="Further SNR levels of the motion artifacts only (default %(default)s; none: --motion-extra-snr-db).",
-    )
-    parser.add_argument(
-        "--noise-repeats",
-        type=int,
-        default=NOISE_REPEATS,
-        help="Noise draws per type and subject, averaged per subject (default %(default)s).",
-    )
-    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
-    parser.add_argument(
-        "--epoch-cap",
-        type=int,
-        default=None,
-        help="Epoch limit the models were trained with (quick tests only).",
-    )
-    parser.add_argument("--subjects", nargs="+", default=None, help="Only these held-out subjects (quick tests).")
-    parser.add_argument("--gpu", type=int, default=0)
-    parser.add_argument("--force-cpu", action="store_true")
-    parser.add_argument("--threads", type=int, default=None, help="torch CPU threads.")
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Reuse the folds already evaluated with the same noise settings and models.",
-    )
-    parser.add_argument("--capnobase-path", type=Path, default=None)
-    parser.add_argument("--bidmc-path", type=Path, default=None)
-    parser.add_argument("--steam2-ppg-dir", type=Path, default=None)
-    parser.add_argument("--steam2-rsp-dir", type=Path, default=None)
-    parser.add_argument(
-        "--ignore-capnobase-artifacts",
-        dest="capnobase_artifacts",
-        action="store_false",
-        help="Do not use the expert artifact labels of CapnoBase.",
-    )
-    parser.set_defaults(capnobase_artifacts=DATASET_CONFIGS["capnobase"]["use_artifact_labels"])
-    return parser.parse_args(argv)
-
-
-def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = parse_args(argv)
-    if args.noise_repeats < 1:
-        raise ValueError("--noise-repeats must be at least 1")
-    results_root = Path(args.results_root).resolve()
-    results_root.mkdir(parents=True, exist_ok=True)
-    DATASET_CONFIGS["capnobase"]["use_artifact_labels"] = args.capnobase_artifacts
-    if args.capnobase_path:
-        DATASET_CONFIGS["capnobase"]["data_path"] = str(args.capnobase_path)
-    if args.bidmc_path:
-        DATASET_CONFIGS["bidmc"]["data_path"] = str(args.bidmc_path)
-    if args.steam2_ppg_dir:
-        DATASET_CONFIGS["steam2"]["ppg_dir"] = str(args.steam2_ppg_dir)
-    if args.steam2_rsp_dir:
-        DATASET_CONFIGS["steam2"]["rsp_dir"] = str(args.steam2_rsp_dir)
-    if args.threads:
-        torch.set_num_threads(int(args.threads))
-    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() and not args.force_cpu else "cpu")
-    dataset_keys = [key for key in DATASET_ORDER if key in args.datasets]
-    for noise_type in args.noise_types:
-        print(f"{NOISE_TYPES[noise_type]}: SNR {', '.join(f'{v:g}' for v in snr_levels(noise_type, args))} dB")
-    print(f"{args.noise_repeats} noise draw(s) per type and subject; clean = the stored results; device={device}")
-    summarize_noise(args, results_root, list(WINDOW_SPECS), dataset_keys, device)
-
-
 if __name__ == "__main__":
-    main()
+    run_experiment(parse_args())
