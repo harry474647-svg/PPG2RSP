@@ -8,7 +8,7 @@ and for all datasets together, in one script:
      correlation with the target, PC1 respiratory-band power, PC1
      autocorrelation.
 
-Models per dataset (3 members per held-out subject):
+Models per dataset (3 members per held-out subject; O vs X: member m0):
 * CapnoBase: the 261007_RRWaveNet_Ensemble_NoEvent results
   (--results-root-261007): full\ and no_stem_fusion\, members m0-m2, read
   with the 261007 code;
@@ -17,13 +17,17 @@ Models per dataset (3 members per held-out subject):
   selected in the fold (WD_Selection\01_w10s_nonoverlap\<Dataset>\
   <subject>_selection.json -> full_wd<wd>\), members m0-m2, read with the
   261013 code (its STEAM2 reader and target polarity), so the windows are
-  those the models were tested on. 261013 trained only the full model, so
-  part 1 (stem fusion O vs X) is CapnoBase only.
+  those the models were tested on. 261013 trained only the full model:
+  the BIDMC / STEAM2 models without stem fusion are those of
+  261028_Stem_ablation_noise_v1 (--results-root-noise, no_stem_fusion\),
+  single models m0 trained with the 261013 settings of the fold (its
+  validation subjects and selected weight decay, the seed of member m0).
 
 Nothing is trained. Every stored model (3 members per held-out subject) is
 reloaded and run on the test windows of its held-out subject, so the
 windows are exactly the ones the models were tested on. Every value is
-computed per model and averaged over the 3 models of a subject. Statistics
+computed per model; part 2 averages it over the 3 models of a subject,
+part 1 uses member m0 of each model. Statistics
 are over subjects with the paired Wilcoxon signed-rank test (two-sided),
 for each dataset and for all datasets together (every subject of the three
 datasets once). Subjects whose 3 models are not all stored yet (261013: or
@@ -43,14 +47,17 @@ without a weight decay selection) are left out and listed.
      channels over time; the mean over the 24 x 23 off-diagonal entries as
      mean |r| and as signed mean. Pairs with a channel that is constant in
      the window are left out (their share is reported).
-   The window values are averaged over the test windows of the subject,
-   then over the 3 models. O and X are paired by subject: mean +- SD,
+   The window values are averaged over the test windows of the subject.
+   One model of each type per subject: member m0 of O and of X, i.e. the
+   same seed, training data and weight decay (BIDMC / STEAM2: X is a single
+   model m0, checked to be trained with the weight decay 261013 selected in
+   the fold). O and X are paired by subject: mean +- SD,
    median [IQR], number of subjects with a higher value in O, Wilcoxon
    p (**** p < 1e-4, *** < 1e-3, ** < 1e-2, * < 0.05, ns). Box plots: Stem
    Fusion X (left, red) vs Stem Fusion O (right, blue) with the
    significance bracket, per dataset and for all datasets, and one overview
-   figure per metric. CapnoBase only (261007); skipped when the
-   no_stem_fusion models are not stored.
+   figure per metric. Subjects without both m0 models are left out
+   (stem_fusion_ox_skipped.csv).
 2. Residual encoder blocks (full model)
    The 24-channel feature map at five stages: Stem = the stem fusion output
    (encoder input), B1 (d=1), B2 (d=2), B3 (d=4), B4 (d=8) = the output of
@@ -104,12 +111,14 @@ model are taken from them: CapnoBase from 261007, BIDMC and STEAM2 from
 261013). Results roots (default):
   --results-root-261007  D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1
   --results-root-261013  D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWavNet_STEAM_BIDMC_v1
+  --results-root-noise   D:\PPG2RSP_RRWaveNet_Inspired\261028_Stem_ablation_noise_v1
+                         (BIDMC / STEAM2 without stem fusion)
 The outputs go to <261007 results root>\Summary_10s\ (encoder_coverage.csv
 lists the source and the weight decays of every dataset). Run next to
 261007_RRWaveNet_Ensemble_NoEvent.py and
 261013_RRWaveNet_Adult_SubjectVal_WD.py (Spyder: just run the file):
   python 261011_RRWaveNet_Feature_Results_10s.py
-Options: --results-root-261007 / --results-root-261013 <results>,
+Options: --results-root-261007 / --results-root-261013 / --results-root-noise <results>,
   --datasets capnobase bidmc steam2, --force-cpu, --gpu, and the data path
   options of 261007 / 261013.
 
@@ -119,6 +128,7 @@ dimensionality. EUSIPCO 2007.
 
 import argparse
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -141,6 +151,9 @@ BACKBONE_261007 = SCRIPT_DIR / "261007_RRWaveNet_Ensemble_NoEvent.py"
 BACKBONE_261013 = SCRIPT_DIR / "261013_RRWaveNet_Adult_SubjectVal_WD.py"
 RESULTS_ROOT_261007 = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1")
 RESULTS_ROOT_261013 = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWavNet_STEAM_BIDMC_v1")
+# BIDMC / STEAM2 models without stem fusion: single models m0 trained by
+# 261028_Stem_ablation_noise_v1 with the 261013 settings of the fold.
+RESULTS_ROOT_NOISE = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261028_Stem_ablation_noise_v1")
 # Results of every dataset: CapnoBase from 261007, BIDMC and STEAM2 from 261013
 # (the full model of the weight decay 261013 selected in every fold).
 DATASET_SOURCES = {"capnobase": "261007", "bidmc": "261013", "steam2": "261013"}
@@ -164,6 +177,9 @@ STEM_METRICS = (
     ("OffDiag_SignedMean", "Off-diagonal correlation (signed mean)", True),
 )
 CONSTANT_CHANNEL_SD = 1e-6
+# O vs X on member m0 of both models (the same seed; the BIDMC / STEAM2 models
+# without stem fusion are single models m0).
+STEM_OX_MEMBER = 0
 
 # 2. Residual encoder blocks
 ENCODER_FOLDER = "Encoder_Feature_Analysis"
@@ -403,6 +419,21 @@ def checkpoints_of(backbone, root: Path, subject: str) -> Optional[List[Path]]:
     return paths if complete else None
 
 
+def stem_x_checkpoint(backbone, root: Path, subject: str, weight_decay: Optional[float]) -> Tuple[Optional[Path], str]:
+    """Member m0 of the model without stem fusion of a held-out subject, or
+    None and the reason. With a weight decay (261013 datasets) the model must
+    have been trained with it (the weight decay 261013 selected in the fold)."""
+    summary_path = backbone.member_paths(root, subject, STEM_OX_MEMBER)[0]
+    checkpoint = root / "Members" / f"m{STEM_OX_MEMBER}" / "Models" / f"{backbone.safe_tag(subject)}_best.pth"
+    if not (summary_path.exists() and checkpoint.exists()):
+        return None, f"member m{STEM_OX_MEMBER} not stored"
+    if weight_decay is not None:
+        model_key = str(json.loads(summary_path.read_text(encoding="utf-8")).get("Model", ""))
+        if not model_key.endswith("_wd{:g}_subjval".format(weight_decay)):
+            return None, f"not trained with the weight decay 261013 selected in the fold ({weight_decay:g})"
+    return checkpoint, ""
+
+
 def full_model_root(backbone, source: str, results_root: Path, spec, dataset_key: str,
                     subject: str) -> Tuple[Optional[Path], Optional[float]]:
     """Folder of the full model of a held-out subject and, for 261013, the
@@ -425,6 +456,8 @@ def collect(sources: Dict[str, Tuple[object, Path]], dataset_keys: Sequence[str]
     coverage_rows: List[dict] = []
     curves: Dict[Tuple[str, str], Dict[str, List[np.ndarray]]] = {}
     frequencies = None
+    # The network without stem fusion is the same in 261007, 261013 and 261028.
+    x_variant = sources["261007"][0].VARIANTS[STEM_X_VARIANT]
     for dataset_key in dataset_keys:
         source = DATASET_SOURCES[dataset_key]
         backbone, results_root = sources[source]
@@ -441,18 +474,17 @@ def collect(sources: Dict[str, Tuple[object, Path]], dataset_keys: Sequence[str]
             has_x = (root_x / "Members").exists()
             encoder_variant = backbone.VARIANTS[ENCODER_VARIANT]
         else:
-            # 261013: the weight decay selected in every fold; only the full model.
+            # 261013: the full model of the weight decay selected in every fold;
+            # without stem fusion: 261028_Stem_ablation_noise_v1 (261013 settings).
             root_o = results_root / "WD_Selection" / f"{spec.order:02d}_{spec.name}" / label
-            root_x = None
+            root_x = backbone.condition_root(sources["noise"][1], STEM_X_VARIANT, spec, dataset_key)
             has_o = root_o.exists()
-            has_x = False
+            has_x = (root_x / "Members").exists()
             encoder_variant = next(iter(backbone.VARIANTS.values()))
         if not has_o:
             print(f"{label}: no {source} {ENCODER_VARIANT} results under {root_o}, skipped")
             continue
-        if source == "261013":
-            print(f"{label}: 261013 stored only the full model; stem fusion O vs X skipped")
-        elif not has_x:
+        if not has_x:
             print(f"{label}: no {STEM_X_VARIANT} results under {root_x}; stem fusion O vs X skipped")
         try:
             subject_data = backbone.load_dataset(dataset_key, spec)
@@ -463,17 +495,21 @@ def collect(sources: Dict[str, Tuple[object, Path]], dataset_keys: Sequence[str]
         if args.subjects:
             subjects = [s for s in subjects if s in set(args.subjects)]
         model_o = encoder_variant.options.build().to(device)
-        model_x = backbone.VARIANTS[STEM_X_VARIANT].options.build().to(device) if has_x else None
+        model_x = x_variant.options.build().to(device) if has_x else None
         analysed, left_out, paired, decays = [], [], 0, []
         for subject in subjects:
             subject_root, weight_decay = full_model_root(backbone, source, results_root, spec, dataset_key, subject)
             checkpoints_o = checkpoints_of(backbone, subject_root, subject) if subject_root is not None else None
-            checkpoints_x = checkpoints_of(backbone, root_x, subject) if has_x else None
+            checkpoint_x, reason_x = (
+                stem_x_checkpoint(backbone, root_x, subject, weight_decay)
+                if has_x and checkpoints_o is not None else (None, "")
+            )
             if has_x:
-                for name, found in (("Stem Fusion O", checkpoints_o), ("Stem Fusion X", checkpoints_x)):
-                    if found is None:
+                for name, found, reason in (("Stem Fusion O", checkpoints_o, "not all members stored"),
+                                            ("Stem Fusion X", checkpoint_x, reason_x)):
+                    if found is None and reason:
                         stem_skipped.append({"Model_Type": name, "Window_Config": WINDOW, "Dataset": label,
-                                             "Subject": subject, "Reason": "not all members stored"})
+                                             "Subject": subject, "Reason": reason})
             if checkpoints_o is None:
                 left_out.append(subject)
                 continue
@@ -487,8 +523,8 @@ def collect(sources: Dict[str, Tuple[object, Path]], dataset_keys: Sequence[str]
             for member, checkpoint in enumerate(checkpoints_o):
                 model_o.load_state_dict(torch.load(checkpoint, map_location=device))
                 stages, target = stage_features(model_o, loader, device)
-                # Stem Fusion O: the encoder input of the full model (= stage Stem).
-                if checkpoints_x is not None:
+                # Stem Fusion O: the encoder input of the full model (= stage Stem), m0.
+                if checkpoint_x is not None and member == STEM_OX_MEMBER:
                     stem_rows.append(stem_row(backbone, stages[0], "Stem Fusion O", STEM_O_VARIANT,
                                               label, subject, member))
                 runs = contiguous_runs(metadata, target.shape[1])
@@ -521,13 +557,12 @@ def collect(sources: Dict[str, Tuple[object, Path]], dataset_keys: Sequence[str]
                     row[f"{stage}_RespBand_Ratio"] = band_ratio(frequencies, psd)
                     row[f"{stage}_ACF_r"] = acf_similarity(acf, target_acf, fs)
                 member_rows.append(row)
-            # Stem Fusion X: the 24 concatenated branch channels of no_stem_fusion.
-            if checkpoints_x is not None:
-                for member, checkpoint in enumerate(checkpoints_x):
-                    model_x.load_state_dict(torch.load(checkpoint, map_location=device))
-                    features = encoder_input_features(model_x, loader, device)
-                    stem_rows.append(stem_row(backbone, features, "Stem Fusion X", STEM_X_VARIANT,
-                                              label, subject, member))
+            # Stem Fusion X: the 24 concatenated branch channels of no_stem_fusion, m0.
+            if checkpoint_x is not None:
+                model_x.load_state_dict(torch.load(checkpoint_x, map_location=device))
+                features = encoder_input_features(model_x, loader, device)
+                stem_rows.append(stem_row(backbone, features, "Stem Fusion X", STEM_X_VARIANT,
+                                          label, subject, STEM_OX_MEMBER))
                 paired += 1
             analysed.append(subject)
             del loader
@@ -637,7 +672,7 @@ def stem_fusion_outputs(backbone, members: pd.DataFrame, skipped: pd.DataFrame, 
                 fig, axis = plt.subplots(figsize=(6.2, 4.0))
                 draw_box(axis, x, o, axis_label, p_value)
                 axis.set_title(f"{dataset}, {WINDOW_TAG}: n = {len(o)} subjects "
-                               f"(mean of {MEMBERS} models), Wilcoxon p = {p_value:.2g}", fontsize=9)
+                               f"(member m{STEM_OX_MEMBER} of each model), Wilcoxon p = {p_value:.2g}", fontsize=9)
                 fig.tight_layout()
                 fig.savefig(figure_root / f"{dataset.replace(' ', '_')}_{WINDOW_TAG}_{metric}.png", dpi=150)
                 plt.close(fig)
@@ -675,7 +710,8 @@ def stem_fusion_outputs(backbone, members: pd.DataFrame, skipped: pd.DataFrame, 
     sheets.update({f"Table_{metric}"[:31]: frame for metric, frame in tables.items()})
     backbone.write_results_excel(out_root / "stem_fusion_ox.xlsx", sheets)
 
-    print("\n1. Stem Fusion O vs X (per subject, mean of the models; mean +- SD; Wilcoxon signed-rank):")
+    print(f"\n1. Stem Fusion O vs X (per subject, member m{STEM_OX_MEMBER} of each model; mean +- SD; "
+          "Wilcoxon signed-rank):")
     for _, row in tests.iterrows():
         print(f"  {row['Dataset']:<13s} {row['Metric']:<25s} "
               f"O {row['O_Mean']:.3f} +- {row['O_SD']:.3f}  X {row['X_Mean']:.3f} +- {row['X_SD']:.3f}  "
@@ -1006,6 +1042,7 @@ def main(args: argparse.Namespace) -> None:
     sources = {
         "261007": (backbones["261007"], Path(args.results_root_261007).resolve()),
         "261013": (backbones["261013"], Path(args.results_root_261013).resolve()),
+        "noise": (None, Path(args.results_root_noise).resolve()),
     }
     backbone = backbones["261007"]
     out_root = sources["261007"][1] / OUTPUT_FOLDER
@@ -1014,8 +1051,9 @@ def main(args: argparse.Namespace) -> None:
     datasets = [backbones[DATASET_SOURCES[key]].DATASET_CONFIGS[key]["label"] for key in dataset_keys]
     print(f"Results: CapnoBase {sources['261007'][1]} (261007)\n"
           f"         BIDMC, STEAM2 {sources['261013'][1]} (261013, weight decay selected per fold)\n"
-          f"{WINDOW}, {MEMBERS} members per subject; stem fusion O = {STEM_O_VARIANT}, X = {STEM_X_VARIANT} "
-          f"(261007 only); encoder: {ENCODER_VARIANT}; device: {device}")
+          f"         BIDMC, STEAM2 without stem fusion {sources['noise'][1]} (261028_Stem_ablation_noise_v1)\n"
+          f"{WINDOW}; encoder blocks: {ENCODER_VARIANT}, {MEMBERS} members per subject; stem fusion O "
+          f"({STEM_O_VARIANT}) vs X ({STEM_X_VARIANT}): member m{STEM_OX_MEMBER}; device: {device}")
 
     collected = collect(sources, dataset_keys, device, args)
     if collected["members"].empty:
@@ -1036,6 +1074,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         default=RESULTS_ROOT_261007, help="Results root of the 261007 run (CapnoBase).")
     parser.add_argument("--results-root-261013", type=Path, default=RESULTS_ROOT_261013,
                         help="Results root of the 261013 run (BIDMC, STEAM2).")
+    parser.add_argument("--results-root-noise", type=Path, default=RESULTS_ROOT_NOISE,
+                        help="Results root of 261028_Stem_ablation_noise_v1 (BIDMC, STEAM2 without stem fusion).")
     parser.add_argument("--datasets", nargs="+", default=["capnobase", "bidmc", "steam2"],
                         choices=["capnobase", "bidmc", "steam2"])
     parser.add_argument("--subjects", nargs="+", default=None, help="Only these subjects (quick tests).")
