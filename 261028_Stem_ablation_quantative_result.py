@@ -198,6 +198,7 @@ import random
 import re
 import subprocess
 import sys
+import textwrap
 import time
 import warnings
 from dataclasses import dataclass
@@ -5106,7 +5107,7 @@ STEM_METRICS = (
     ("2_inference_cost", "Time_Per_Window_ms", "Time per window, batched", "ms", True),
     ("2_inference_cost", "Peak_GPU_Memory_MB", "Peak GPU memory, one batch", "MB", True),
     ("2_inference_cost", "Parameters", "Parameters", "", False),
-    ("2_inference_cost", "MACs_Per_Window", "MACs per 10 s window", "M", False),
+    ("2_inference_cost", "MACs_Per_Window", "MACs per 10 s window", "", False),
     ("2_inference_cost", "Activation_Memory_KB", "Activations per window", "KB", False),
     ("3_generalization_gap", "Gap_Loss", "Val - train loss", "", True),
     ("3_generalization_gap", "Gap_Loss_Pct", "(Val - train) / train loss", "%", True),
@@ -5640,8 +5641,9 @@ def stem_fusion_boxplots(frame: pd.DataFrame, tests: pd.DataFrame, figure_root: 
                 axis.set_axisbelow(True)
                 for side in ("top", "right"):
                     axis.spines[side].set_visible(False)
-                unit_text = f" ({unit})" if unit else ""
-                axis.set_title(f"{label}{unit_text}", fontsize=8.5, color=INK, pad=14)
+                unit_text = " (millions)" if column == "MACs_Per_Window" else (f" ({unit})" if unit else "")
+                axis.set_title("\n".join(textwrap.wrap(f"{label}{unit_text}", 30)), fontsize=8.5, color=INK,
+                               pad=14)
                 if c == 0:
                     axis.set_ylabel(f"{dataset} (n = {len(table)})", color=INK)
         handles = [plt.Rectangle((0, 0), 1, 1, facecolor=MODEL_COLORS[name] + "33", edgecolor=MODEL_COLORS[name])
@@ -5649,10 +5651,14 @@ def stem_fusion_boxplots(frame: pd.DataFrame, tests: pd.DataFrame, figure_root: 
         fig.legend(handles, [labels["full"], labels["no_stem_fusion"]], loc="upper right", frameon=False,
                    fontsize=8, ncol=2)
         fig.suptitle(title, x=0.01, ha="left", fontsize=11, color=INK)
-        fig.text(0.01, 0.005, "Boxes: median and IQR over the LOSOCV folds (whiskers 1.5 IQR); points: folds; "
-                 "grey lines join the two models of a fold. Paired Wilcoxon signed-rank test, Benjamini-Hochberg "
-                 "over the measures of a dataset.", fontsize=7, color=INK_MUTED)
-        fig.tight_layout(rect=(0, 0.02, 1, 0.95))
+        note = textwrap.wrap(
+            "Boxes: median and IQR over the LOSOCV folds (whiskers 1.5 IQR); points: folds; grey lines join the "
+            "two models of a fold. Paired Wilcoxon signed-rank test, Benjamini-Hochberg over the measures of a "
+            "dataset.",
+            int(fig.get_figwidth() * 17),
+        )
+        fig.text(0.01, 0.005, "\n".join(note), fontsize=7, color=INK_MUTED)
+        fig.tight_layout(rect=(0, 0.01 + 0.012 * len(note), 1, 0.965))
         path = figure_root / f"stem_fusion_{item}.png"
         fig.savefig(path, dpi=150, facecolor=fig.get_facecolor())
         plt.close(fig)
