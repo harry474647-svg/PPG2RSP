@@ -70,22 +70,27 @@ Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261028_Deep_correncoder)
              data_check.csv, run_settings.json,
              261028_Deep_correncoder_results.xlsx
 
-GPU memory: the model is small (18,441 parameters; a batch needs well under
-1 MB), so a CUDA out-of-memory error means that the GPU is occupied by other
-programs (e.g. another training on the same GPU). The GPU is used only when
-at least MIN_FREE_GPU_MB are free and a test allocation succeeds, otherwise
-the CPU (the paper trains on a CPU in under 6 minutes per model); a fold that
-still fails on the GPU (CUDA out of memory / CUDA error) is run again from
-the start on the CPU, and so are the following folds. GPU memory kept by an
-earlier run stopped by an error in the same console (Spyder) is released at
-the start. None of this changes the model or the training.
+GPU: training runs on the GPU (--gpu, default 0). The model is small
+(18,441 parameters; a batch needs well under 1 MB), so a CUDA out-of-memory
+error means that the GPU is occupied by other programs (e.g. another training
+on the same GPU). At the start the free GPU memory is checked (at least
+MIN_FREE_GPU_MB and a test allocation); when the GPU is not available or
+occupied, the run stops and prints the GPU memory and the programs using it,
+instead of training slowly on the CPU. A fold that fails on the GPU (CUDA
+out of memory / CUDA error) stops the run as well; the finished folds are
+kept (--resume continues). --allow-cpu trains on the CPU in these cases
+instead (the failed fold again from the start), --force-cpu always on the
+CPU. GPU memory kept by an earlier run stopped by an error in the same console
+(Spyder) is released at the start. None of this changes the model or the
+training.
 
-Run (GPU or CPU):                python 261028_Deep_correncoder.py
+Run (GPU):                       python 261028_Deep_correncoder.py
 Resume after an interruption:    --resume (finished folds are kept)
 Some datasets:                   --datasets capnobase bidmc
 Summary of stored folds only:    --summary-only
 Data paths:                      --capnobase-path, --bidmc-path,
                                  --steam2-ppg-dir, --steam2-rsp-dir
+CPU when the GPU is occupied:    --allow-cpu
 CPU only:                        --force-cpu
 """
 
@@ -738,33 +743,62 @@ def cuda_failure(exc: BaseException) -> bool:
     return any(word in text for word in ("out of memory", "CUDA", "CUBLAS", "cuDNN", "CUDNN"))
 
 
+def gpu_report(device: torch.device) -> str:
+    """Free / total memory of the GPU and the programs using it (if known)."""
+    lines = []
+    try:
+        free, total = torch.cuda.mem_get_info(device)
+        lines.append(f"GPU memory: {free / 2 ** 20:.0f} MB free of {total / 2 ** 20:.0f} MB")
+    except Exception:
+        pass
+    try:
+        lines.append(torch.cuda.list_gpu_processes(device))
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
 def choose_device(args: argparse.Namespace) -> torch.device:
     """The GPU when it has at least MIN_FREE_GPU_MB free and a test allocation
-    succeeds; otherwise the CPU."""
-    if args.force_cpu or not torch.cuda.is_available():
+    succeeds. Otherwise the run stops with the reason (the CPU only with
+    --allow-cpu or --force-cpu)."""
+    if args.force_cpu:
         return torch.device("cpu")
-    device = torch.device(f"cuda:{args.gpu}")
-    reason = ""
-    try:
-        mem_get_info = getattr(torch.cuda, "mem_get_info", None)
-        if mem_get_info is not None:
-            free, total = mem_get_info(device)
-            if free < MIN_FREE_GPU_MB * 2 ** 20:
-                reason = (f"only {free / 2 ** 20:.0f} MB of {total / 2 ** 20:.0f} MB free "
-                          "(used by other programs)")
-        if not reason:
-            probe = torch.empty(MIN_FREE_GPU_MB * 2 ** 20 // 4, dtype=torch.float32, device=device)
-            nn.functional.dropout(probe[:4096], dropout_val, True)
-            torch.cuda.synchronize(device)
-            del probe
-    except RuntimeError as exc:
-        reason = str(exc).splitlines()[0]
-    release_memory()
-    if reason:
-        print(f"GPU {args.gpu} not used: {reason}. The CPU is used (close the other programs on the GPU, "
-              "or restart the console, to use it).", flush=True)
+    if not torch.cuda.is_available():
+        reason, device = "PyTorch finds no CUDA GPU (CUDA build of PyTorch and NVIDIA driver needed)", None
+    else:
+        device = torch.device(f"cuda:{args.gpu}")
+        reason = ""
+        try:
+            mem_get_info = getattr(torch.cuda, "mem_get_info", None)
+            if mem_get_info is not None:
+                free, total = mem_get_info(device)
+                if free < MIN_FREE_GPU_MB * 2 ** 20:
+                    reason = (f"only {free / 2 ** 20:.0f} MB of {total / 2 ** 20:.0f} MB free "
+                              "(used by other programs)")
+            if not reason:
+                probe = torch.empty(MIN_FREE_GPU_MB * 2 ** 20 // 4, dtype=torch.float32, device=device)
+                nn.functional.dropout(probe[:4096], dropout_val, True)
+                torch.cuda.synchronize(device)
+                del probe
+        except RuntimeError as exc:
+            reason = str(exc).splitlines()[0]
+        release_memory()
+    if not reason:
+        print(f"GPU {args.gpu}: {torch.cuda.get_device_name(device)}", flush=True)
+        return device
+    report = gpu_report(device) if device is not None else ""
+    if args.allow_cpu:
+        print(f"GPU {args.gpu} not used: {reason}. Training on the CPU (--allow-cpu).", flush=True)
+        if report:
+            print(report, flush=True)
         return torch.device("cpu")
-    return device
+    print(f"\nGPU {args.gpu} cannot be used: {reason}.", flush=True)
+    if report:
+        print(report, flush=True)
+    print("Free the GPU (end or pause the other training on it, or restart the console: Spyder Consoles > "
+          "Restart kernel) and run again; or run with --allow-cpu to train on the CPU (slower).", flush=True)
+    raise SystemExit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -1043,11 +1077,19 @@ def run_dataset(args: argparse.Namespace, dataset_key: str, results_root: Path,
         except RuntimeError as exc:
             if device.type != "cuda" or not cuda_failure(exc):
                 raise
-            print(f"[{time.strftime('%H:%M:%S')}] {label} test subject {subject}: GPU failed "
-                  f"({str(exc).splitlines()[0]}); this fold is run again on the CPU, and so are the "
-                  "following folds", flush=True)
+            message = str(exc).splitlines()[0]
             fold = None
         if fold is None:
+            print(f"[{time.strftime('%H:%M:%S')}] {label} test subject {subject}: GPU failed ({message}).",
+                  flush=True)
+            report = gpu_report(device)
+            if report:
+                print(report, flush=True)
+            if not args.allow_cpu:
+                print("Stopped: the GPU is occupied by other programs. The finished folds are kept; free the GPU "
+                      "and run again with --resume (or with --allow-cpu to go on on the CPU).", flush=True)
+                raise SystemExit(1)
+            print("This fold is run again on the CPU, and so are the following folds (--allow-cpu).", flush=True)
             release_memory()
             device = torch.device("cpu")
             fold = run_fold(data[subject], label, subject, trainX, trainy, testX, testy, args.epochs, device)
@@ -1163,7 +1205,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true", help="Keep the folds already finished.")
     parser.add_argument("--summary-only", action="store_true")
     parser.add_argument("--gpu", type=int, default=0)
-    parser.add_argument("--force-cpu", action="store_true")
+    parser.add_argument("--allow-cpu", action="store_true",
+                        help="Train on the CPU when the GPU is not available or occupied (default: stop).")
+    parser.add_argument("--force-cpu", action="store_true", help="Always train on the CPU.")
     parser.add_argument("--threads", type=int, default=None)
     parser.add_argument("--capnobase-path", type=Path, default=None)
     parser.add_argument("--bidmc-path", type=Path, default=None)
@@ -1187,7 +1231,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     results_root = Path(args.results_root).resolve()
     (results_root / "Summary").mkdir(parents=True, exist_ok=True)
     release_memory(release_traceback=True)
-    device = choose_device(args)
+    device = torch.device("cpu") if args.summary_only else choose_device(args)
     dataset_keys = [key for key in DATASET_ORDER if key in args.datasets]
     labels = [DATASET_CONFIGS[key]["label"] for key in dataset_keys]
     (results_root / "Summary" / "run_settings.json").write_text(
