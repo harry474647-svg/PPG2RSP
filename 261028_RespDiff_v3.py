@@ -50,6 +50,15 @@ outputs are otherwise those of 261020_RespDiff)
   with "OSError: [WinError 1455] The paging file is too small". The memory
   of every fold is still released before the next one. --worker-processes
   starts the workers as 261020_RespDiff (needs a larger page file).
+* GPU check: before the data are read, a RespDiff model is put on the GPU
+  and trained one step on random segments (random states restored, model
+  deleted; the results do not change). When the GPU memory or the memory of
+  Windows is already used by other programs, cuDNN fails there ("cuDNN
+  error: CUDNN_STATUS_INTERNAL_ERROR" or "CUDA out of memory") and the run
+  stops at once, with the free GPU memory, the programs on the GPU
+  (nvidia-smi), the free RAM and page file and the other Python processes.
+  GPU memory kept by an earlier run stopped by an error in the same console
+  (Spyder) is released at the start.
 
 261020_RespDiff: RespDiff (Miao, Chen, Li & Mandic, "RespDiff: An End-to-End
 Multi-scale RNN Diffusion Model for Respiratory Waveform Estimation from PPG
@@ -660,6 +669,55 @@ def release_memory(device: Optional[torch.device] = None) -> None:
     gc.collect()
     if device is not None and device.type == "cuda":
         torch.cuda.empty_cache()
+
+
+def release_console_traceback() -> None:
+    """An earlier run stopped by an error in the same console (Spyder) keeps
+    its objects, and so its GPU memory, through the stored traceback."""
+    for name in ("last_type", "last_value", "last_traceback"):
+        if hasattr(sys, name):
+            setattr(sys, name, None)
+    gc.collect()
+
+
+def memory_report(device: torch.device) -> str:
+    """Free GPU memory, the programs using the GPU (nvidia-smi), free RAM and
+    page file, and the other Python processes (e.g. a worker of an earlier
+    run that still runs), for the message when the GPU cannot be used."""
+    lines = []
+    try:
+        free, total = torch.cuda.mem_get_info(device)
+        lines.append(f"GPU memory: {free / 2 ** 20:.0f} MB free of {total / 2 ** 20:.0f} MB")
+    except Exception:
+        pass
+    try:
+        smi = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=30)
+        if smi.stdout.strip():
+            lines.append(smi.stdout.rstrip())
+    except Exception:
+        pass
+    try:
+        import psutil
+
+        ram, swap = psutil.virtual_memory(), psutil.swap_memory()
+        lines.append(f"RAM: {ram.available / 2 ** 30:.1f} GB free of {ram.total / 2 ** 30:.1f} GB; page file: "
+                     f"{swap.free / 2 ** 30:.1f} GB free of {swap.total / 2 ** 30:.1f} GB")
+        others = []
+        for process in psutil.process_iter(["pid", "name", "cmdline", "memory_info"]):
+            name = (process.info.get("name") or "").lower()
+            if "python" not in name or process.info["pid"] == os.getpid():
+                continue
+            cmdline = process.info.get("cmdline") or []
+            script = next((Path(part).name for part in cmdline if part.lower().endswith(".py")), "")
+            memory = process.info.get("memory_info")
+            others.append(f"  PID {process.info['pid']:>6}  {name}  {script}"
+                          + ("  (worker process, --child-task)" if "--child-task" in cmdline else "")
+                          + (f"  {memory.rss / 2 ** 30:.1f} GB" if memory else ""))
+        if others:
+            lines.append("Other Python processes:\n" + "\n".join(others))
+    except Exception:
+        pass
+    return "\n".join(lines)
 
 
 def run_worker(command: Sequence[str]) -> int:
@@ -1391,7 +1449,11 @@ def train_fold(
     history, start_epoch, elapsed = [], 0, 0.0
     best_val, best_epoch, bad_epochs, best_state = float("inf"), 0, 0, None
     if state_path.exists():
-        state = torch.load(state_path, map_location=device, weights_only=False)
+        try:
+            state = torch.load(state_path, map_location=device, weights_only=False)
+        except TypeError:
+            # PyTorch before 1.13 has no weights_only (and loads every object).
+            state = torch.load(state_path, map_location=device)
         if state.get("key") == key:
             model.load_state_dict(state["model"])
             optimizer.load_state_dict(state["optimizer"])
@@ -1599,6 +1661,46 @@ def fold_done(root: Path, subject: str, sampling: str, n_samples: int) -> bool:
 # Experiment
 # ---------------------------------------------------------------------------
 
+def check_gpu(args: argparse.Namespace, variants: Sequence[Variant], device: torch.device) -> None:
+    """Before the data are read: a RespDiff model is put on the GPU (its RNN
+    starts cuDNN) and trained one step on a batch of random segments (batch
+    128, the RNN in micro-batches of --train-micro-batch), so that a GPU
+    without the memory for the training is found at once. The random states
+    are restored and the model deleted (the results do not change). If it
+    fails the run stops and the GPU's memory and the programs using it are
+    shown."""
+    def training_step() -> float:
+        with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+            reset_peak_memory(device)
+            model = DiffusionPipeline(variants[0], device).to(device)
+            ppg = torch.rand(TRAIN_BATCH, 1, SEGMENT_LEN, device=device) * 2.0 - 1.0
+            resp = torch.rand(TRAIN_BATCH, 1, SEGMENT_LEN, device=device)
+            model.train_step(ppg, resp, args.train_micro_batch)
+            torch.cuda.synchronize(device)
+            return peak_memory_gb(device)
+
+    started = time.time()
+    reason = ""
+    try:
+        peak = training_step()
+    except RuntimeError as exc:
+        reason = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+    # Out of the except block, so that the failed model is freed.
+    release_memory(device)
+    if reason:
+        print(f"\nThe GPU cannot be used: {reason}", flush=True)
+        print(memory_report(device), flush=True)
+        print("\nCUDA / cuDNN could not start the training on the GPU, which happens when its memory (or the "
+              "memory of Windows) is already used by other programs: another training on this GPU, a worker "
+              "process of an earlier run (e.g. 261020_RespDiff) that still runs, or this console still holding "
+              "the GPU from an earlier run. End them (nvidia-smi above, Task Manager: python.exe) or restart "
+              "the console (Spyder: Consoles > Restart kernel), then run again; stored results and training "
+              "states are kept.", flush=True)
+        raise SystemExit(3)
+    print(f"GPU check: {torch.cuda.get_device_name(device)}, one training step in {time.time() - started:.1f} s, "
+          f"peak GPU memory {peak:.2f} GB", flush=True)
+
+
 def run_task(args: argparse.Namespace, results_root: Path, dataset_key: str, variants: Sequence[Variant],
              device: torch.device) -> None:
     label = DATASET_CONFIGS[dataset_key]["label"]
@@ -1666,6 +1768,8 @@ def run_task(args: argparse.Namespace, results_root: Path, dataset_key: str, var
                 print(f"{label} {variant.label} {subject}: FAILED {exc}", flush=True)
                 if is_fatal_error(exc):
                     write_failed(results_root, dataset_key, variants, failed)
+                    if device.type == "cuda":
+                        print(memory_report(device), flush=True)
                     print("Fatal error (memory / CUDA): stopped; run the script again to continue (stored "
                           "results and training states are kept).", flush=True)
                     raise SystemExit(3)
@@ -1915,6 +2019,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
           + f", {', '.join(SAMPLERS[s][0] + ' ' + str(SAMPLERS[s][1]) for v in variants for s in v.samplers)}, "
           f"{args.n_samples} samples per segment; order "
           + " -> ".join(DATASET_CONFIGS[k]["label"] for k in dataset_keys), flush=True)
+    release_console_traceback()
+    if device.type == "cuda":
+        check_gpu(args, variants, device)
     incomplete = []
     for dataset_key in dataset_keys:
         try:
