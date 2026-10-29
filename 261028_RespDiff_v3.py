@@ -1,6 +1,6 @@
 r"""261028_RespDiff_v3: 261020_RespDiff continued from its stored results
 (261020_RespDiff_v2): only the folds without a result are trained, in the
-order STEAM2 -> BIDMC -> CapnoBase, with early stopping (patience 25), and
+order CapnoBase -> BIDMC -> STEAM2, with early stopping (patience 25), and
 only DDPM 50 is sampled.
 
 Changes from 261020_RespDiff (model, data, sampling, evaluation, seeds and
@@ -16,7 +16,8 @@ outputs are otherwise those of 261020_RespDiff)
   stopped training of 261020_RespDiff (Models\{subject}_training_state.pt)
   is not continued, since it used all training segments without validation:
   that fold is trained again with early stopping. --resume is always on.
-* Order: STEAM2, BIDMC, CapnoBase (--datasets to choose).
+* Order: CapnoBase, BIDMC, STEAM2. --datasets chooses the datasets and
+  their order (they run in the order given, e.g. --datasets bidmc capnobase).
 * Sampling: DDPM 50 only (NFE 50, 100 samples per segment). DDIM 6 is not
   sampled, and stored DDIM 6 results are left out of the summary (the files
   are kept).
@@ -184,7 +185,7 @@ Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261020_RespDiff_v2)
   Summary\per_subject.csv, windows.csv, data_check.csv (--dry-run)
 
 Run / continue (GPU):            python 261028_RespDiff_v3.py
-Some datasets:                   --datasets bidmc
+Some datasets, in this order:    --datasets capnobase bidmc
 Without early stopping:          --patience 0
 Less GPU memory (slower):        --train-micro-batch 8 --sample-micro-batch 8
 Summary of stored results only:  --summary-only
@@ -262,8 +263,8 @@ DATASET_CONFIGS = {
     },
 }
 
-# Training order of this script.
-DATASET_ORDER = ("steam2", "bidmc", "capnobase")
+# Training order of this script (--datasets: the order given).
+DATASET_ORDER = ("capnobase", "bidmc", "steam2")
 
 
 # ---------------------------------------------------------------------------
@@ -1983,7 +1984,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if args.threads:
         torch.set_num_threads(args.threads)
     results_root = Path(args.results_root)
-    dataset_keys = [key for key in DATASET_ORDER if key in args.datasets]
+    # In the order given (each dataset once).
+    dataset_keys = list(dict.fromkeys(args.datasets))
     variants = [VARIANTS[name] for name in VARIANTS if name in args.variants]
 
     if args.dry_run:
