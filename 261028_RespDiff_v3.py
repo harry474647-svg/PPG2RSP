@@ -1,27 +1,55 @@
-r"""261028_RespDiff_v3: 261020_RespDiff continued where it was stopped; folds
-already trained are not trained again (results of 261020_RespDiff_v2).
+r"""261028_RespDiff_v3: 261020_RespDiff continued from its stored results
+(261020_RespDiff_v2): only the folds without a result are trained, in the
+order STEAM2 -> BIDMC -> CapnoBase, with early stopping (patience 25), and
+only DDPM 50 is sampled.
 
-Continuing (the only change from 261020_RespDiff)
--------------------------------------------------
-Every run continues the results stored under PROJECT_ROOT (the
-261020_RespDiff_v2 results; --results-root to change), fold by fold:
-* both results of the fold stored (DDPM 50 and DDIM 6,
-  Fold_Results\{subject}_{sampling}.json): skipped, nothing is trained or
-  sampled;
-* training finished (Models\{subject}_final.pth) but sampling not: the stored
-  model is sampled, not trained again;
-* training stopped: it continues from the last saved training state
-  (Models\{subject}_training_state.pt, saved every 25 epochs with the model,
-  optimizer, learning-rate schedule and random states), so only the epochs
-  after that state are trained again;
-* every other fold is trained.
---resume is therefore always on (the flag is kept and changes nothing). A
-stored model or result is reused only when it was made with the same
-training settings (training key: code 261020_RespDiff, model, dataset,
-epochs, number of training subjects and segments) and number of samples, so
-run with the --epochs and --n-samples of the stopped run (the defaults unless
-they were changed). Model, data, training, sampling, evaluation, seeds and
-outputs are those of 261020_RespDiff, unchanged.
+Changes from 261020_RespDiff (model, data, sampling, evaluation, seeds and
+outputs are otherwise those of 261020_RespDiff)
+--------------------------------------------------------------------------
+* Continuing: every run continues the results stored under PROJECT_ROOT
+  (--results-root to change). A fold with a stored DDPM 50 result
+  ({model}\{dataset}\Fold_Results\{subject}_ddpm50.json with the same
+  --n-samples) is kept as it is and skipped: nothing is trained or sampled,
+  whatever training made it. Every other fold is trained and sampled. A
+  model of 261020_RespDiff whose training finished (Models\{subject}_final.pth,
+  400 epochs) but whose result is missing is sampled, not trained again; a
+  stopped training of 261020_RespDiff (Models\{subject}_training_state.pt)
+  is not continued, since it used all training segments without validation:
+  that fold is trained again with early stopping. --resume is always on.
+* Order: STEAM2, BIDMC, CapnoBase (--datasets to choose).
+* Sampling: DDPM 50 only (NFE 50, 100 samples per segment). DDIM 6 is not
+  sampled, and stored DDIM 6 results are left out of the summary (the files
+  are kept).
+* Early stopping (not in the paper or the official code, which train 400
+  epochs and use the model after the last epoch): validation loss = the
+  training loss (noise error + 0.01 x spectral loss) of the validation
+  segments, with the diffusion steps and noise drawn once per fold (the
+  same every epoch). Training stops when the validation loss has not
+  decreased for 25 epochs (--patience), and the model of the epoch with the
+  lowest validation loss is used; at most 400 epochs (--epochs), the
+  learning-rate schedule (x 0.1 after epochs 280 and 396) unchanged. The
+  validation segments are taken out of the training segments of the fold
+  (never the test subject):
+    CapnoBase       the last 20% of every training subject's segments (in
+                    time), as the validation of 261007
+    BIDMC, STEAM2   20% of the training subjects, whole, drawn as the
+                    validation subjects of 261013 (same rule and seed)
+  The training state saved every 25 epochs keeps the early-stopping state
+  too (best model, best epoch, epochs without improvement), so a stopped run
+  continues where it was. Every fold result stores Max_Epochs,
+  Epochs_Trained, Early_Stopped, Best_Epoch and Best_Val_Loss; the train and
+  validation loss of every epoch are in Training_Logs. --patience 0 trains
+  as 261020_RespDiff (all training segments, 400 epochs, the last model).
+* Kept results: the results of 261020_RespDiff (CapnoBase, 31 subjects)
+  were trained 400 epochs without early stopping, the folds trained by this
+  script with early stopping; the column Training of Summary\per_subject.csv
+  and Summary\respdiff_results.csv says which.
+* One process: every dataset runs in this Python process, one after the
+  other. 261020_RespDiff started a worker process per dataset, and every
+  worker loads torch and its CUDA libraries again, which failed on Windows
+  with "OSError: [WinError 1455] The paging file is too small". The memory
+  of every fold is still released before the next one. --worker-processes
+  starts the workers as 261020_RespDiff (needs a larger page file).
 
 261020_RespDiff: RespDiff (Miao, Chen, Li & Mandic, "RespDiff: An End-to-End
 Multi-scale RNN Diffusion Model for Respiratory Waveform Estimation from PPG
@@ -52,10 +80,12 @@ squared noise error / L, plus 0.01 x the spectral loss (mean squared
 difference of the FFT magnitudes, orthonormal FFT, between the one-step
 estimate y0_hat = (y_t - sqrt(1 - abar_t) eps) / sqrt(abar_t) and y0); Adam,
 learning rate 1e-4, batch 128, 400 epochs, learning rate x 0.1 after epochs
-280 and 396; no validation set, the model after the last epoch is used.
+280 and 396; no validation set, the model after the last epoch is used
+(this script: early stopping, see above).
 Sampling (official code): DDPM, 50 steps (NFE 50), or DDIM, 6 steps (NFE 6;
 the x0 estimate is min-max scaled at every step as in the official code);
-100 samples per 5 s segment are averaged, test batch 64.
+100 samples per 5 s segment are averaged, test batch 64 (this script: DDPM
+50 only).
 
 Data (paper, official code)
 ---------------------------
@@ -89,7 +119,7 @@ corresponds to), RR_MAE is the mean over the windows.
 Model (paper, Tables I and II)
 ------------------------------
   folder             model                                     sampling
-  respdiff           RespDiff (spectral loss; model_fft.py)    DDPM 50, DDIM 6
+  respdiff           RespDiff (spectral loss; model_fft.py)    DDPM 50
 Only RespDiff with the spectral loss is trained (no ablation models). Paper
 (BIDMC): RespDiff 1.18 / 1.30 bpm (NFE 50 / 6); waveform MAE 0.307.
 
@@ -105,7 +135,8 @@ Needed for these datasets (not in the paper or the official code)
   counted in Summary/data_check.csv (CapnoBase and BIDMC have none);
 * fixed seeds per fold (the official code sets none), the training state is
   saved every 25 epochs to resume an interrupted run, the loss of every epoch
-  is printed.
+  is printed;
+* early stopping with validation segments (this script, see above).
 
 Memory (the model and its results are unchanged)
 -------------------------------------------------
@@ -124,8 +155,9 @@ Most memory goes to the activations of the 6-layer bidirectional RNN
   on micro-batches of 16 (--sample-micro-batch), no autograd graph is kept;
 * the optimizer state is freed before sampling, every subject is segmented as
   soon as it is read (only the 30 Hz segments are kept), the training
-  segments are held once as float32 tensors, and every dataset and model is
-  trained in its own process. The peak GPU memory of training and sampling
+  segments are held once as float32 tensors (261020_RespDiff trained every
+  dataset in its own process; this script runs in one process, see above).
+  The peak GPU memory of training and sampling
   is printed and stored with every fold (Training_Peak_GPU_GB,
   Sampling_Peak_GPU_GB). --train-micro-batch 8 lowers it further (slower);
   0 runs the whole batch at once (the official way).
@@ -133,6 +165,7 @@ Most memory goes to the activations of the 6-layer bidirectional RNN
 Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261020_RespDiff_v2)
 --------------------------------------------------------------------------
   {model}\{dataset}\Models\{subject}_final.pth          model after training
+  {model}\{dataset}\Models\{subject}_training.json      epochs, early stopping
   {model}\{dataset}\Training_Logs\{subject}_loss.csv    loss of every epoch
   {model}\{dataset}\Predictions\{subject}_{sampling}.npz output, reference
                                                         and PPG per recording
@@ -143,6 +176,7 @@ Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261020_RespDiff_v2)
 
 Run / continue (GPU):            python 261028_RespDiff_v3.py
 Some datasets:                   --datasets bidmc
+Without early stopping:          --patience 0
 Less GPU memory (slower):        --train-micro-batch 8 --sample-micro-batch 8
 Summary of stored results only:  --summary-only
 Check the data without training: --dry-run --no-require-cuda
@@ -219,7 +253,8 @@ DATASET_CONFIGS = {
     },
 }
 
-DATASET_ORDER = ("capnobase", "bidmc", "steam2")
+# Training order of this script.
+DATASET_ORDER = ("steam2", "bidmc", "capnobase")
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +309,16 @@ CHECKPOINT_EVERY = 25
 # 261020_RespDiff, so its models and results are reused.
 CODE_NAME = "261020_RespDiff"
 
+# Early stopping (this script): stop when the validation loss has not
+# decreased for PATIENCE epochs, use the model of the best epoch (0 = off).
+PATIENCE = 25
+# Validation segments of a fold: CapnoBase the last VAL_SEGMENT_RATIO of
+# every training subject's segments (261007), BIDMC / STEAM2
+# VAL_SUBJECT_RATIO of the training subjects (261013).
+VAL_SEGMENT_RATIO = 0.20
+VAL_SUBJECT_RATIO = 0.20
+VALIDATION = {"capnobase": "temporal", "bidmc": "subjects", "steam2": "subjects"}
+
 
 @dataclass(frozen=True)
 class Variant:
@@ -289,7 +334,7 @@ class Variant:
 
 
 VARIANTS = {
-    "respdiff": Variant("respdiff", "RespDiff", True, False, FINE_KERNELS, ("ddpm50", "ddim6")),
+    "respdiff": Variant("respdiff", "RespDiff", True, False, FINE_KERNELS, ("ddpm50",)),
 }
 # sampling -> (sampler, number of function evaluations)
 SAMPLERS = {"ddpm50": ("DDPM", 50), "ddim6": ("DDIM", 6)}
@@ -1227,6 +1272,62 @@ def training_key(args: argparse.Namespace, variant: Variant, dataset_key: str, t
     }
 
 
+def validation_subjects(dataset_key: str, test_subject: str, train_subjects: Sequence[str]) -> List[str]:
+    """Training subjects held out whole as validation subjects in one fold
+    (as 261013): VAL_SUBJECT_RATIO of the training subjects (rounded, at least
+    one, at most all but one), drawn with a seed of the dataset and the
+    held-out subject; the test subject is never one."""
+    candidates = sorted(str(subject) for subject in train_subjects if str(subject) != str(test_subject))
+    count = int(round(VAL_SUBJECT_RATIO * len(candidates)))
+    count = min(max(1, count), max(1, len(candidates) - 1))
+    rng = np.random.default_rng(stable_seed("261013-validation-subjects", dataset_key, test_subject))
+    return sorted(rng.choice(candidates, size=count, replace=False).tolist())
+
+
+def split_training(dataset_key: str, test_subject: str, train_subjects: Sequence[str],
+                   data: Dict[str, List[dict]]) -> Tuple[List[dict], List[dict], str]:
+    """Training and validation segments of one fold for the early stopping:
+    CapnoBase the last VAL_SEGMENT_RATIO of every training subject's segments
+    (in time), BIDMC / STEAM2 whole validation subjects."""
+    fit, val = [], []
+    if VALIDATION[dataset_key] == "subjects":
+        held_out = set(validation_subjects(dataset_key, test_subject, train_subjects))
+        for subject in train_subjects:
+            (val if subject in held_out else fit).extend(data[subject])
+        return fit, val, f"subject-wise, {len(held_out)} validation subjects: {' '.join(sorted(held_out))}"
+    for subject in train_subjects:
+        ppg = np.concatenate([r["ppg"] for r in data[subject]], axis=0)
+        resp = np.concatenate([r["resp"] for r in data[subject]], axis=0)
+        n = len(ppg)
+        count = min(max(1, int(round(n * VAL_SEGMENT_RATIO))), n - 1) if n > 1 else 0
+        fit.append({"ppg": ppg[:n - count], "resp": resp[:n - count]})
+        if count:
+            val.append({"ppg": ppg[n - count:], "resp": resp[n - count:]})
+    return fit, val, f"temporal, the last {VAL_SEGMENT_RATIO:.0%} of every training subject's segments"
+
+
+@torch.no_grad()
+def validation_loss(model: DiffusionPipeline, ppg: torch.Tensor, resp: torch.Tensor, steps: torch.Tensor,
+                    noise: torch.Tensor, micro_batch: int, device: torch.device) -> float:
+    """The training loss (noise error + spectral loss) of the validation
+    segments, per segment, with the same diffusion steps and noise every epoch
+    (drawn once per fold), in batches of TRAIN_BATCH."""
+    network = model.diffusion_model
+    total, count = 0.0, 0
+    for start in range(0, len(ppg), TRAIN_BATCH):
+        part = slice(start, start + TRAIN_BATCH)
+        x, y = ppg[part].to(device), resp[part].to(device)
+        t, eps = steps[part].to(device), noise[part].to(device)
+        current_alpha = model.alpha_torch[t]
+        noisy_resp = (current_alpha ** 0.5) * y + (1.0 - current_alpha) ** 0.5 * eps
+        features = network.features(network.ppg_features(x), noisy_resp, t)
+        predicted = network.head_chunked(features, micro_batch).permute(0, 2, 1)
+        total += float(model.batch_loss(predicted, eps, noisy_resp, y, current_alpha, x.shape[0]).item())
+        count += x.shape[0]
+        del x, y, t, eps, features, predicted
+    return total / max(count, 1)
+
+
 def train_fold(
     args: argparse.Namespace,
     variant: Variant,
@@ -1234,33 +1335,62 @@ def train_fold(
     subject: str,
     train_ppg: np.ndarray,
     train_resp: np.ndarray,
+    val_ppg: Optional[np.ndarray],
+    val_resp: Optional[np.ndarray],
     key: dict,
+    legacy_key: dict,
     root: Path,
     device: torch.device,
-) -> Tuple[DiffusionPipeline, float, float]:
-    """Official training loop; returns the model after the last epoch, the
-    training time and the peak GPU memory of the training (GB)."""
+) -> Tuple[DiffusionPipeline, float, float, dict]:
+    """Official training loop with early stopping (validation loss, patience
+    --patience, best epoch restored); returns the model, the training time,
+    the peak GPU memory (GB) and the training details (with the training key
+    of the model). A finished model of 261020_RespDiff (legacy_key: all
+    training segments, 400 epochs, no early stopping) is reused; a stopped
+    training of 261020_RespDiff is trained again (its data differ).
+    --patience 0: the official loop (key == legacy_key)."""
     model_dir, log_dir = root / "Models", root / "Training_Logs"
     model_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
     final_path = model_dir / f"{subject}_final.pth"
     key_path = model_dir / f"{subject}_final.json"
+    info_path = model_dir / f"{subject}_training.json"
     state_path = model_dir / f"{subject}_training_state.pt"
     seed = stable_seed("261020-respdiff-train", dataset_key, subject)
     set_seed(seed)
     model = DiffusionPipeline(variant, device).to(device)
-    if args.resume and final_path.exists() and read_json(key_path) == key:
+    stored_key = read_json(key_path)
+    if final_path.exists() and stored_key in (key, legacy_key):
         model.load_state_dict(torch.load(final_path, map_location=device))
-        print(f"    trained model reused ({final_path.name})", flush=True)
-        return model, 0.0, float("nan")
+        info = read_json(info_path) if stored_key == key else None
+        if info is None:
+            # Trained by 261020_RespDiff: all training segments, the model
+            # after the last epoch.
+            info = {"Max_Epochs": int(args.epochs), "Epochs_Trained": int(args.epochs), "Early_Stopping_Patience": 0,
+                    "Early_Stopped": False, "Best_Epoch": int(args.epochs), "Best_Val_Loss": float("nan")}
+        print(f"    trained model reused ({final_path.name}, "
+              + (f"early stopping, epoch {info['Best_Epoch']} of {info['Epochs_Trained']})"
+                 if info["Early_Stopping_Patience"] else f"{info['Epochs_Trained']} epochs, no early stopping)"),
+              flush=True)
+        return model, 0.0, float("nan"), {**info, "Model_Reused": True, "Training_Key": stored_key}
+    patience = int(args.patience)
+    early_stopping = patience > 0 and val_ppg is not None and len(val_ppg) > 0
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     milestones = [int(fraction * args.epochs) for fraction in LR_MILESTONE_FRACTIONS]
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=LR_GAMMA)
     generator = torch.Generator().manual_seed(seed)
     loader = DataLoader(SegmentDataset(train_ppg, train_resp), batch_size=TRAIN_BATCH, shuffle=True,
                         generator=generator)
+    if early_stopping:
+        # Validation segments with diffusion steps and noise drawn once.
+        val_generator = torch.Generator().manual_seed(stable_seed("261028-respdiff-validation", dataset_key, subject))
+        val_x = torch.tensor(val_ppg, dtype=torch.float32)[:, None, :]
+        val_y = torch.tensor(val_resp, dtype=torch.float32)[:, None, :]
+        val_steps = torch.randint(0, NUM_STEPS, [len(val_x)], generator=val_generator)
+        val_noise = torch.randn(val_y.shape, generator=val_generator)
     history, start_epoch, elapsed = [], 0, 0.0
-    if args.resume and state_path.exists():
+    best_val, best_epoch, bad_epochs, best_state = float("inf"), 0, 0, None
+    if state_path.exists():
         state = torch.load(state_path, map_location=device, weights_only=False)
         if state.get("key") == key:
             model.load_state_dict(state["model"])
@@ -1271,11 +1401,18 @@ def train_fold(
             if torch.cuda.is_available() and state.get("cuda_rng") is not None:
                 torch.cuda.set_rng_state_all(state["cuda_rng"])
             history, start_epoch, elapsed = list(state["history"]), int(state["epoch"]), float(state["seconds"])
+            if state.get("best_state") is not None:
+                best_val, best_epoch = float(state["best_val"]), int(state["best_epoch"])
+                bad_epochs, best_state = int(state["bad_epochs"]), state["best_state"]
             print(f"    resumed after epoch {start_epoch}", flush=True)
+        elif state.get("key") == legacy_key:
+            # A stopped training of 261020_RespDiff (all training segments,
+            # no validation): not continued, trained again with early stopping.
+            print(f"    training state of 261020_RespDiff (epoch {int(state['epoch'])}, no early stopping) not "
+                  "continued: trained again with early stopping", flush=True)
         del state
-    elif state_path.exists():
-        state_path.unlink()
     reset_peak_memory(device)
+    stopped = False
     for epoch in range(start_epoch, args.epochs):
         started = time.time()
         model.train()
@@ -1287,13 +1424,26 @@ def train_fold(
             avg_loss += loss / ppg.shape[0]
             optimizer.step()
         scheduler.step()
+        epoch_loss = avg_loss / max(batch_no, 1)
+        val_loss = float("nan")
+        if early_stopping:
+            val_loss = validation_loss(model, val_x, val_y, val_steps, val_noise, args.train_micro_batch, device)
+            if val_loss < best_val:
+                best_val, best_epoch, bad_epochs = val_loss, epoch + 1, 0
+                best_state = {name: value.detach().cpu().clone() for name, value in model.state_dict().items()}
+            else:
+                bad_epochs += 1
         seconds = time.time() - started
         elapsed += seconds
-        epoch_loss = avg_loss / max(batch_no, 1)
-        history.append({"Epoch": epoch + 1, "Train_Loss": epoch_loss, "LR": learning_rate, "Seconds": seconds})
-        print(f"    epoch {epoch + 1:3d}/{args.epochs}  train loss {epoch_loss:.5f}  lr {learning_rate:.1e}  "
-              f"{seconds:.1f} s", flush=True)
-        if args.checkpoint_every > 0 and (epoch + 1) % args.checkpoint_every == 0 and epoch + 1 < args.epochs:
+        history.append({"Epoch": epoch + 1, "Train_Loss": epoch_loss, "Val_Loss": val_loss, "LR": learning_rate,
+                        "Seconds": seconds})
+        print(f"    epoch {epoch + 1:3d}/{args.epochs}  train loss {epoch_loss:.5f}"
+              + (f"  val loss {val_loss:.5f} (best {best_val:.5f} at {best_epoch}, {bad_epochs}/{patience})"
+                 if early_stopping else "")
+              + f"  lr {learning_rate:.1e}  {seconds:.1f} s", flush=True)
+        stopped = early_stopping and bad_epochs >= patience
+        if (args.checkpoint_every > 0 and (epoch + 1) % args.checkpoint_every == 0 and epoch + 1 < args.epochs
+                and not stopped):
             atomic_torch_save(
                 {
                     "key": key,
@@ -1306,22 +1456,41 @@ def train_fold(
                     "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
                     "history": history,
                     "seconds": elapsed,
+                    "best_val": best_val,
+                    "best_epoch": best_epoch,
+                    "bad_epochs": bad_epochs,
+                    "best_state": best_state,
                 },
                 state_path,
             )
+        if stopped:
+            print(f"    early stopping after epoch {epoch + 1}: no lower validation loss for {patience} epochs; "
+                  f"epoch {best_epoch} restored", flush=True)
+            break
+    if early_stopping and best_state is not None:
+        model.load_state_dict(best_state)
     peak = peak_memory_gb(device)
     atomic_torch_save(model.state_dict(), final_path)
+    info = {
+        "Max_Epochs": int(args.epochs),
+        "Epochs_Trained": int(history[-1]["Epoch"]) if history else 0,
+        "Early_Stopping_Patience": patience if early_stopping else 0,
+        "Early_Stopped": bool(stopped),
+        "Best_Epoch": int(best_epoch) if early_stopping else (int(history[-1]["Epoch"]) if history else 0),
+        "Best_Val_Loss": float(best_val) if early_stopping else float("nan"),
+    }
+    write_json(info_path, info)
     write_json(key_path, key)
     pd.DataFrame(history).to_csv(log_dir / f"{subject}_loss.csv", index=False, encoding="utf-8-sig")
     if state_path.exists():
         state_path.unlink()
     # The optimizer state (two copies of every weight) and the training data
     # are not needed for sampling.
-    del optimizer, scheduler, loader
+    del optimizer, scheduler, loader, best_state
     release_memory(device)
     memory = f", peak GPU memory {peak:.2f} GB" if device.type == "cuda" else ""
     print(f"    training done: {elapsed / 60:.1f} min{memory}", flush=True)
-    return model, elapsed, peak
+    return model, elapsed, peak, {**info, "Training_Key": key}
 
 
 def test_fold(
@@ -1337,6 +1506,7 @@ def test_fold(
     key: dict,
     training_seconds: float,
     training_peak_gb: float,
+    training_info: Optional[dict] = None,
 ) -> dict:
     """Samples every 5 s segment of the held-out subject (batches of 64 in
     recording order, as in the official code) and scores every recording."""
@@ -1401,6 +1571,8 @@ def test_fold(
         "Sample_Micro_Batch": int(args.sample_micro_batch),
         "Training_Key": key,
     }
+    # Epochs and early stopping of the model (this script).
+    summary.update(training_info or {})
     result_dir, prediction_dir = root / "Fold_Results", root / "Predictions"
     result_dir.mkdir(parents=True, exist_ok=True)
     prediction_dir.mkdir(parents=True, exist_ok=True)
@@ -1416,9 +1588,11 @@ def test_fold(
     return summary
 
 
-def fold_done(root: Path, subject: str, sampling: str, key: dict, n_samples: int) -> bool:
+def fold_done(root: Path, subject: str, sampling: str, n_samples: int) -> bool:
+    """A stored result of this sampling (any training: 261020_RespDiff or this
+    script) with the same number of samples; it is kept, not run again."""
     summary = read_json(root / "Fold_Results" / f"{subject}_{sampling}.json")
-    return bool(summary and summary.get("Training_Key") == key and summary.get("N_Samples") == n_samples)
+    return bool(summary and summary.get("N_Samples") == n_samples)
 
 
 # ---------------------------------------------------------------------------
@@ -1442,27 +1616,45 @@ def run_task(args: argparse.Namespace, results_root: Path, dataset_key: str, var
         root = fold_root(results_root, variant, dataset_key)
         print(f"\n{label}, {variant.label}: LOSOCV over {len(subjects)} of {len(all_subjects)} subjects", flush=True)
         for subject in subjects:
+            # A stored result is kept (whatever training made it).
+            todo = [s for s in variant.samplers if not fold_done(root, subject, s, args.n_samples)]
+            if not todo:
+                print(f"[{time.strftime('%H:%M:%S')}] {label} {variant.label} {subject}: result stored, skipped",
+                      flush=True)
+                continue
             train_subjects = [s for s in all_subjects if s != subject]
             train_recordings = [r for s in train_subjects for r in data[s]]
-            train_ppg, train_resp, _ = stack_scaled(train_recordings)
-            key = training_key(args, variant, dataset_key, train_subjects, len(train_ppg))
-            todo = [s for s in variant.samplers if not (args.resume and fold_done(root, subject, s, key, args.n_samples))]
-            if not todo:
-                print(f"[{time.strftime('%H:%M:%S')}] {label} {variant.label} {subject}: already trained and "
-                      "sampled, skipped", flush=True)
-                continue
+            # Training key of 261020_RespDiff (all training segments).
+            legacy_key = training_key(args, variant, dataset_key, train_subjects,
+                                      sum(len(r["ppg"]) for r in train_recordings))
+            val_ppg = val_resp = None
+            if args.patience > 0:
+                fit, val, validation = split_training(dataset_key, subject, train_subjects, data)
+                train_ppg, train_resp, _ = stack_scaled(fit)
+                if val:
+                    val_ppg, val_resp, _ = stack_scaled(val)
+                key = {**legacy_key, "Early_Stopping_Patience": int(args.patience), "Validation": validation,
+                       "Fit_Segments": int(len(train_ppg)),
+                       "Validation_Segments": int(len(val_ppg)) if val_ppg is not None else 0}
+                del fit, val
+                plan = (f"{len(train_ppg)} segments, validation {key['Validation_Segments']} segments "
+                        f"({validation}), at most {args.epochs} epochs, early stopping patience {args.patience}")
+            else:
+                train_ppg, train_resp, _ = stack_scaled(train_recordings)
+                key = legacy_key
+                plan = f"{len(train_ppg)} segments, {args.epochs} epochs"
+            del train_recordings
             model = None
             try:
-                print(f"[{time.strftime('%H:%M:%S')}] {label} {variant.label} {subject}: training on "
-                      f"{len(train_ppg)} segments of {len(train_subjects)} subjects, {args.epochs} epochs",
-                      flush=True)
-                del train_recordings
-                model, seconds, peak = train_fold(args, variant, dataset_key, subject, train_ppg, train_resp, key,
-                                                  root, device)
-                del train_ppg, train_resp
+                print(f"[{time.strftime('%H:%M:%S')}] {label} {variant.label} {subject}: training on {plan} "
+                      f"({len(train_subjects)} training subjects)", flush=True)
+                model, seconds, peak, info = train_fold(args, variant, dataset_key, subject, train_ppg, train_resp,
+                                                        val_ppg, val_resp, key, legacy_key, root, device)
+                used_key = info.pop("Training_Key")
+                del train_ppg, train_resp, val_ppg, val_resp
                 for sampling in todo:
                     summary = test_fold(args, model, variant, dataset_key, subject, data[subject], sampling, root,
-                                        device, key, seconds, peak)
+                                        device, used_key, seconds, peak, info)
                     print(f"[{time.strftime('%H:%M:%S')}] {label} {variant.label} {subject} {summary['Sampling']}: "
                           f"RR MAE {summary['RR_MAE']:.3f} bpm (official code {summary['RR_MAE_Official_Code']:.3f}), "
                           f"waveform MAE {summary['Waveform_MAE']:.3f}, {summary['N_Windows']} windows, "
@@ -1474,7 +1666,8 @@ def run_task(args: argparse.Namespace, results_root: Path, dataset_key: str, var
                 print(f"{label} {variant.label} {subject}: FAILED {exc}", flush=True)
                 if is_fatal_error(exc):
                     write_failed(results_root, dataset_key, variants, failed)
-                    print("Fatal error (memory / CUDA): the worker stops; it continues with --resume.", flush=True)
+                    print("Fatal error (memory / CUDA): stopped; run the script again to continue (stored "
+                          "results and training states are kept).", flush=True)
                     raise SystemExit(3)
             finally:
                 del model
@@ -1549,11 +1742,16 @@ def summarize_results(results_root: Path, dataset_keys: Sequence[str], variants:
             folder = fold_root(results_root, variant, dataset_key) / "Fold_Results"
             if not folder.exists():
                 continue
-            for path in sorted(folder.glob("*.json")):
+            # Only the samplings of this script (stored DDIM 6 results are
+            # left out).
+            for path in sorted(p for s in variant.samplers for p in folder.glob(f"*_{s}.json")):
                 summary = read_json(path)
                 if summary is None:
                     continue
-                summary.pop("Training_Key", None)
+                key = summary.pop("Training_Key", None) or {}
+                patience = int(key.get("Early_Stopping_Patience", 0))
+                summary["Training"] = (f"early stopping (patience {patience})" if patience > 0
+                                       else f"{key.get('Epochs', EPOCHS)} epochs, no early stopping")
                 rows.append(summary)
                 window_path = path.with_name(path.stem + "_windows.csv")
                 if window_path.exists():
@@ -1587,6 +1785,8 @@ def summarize_results(results_root: Path, dataset_keys: Sequence[str], variants:
             "RR_MAE_Official_Code_Mean": float(frame["RR_MAE_Official_Code"].mean()),
             "Waveform_MAE_Mean": float(frame["Waveform_MAE"].mean()),
             "Waveform_MAE_SD": float(frame["Waveform_MAE"].std(ddof=1)),
+            "Training": "; ".join(f"{count} subjects {name}"
+                                  for name, count in frame["Training"].value_counts(sort=False).items()),
             "_order": (DATASET_ORDER.index(next(k for k, c in DATASET_CONFIGS.items() if c["label"] == dataset)),
                        order.get(model, 99), -int(frame["NFE"].iloc[0])),
         })
@@ -1612,7 +1812,7 @@ def summarize_results(results_root: Path, dataset_keys: Sequence[str], variants:
     for _, row in results.iterrows():
         print(f"  {row['Dataset']:9s} {row['Model']:38s} {row['Sampling']:8s} n={row['N_Subjects']:2d}  "
               f"RR {row['RR error (bpm, mean ± SD over subjects)']} bpm (official code "
-              f"{row['RR error, official code (bpm)']}), waveform MAE {row['Waveform MAE']}")
+              f"{row['RR error, official code (bpm)']}), waveform MAE {row['Waveform MAE']}  [{row['Training']}]")
     print(f"\nSaved the summary under: {summary_root}")
 
 
@@ -1638,12 +1838,19 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         help="Segments per RNN micro-batch in sampling (memory). 0 = the whole batch of 64.")
     parser.add_argument("--checkpoint-every", type=int, default=CHECKPOINT_EVERY,
                         help="Save the training state every this many epochs (resume); 0 = never.")
+    parser.add_argument("--patience", type=int, default=PATIENCE,
+                        help="Early stopping: stop when the validation loss has not decreased for this many epochs "
+                             "and use the best epoch; 0 = off (261020_RespDiff: all training segments, the model "
+                             "after the last epoch).")
     parser.add_argument("--resume", action="store_true", default=True,
-                        help="Always on: reuse finished folds and trained models; continue interrupted training.")
+                        help="Always on: stored results are kept, trained models reused, stopped training continued.")
     parser.add_argument("--summary-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Read and check the data only.")
     parser.add_argument("--single-process", action="store_true",
-                        help="Train every dataset and model in this process.")
+                        help="Always on unless --worker-processes: every dataset in this process.")
+    parser.add_argument("--worker-processes", action="store_true",
+                        help="Every dataset in its own worker process (261020_RespDiff); every worker loads torch "
+                             "again, which needs a large Windows page file (else WinError 1455).")
     parser.add_argument("--child-task", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-require-cuda", action="store_true")
     parser.add_argument("--force-cpu", action="store_true")
@@ -1691,7 +1898,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         summarize_results(results_root, dataset_keys, variants)
         return
 
-    if not args.child_task and not args.single_process:
+    if not args.child_task and args.worker_processes and not args.single_process:
         incomplete = run_tasks_in_subprocesses(args, results_root, dataset_keys, variants)
         if incomplete:
             print("\nIncomplete tasks: " + "; ".join(incomplete))
@@ -1702,20 +1909,31 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if not use_cuda and not args.no_require_cuda:
         raise RuntimeError("CUDA is not available (use --no-require-cuda to run on the CPU)")
     device = torch.device("cuda" if use_cuda else "cpu")
-    print(f"RespDiff ({CODE_NAME}): device={device}, {args.epochs} epochs, {args.n_samples} samples per segment",
-          flush=True)
+    print(f"RespDiff (261028_RespDiff_v3): device={device}, "
+          + (f"at most {args.epochs} epochs, early stopping patience {args.patience}" if args.patience > 0
+             else f"{args.epochs} epochs, no early stopping")
+          + f", {', '.join(SAMPLERS[s][0] + ' ' + str(SAMPLERS[s][1]) for v in variants for s in v.samplers)}, "
+          f"{args.n_samples} samples per segment; order "
+          + " -> ".join(DATASET_CONFIGS[k]["label"] for k in dataset_keys), flush=True)
+    incomplete = []
     for dataset_key in dataset_keys:
         try:
             run_task(args, results_root, dataset_key, variants, device)
         except SystemExit:
             raise
         except Exception as exc:
+            label = DATASET_CONFIGS[dataset_key]["label"]
             if is_fatal_error(exc):
-                print(f"{DATASET_CONFIGS[dataset_key]['label']}: fatal error while reading ({exc}); the worker "
-                      "stops", flush=True)
+                print(f"{label}: fatal error while reading ({exc}); stopped", flush=True)
                 raise SystemExit(3)
-            raise
+            if args.child_task:
+                raise
+            # As with the worker processes: the next dataset still runs.
+            print(f"{label}: FAILED ({exc!r}); continuing with the next dataset", flush=True)
+            incomplete.append(label)
     if not args.child_task:
+        if incomplete:
+            print("\nIncomplete datasets: " + "; ".join(incomplete))
         summarize_results(results_root, dataset_keys, variants)
 
 
