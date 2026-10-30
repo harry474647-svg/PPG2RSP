@@ -3,7 +3,9 @@ r"""261030_StemFusion_Training_Dynamics: training dynamics of Stem Fusion O
 curves and models, 10 s windows: convergence, stability of the training and
 the gap between training and validation. CapnoBase from
 261007_RRWaveNet_Ensemble_NoEvent, BIDMC and STEAM2 from
-261013_RRWaveNet_Adult_SubjectVal_WD. Nothing is trained.
+261013_RRWaveNet_Adult_SubjectVal_WD, all in one run. The stored models are
+used; only a model without stem fusion that is stored nowhere is trained
+(see "One run for everything").
 
 Models (LOSOCV fold = held-out subject; 10 s non-overlapping windows)
 ---------------------------------------------------------------------
@@ -18,6 +20,24 @@ Models (LOSOCV fold = held-out subject; 10 s non-overlapping windows)
   261013 settings of the fold (its validation subjects, the selected weight
   decay, the seed of member m0); a model trained with another weight decay
   is not used.
+
+One run for everything
+----------------------
+One run covers CapnoBase (261007) and BIDMC and STEAM2 (261013). The X models
+are looked for in the 261007 results (CapnoBase) or the
+261028_Stem_ablation_noise_v1 results (BIDMC, STEAM2), then in
+<output root>\Trained_no_stem_fusion\. An X model found in neither is
+trained here first, as its script trains it (run_member of the 261007 /
+261013 file: the fold's training and validation split, the seed of the
+member, the selected weight decay for 261013, the epochs of the fold's O
+model, early stopping as there), stored in <output root>\
+Trained_no_stem_fusion\ and then analysed with the others; the next run
+reuses it (an interrupted training continues). The result folders of 261007,
+261013 and 261028_Stem_ablation_noise_v1 are only read.
+--no-train-missing leaves such folds without X. The number of X models to
+train is printed per dataset before anything is trained. Training runs on
+the CPU unless --use-gpu (much faster when the GPU is free).
+
 O vs X is paired by fold on member m0 (same seed, training and validation
 data and weight decay) for every dataset; for CapnoBase also on the mean of
 members m0-m2 of each (pair metrics per member pair m_k / m_k). Every model
@@ -113,7 +133,9 @@ Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261030_StemFusion_Training
                          seed_variability_tests.csv
   fold_variability.csv   SD and IQR over folds, Pitman-Morgan test
   early_stopping.csv     folds stopped early per dataset and model
-  coverage.csv           folds and models found / left out (with the reason)
+  coverage.csv           folds and models found (and where) / left out (with
+                         the reason)
+  Trained_no_stem_fusion\  X models trained here (only those stored nowhere)
   261030_StemFusion_Training_Dynamics.xlsx   all tables
   Figures\<Dataset>_learning_curves.png      median validation loss and gap
                                              over epochs (O vs X, m0)
@@ -128,13 +150,18 @@ The defaults keep out of the way of another training on the same computer:
 * lower process priority (below normal) and 2 CPU threads (--threads), so
   the training keeps the computer first; --normal-priority to keep normal;
 * free memory check: before the raw data of a dataset are read (only for
-  the restored-model gap, a few GB of RAM), the free RAM is checked; below
-  4 GB (--min-free-ram-gb) the data are not read and that dataset gets the
-  learning-curve measures only (listed at the end; --min-free-ram-gb 0 reads
-  anyway). The datasets are read one at a time and released after use;
+  the restored-model gap or to train a missing X model, a few GB of RAM),
+  the free RAM is checked; below 4 GB (--min-free-ram-gb) the data are not
+  read and that dataset gets the learning-curve measures only (listed at the
+  end; --min-free-ram-gb 0 reads anyway). The datasets are read one at a
+  time and released after use;
 * lightest run: --no-restored-gap reads only the learning curves and fold
-  summaries (no raw data, no model reloading), everything except the
-  restored-model gap (Gap_Loss, Gap_Loss_Pct, Gap_PCC);
+  summaries (no model reloading), everything except the restored-model gap
+  (Gap_Loss, Gap_Loss_Pct, Gap_PCC); the raw data are then read only when an
+  X model has to be trained (with --no-train-missing never);
+* training missing X models (see "One run for everything") uses the CPU by
+  default, below normal priority, so it is slow but leaves the GPU to the
+  other training; with the GPU free, --use-gpu is much faster;
 * the result folders of 261007, 261013 and 261028_Stem_ablation_noise_v1 are
   only read; everything is written under --output-root, so nothing is shared
   with a training writing its own results (RespDiff: 261020_RespDiff_v2).
@@ -151,7 +178,8 @@ model are used), or give their paths with --backbone-261007 /
   python 261030_StemFusion_Training_Dynamics.py --no-restored-gap  (lightest)
 Options: --results-root-261007 / --results-root-261013 / --results-root-noise,
   --output-root, --datasets capnobase bidmc steam2, --use-gpu, --gpu,
-  --threads, --min-free-ram-gb, --normal-priority, and the data path options of
+  --threads, --min-free-ram-gb, --normal-priority, --no-train-missing,
+  --train-min-epochs, --train-patience, and the data path options of
   261007 / 261013.
 """
 
@@ -203,6 +231,9 @@ GRID_COLOR = "#e4e3df"
 # analysis and the free RAM needed before the raw data of a dataset are read.
 DEFAULT_THREADS = 2
 MIN_FREE_RAM_GB = 4.0
+# Models without stem fusion stored nowhere are trained into this folder of
+# the output root (and reused from there by the next run).
+TRAINED_FOLDER = "Trained_no_stem_fusion"
 
 LATE_PHASE_FRACTION = 0.20
 LATE_PHASE_MIN_EPOCHS = 5
@@ -436,51 +467,119 @@ def member_files(backbone, root: Path, subject: str, member: int) -> Dict[str, P
     }
 
 
-def fold_models(backbone, source: str, results_root: Path, noise_root: Path, spec, dataset_key: str,
-                subject: str) -> Tuple[List[dict], List[dict]]:
+def fold_models(backbone, source: str, results_root: Path, x_roots: Sequence[Tuple[str, Path]], spec,
+                dataset_key: str, subject: str) -> Tuple[List[dict], List[dict]]:
     """The stored models of a fold (model type, member, files, summary,
-    weight decay) and the models left out with the reason."""
+    weight decay, where found) and the models left out with the reason. X is
+    looked for in x_roots in that order; an X model found nowhere is
+    trainable (Trainable=True, with the weight decay of the fold)."""
     found, missing = [], []
     weight_decay = None
     if source == "261007":
-        roots = {MODEL_O: backbone.condition_root(results_root, O_VARIANT, spec, dataset_key),
-                 MODEL_X: backbone.condition_root(results_root, X_VARIANT, spec, dataset_key)}
-        members = {MODEL_O: range(MEMBERS), MODEL_X: range(MEMBERS)}
+        o_root = backbone.condition_root(results_root, O_VARIANT, spec, dataset_key)
+        x_members = list(range(MEMBERS))
     else:
         selection = backbone.stored_selection(results_root, list(backbone.VARIANTS.values()), spec, dataset_key,
                                               subject)
         if selection is None:
-            return [], [{"Model_Type": MODEL_O, "Member": "", "Reason": "no 261013 weight decay selection"}]
+            return [], [{"Model_Type": MODEL_O, "Member": "", "Reason": "no 261013 weight decay selection",
+                         "Trainable": False}]
         record, variant = selection
         weight_decay = float(record["Selected_Weight_Decay"])
-        roots = {MODEL_O: backbone.condition_root(results_root, variant.name, spec, dataset_key),
-                 MODEL_X: backbone.condition_root(noise_root, X_VARIANT, spec, dataset_key)}
-        members = {MODEL_O: range(MEMBERS), MODEL_X: [PAIR_MEMBER]}
-    for model_type in (MODEL_O, MODEL_X):
-        for member in members[model_type]:
-            files = member_files(backbone, roots[model_type], subject, member)
+        o_root = backbone.condition_root(results_root, variant.name, spec, dataset_key)
+        x_members = [PAIR_MEMBER]
+    for member in range(MEMBERS):
+        files = member_files(backbone, o_root, subject, member)
+        summary = read_json(files["summary"])
+        if summary is None or not files["curve"].exists():
+            missing.append({"Model_Type": MODEL_O, "Member": member, "Trainable": False,
+                            "Reason": "fold summary or learning curve not stored"})
+            continue
+        found.append({"Model_Type": MODEL_O, "Member": member, "Files": files, "Summary": summary,
+                      "Weight_Decay": weight_decay, "Source": source})
+    for member in x_members:
+        reasons = []
+        for name, root in x_roots:
+            files = member_files(backbone, backbone.condition_root(root, X_VARIANT, spec, dataset_key), subject, member)
             summary = read_json(files["summary"])
-            reason = ""
             if summary is None or not files["curve"].exists():
-                reason = "fold summary or learning curve not stored"
-            elif model_type == MODEL_X and weight_decay is not None and not str(summary.get("Model", "")).endswith(
-                    "_wd{:g}_subjval".format(weight_decay)):
-                reason = f"not trained with the weight decay 261013 selected in the fold ({weight_decay:g})"
-            if reason:
-                missing.append({"Model_Type": model_type, "Member": member, "Reason": reason})
+                reasons.append(f"not in {name}")
                 continue
-            found.append({"Model_Type": model_type, "Member": member, "Files": files, "Summary": summary,
-                          "Weight_Decay": weight_decay})
+            if weight_decay is not None and not str(summary.get("Model", "")).endswith(
+                    "_wd{:g}_subjval".format(weight_decay)):
+                reasons.append(f"{name}: trained with another weight decay than the selected {weight_decay:g}")
+                continue
+            found.append({"Model_Type": MODEL_X, "Member": member, "Files": files, "Summary": summary,
+                          "Weight_Decay": weight_decay, "Source": name})
+            break
+        else:
+            missing.append({"Model_Type": MODEL_X, "Member": member, "Trainable": True,
+                            "Weight_Decay": weight_decay, "Reason": "; ".join(reasons)})
     return found, missing
+
+
+def x_variant(backbone, source: str, weight_decay: Optional[float]):
+    """The network without stem fusion as its script trains it: 261007 its
+    no_stem_fusion ablation; 261013 the full model's settings with the
+    weight decay selected in the fold (as 261028_Stem_ablation_noise_v1)."""
+    if source == "261007":
+        return backbone.VARIANTS[X_VARIANT]
+    return backbone.Variant(X_VARIANT, "Without stem fusion, weight decay {:g}".format(weight_decay),
+                            backbone.ModelOptions(stem_fusion="none", weight_decay=float(weight_decay)),
+                            backbone.DEFAULT_EPOCHS)
+
+
+def train_missing(backbone, source: str, spec, dataset_key: str, subject_data: Dict[str, dict],
+                  plan: Dict[str, Tuple[List[dict], List[dict]]], trained_root: Path, args: argparse.Namespace,
+                  device: torch.device) -> List[str]:
+    """Train the X models of the plan found nowhere, with the training of
+    their script (run_member of 261007 / 261013: the fold's training and
+    validation split, the seed of the member, the epochs of the fold's O
+    model) into trained_root. Returns the folds trained."""
+    label = backbone.DATASET_CONFIGS[dataset_key]["label"]
+    jobs = [(subject, item) for subject, (_, missing) in plan.items() for item in missing if item["Trainable"]]
+    if not jobs:
+        return []
+    print(f"[{label}] {len(jobs)} model(s) without stem fusion are stored nowhere: training them with the "
+          f"{source} settings on the {device.type.upper()} into {trained_root} (reused by the next run)",
+          flush=True)
+    all_subjects = sorted(subject_data)
+    done = []
+    for subject, item in jobs:
+        if subject not in subject_data:
+            print(f"[{label}] {subject}: not in the data read, not trained")
+            continue
+        o_summary = next((m["Summary"] for m in plan[subject][0]
+                          if m["Model_Type"] == MODEL_O and m["Member"] == PAIR_MEMBER), {})
+        epochs = int(o_summary.get("Max_Epochs", backbone.DEFAULT_EPOCHS))
+        train_args = argparse.Namespace(
+            epoch_cap=epochs, resume=True, save_features=False, batch_size=backbone.BATCH_SIZE,
+            min_epochs=backbone.MIN_EPOCHS if args.train_min_epochs is None else args.train_min_epochs,
+            patience=backbone.PATIENCE if args.train_patience is None else args.train_patience,
+        )
+        print(f"[{label}] {subject}: training {MODEL_X} m{item['Member']}"
+              + (f" (weight decay {item['Weight_Decay']:g})" if item["Weight_Decay"] is not None else "")
+              + f", up to {epochs} epochs ...", flush=True)
+        try:
+            backbone.run_member(train_args, trained_root, x_variant(backbone, source, item["Weight_Decay"]), spec,
+                                dataset_key, subject_data, all_subjects, subject, item["Member"], device)
+            done.append(subject)
+        except Exception as exc:
+            print(f"[{label}] {subject}: training failed ({exc})")
+        finally:
+            backbone.release_memory(device)
+    return sorted(set(done))
 
 
 def collect(backbones: Dict[str, object], roots: Dict[str, Path], dataset_keys: Sequence[str],
             args: argparse.Namespace, device: torch.device):
-    """Measures of every stored model, the curves (for the figures) and the
-    coverage."""
+    """Measures of every model (the missing X models trained first), the
+    curves (for the figures), the coverage and the restored-gap note of every
+    dataset."""
     rows, coverage, curves = [], [], []
     gap_notes: Dict[str, str] = {}
     x_network = backbones["261007"].VARIANTS[X_VARIANT]
+    trained_root = Path(args.output_root) / TRAINED_FOLDER
     for dataset_key in dataset_keys:
         source = DATASET_SOURCES[dataset_key]
         backbone = backbones[source]
@@ -491,50 +590,67 @@ def collect(backbones: Dict[str, object], roots: Dict[str, Path], dataset_keys: 
             listing = backbone.condition_root(results_root, O_VARIANT, spec, dataset_key) / "Fold_Summaries"
             subjects = sorted({p.name[: -len("_m0_summary.json")] for p in listing.glob("*_m0_summary.json")})
             o_network = backbone.VARIANTS[O_VARIANT]
+            x_roots = [("261007", results_root), ("trained here", trained_root)]
         else:
             listing = results_root / "WD_Selection" / f"{spec.order:02d}_{spec.name}" / label
             subjects = sorted(p.name[: -len("_selection.json")] for p in listing.glob("*_selection.json"))
             o_network = next(iter(backbone.VARIANTS.values()))
+            x_roots = [("261028_Stem_ablation_noise_v1", roots["noise"]), ("trained here", trained_root)]
         if args.subjects:
             subjects = [s for s in subjects if s in set(args.subjects)]
         if not subjects:
             print(f"{label}: no stored folds under {listing}")
             continue
+        plan = {s: fold_models(backbone, source, results_root, x_roots, spec, dataset_key, s) for s in subjects}
+        to_train = sum(item["Trainable"] for _, missing in plan.values() for item in missing)
+        train = bool(to_train) and not args.no_train_missing
+        print(f"[{label}] {len(subjects)} folds; models without stem fusion stored nowhere: {to_train}"
+              + (" (--no-train-missing: left out)" if to_train and not train else ""), flush=True)
+
+        # Raw data: for the restored-model gap and for training missing models.
         subject_data, gap_note = None, "off (--no-restored-gap)" if args.no_restored_gap else ""
-        if not args.no_restored_gap:
+        if not args.no_restored_gap or train:
             free = free_ram_gb()
             if free is not None and free < args.min_free_ram_gb:
                 gap_note = (f"not computed: {free:.1f} GB RAM free, below {args.min_free_ram_gb:g} GB "
                             "(--min-free-ram-gb)")
-                print(f"[{label}] only {free:.1f} GB RAM free: the raw data are not read, learning-curve "
-                      f"measures only (--min-free-ram-gb 0 reads anyway)", flush=True)
+                print(f"[{label}] only {free:.1f} GB RAM free: the raw data are not read (no restored-model gap, "
+                      f"no training of missing models; --min-free-ram-gb 0 reads anyway)", flush=True)
             else:
-                print(f"[{label}] reading the data with the {source} code (for the restored-model gap"
-                      + (f"; {free:.1f} GB RAM free" if free is not None else "") + ") ...", flush=True)
+                print(f"[{label}] reading the data with the {source} code"
+                      + (f" ({free:.1f} GB RAM free)" if free is not None else "") + " ...", flush=True)
                 try:
                     subject_data = backbone.load_dataset(dataset_key, spec)
                 except Exception as exc:
                     gap_note = f"not computed: the data could not be read ({exc})"
                     print(f"[{label}] the data could not be read ({exc}); learning-curve measures only")
+        if train and subject_data is not None:
+            for subject in train_missing(backbone, source, spec, dataset_key, subject_data, plan, trained_root,
+                                         args, device):
+                plan[subject] = fold_models(backbone, source, results_root, x_roots, spec, dataset_key, subject)
+        if args.no_restored_gap:
+            subject_data = None
         gap_notes[label] = gap_note or "computed"
         model_o = o_network.options.build().to(device)
         model_x = x_network.options.build().to(device)
         for subject in subjects:
-            models, missing = fold_models(backbone, source, results_root, roots["noise"], spec, dataset_key, subject)
+            models, missing = plan[subject]
             for item in missing:
-                coverage.append({"Dataset": label, "Subject": subject, "Found": False, **item})
+                coverage.append({"Dataset": label, "Subject": subject, "Found": False, "Source": "",
+                                 **{k: v for k, v in item.items() if k != "Weight_Decay"}})
             loaders = None
             for item in models:
                 curve = read_curve(item["Files"]["curve"])
                 summary = item["Summary"]
                 coverage.append({"Dataset": label, "Subject": subject, "Found": curve is not None,
                                  "Model_Type": item["Model_Type"], "Member": item["Member"],
+                                 "Source": item["Source"], "Trainable": False,
                                  "Reason": "" if curve is not None else "learning curve unreadable"})
                 if curve is None:
                     continue
                 max_epochs = int(summary.get("Max_Epochs", backbone.DEFAULT_EPOCHS))
                 row = {"Dataset": label, "Subject": subject, "Model_Type": item["Model_Type"],
-                       "Member": item["Member"], "Weight_Decay": item["Weight_Decay"],
+                       "Member": item["Member"], "Source": item["Source"], "Weight_Decay": item["Weight_Decay"],
                        "Model_Key": summary.get("Model", ""), **curve_measures(curve, max_epochs)}
                 if subject_data is None:
                     row["Gap_Note"] = gap_notes[label]
@@ -940,7 +1056,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--datasets", nargs="+", choices=list(DATASET_ORDER), default=list(DATASET_ORDER))
     parser.add_argument("--subjects", nargs="+", default=None, help="Only these folds (quick tests).")
     parser.add_argument("--no-restored-gap", action="store_true",
-                        help="Learning curves only (no data reading, no model reloading).")
+                        help="Learning curves only (no model reloading; the raw data are read only to train "
+                             "missing models).")
+    parser.add_argument("--no-train-missing", action="store_true",
+                        help="Do not train the models without stem fusion that are stored nowhere (their folds "
+                             "are compared without them).")
+    parser.add_argument("--train-min-epochs", type=int, default=None,
+                        help="Minimum epochs when training a missing model (default: that of 261007 / 261013).")
+    parser.add_argument("--train-patience", type=int, default=None,
+                        help="Early-stopping patience when training a missing model (default: that of "
+                             "261007 / 261013).")
     parser.add_argument("--batch-size", type=int, default=48)
     parser.add_argument("--use-gpu", action="store_true",
                         help="Use the GPU for the restored-model gap (default: CPU, so that a training on the "
