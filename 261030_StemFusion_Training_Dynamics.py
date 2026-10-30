@@ -119,20 +119,47 @@ Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261030_StemFusion_Training
                                              over epochs (O vs X, m0)
   Figures\<Dataset>_<group>.png              box plots per measure group
 
-Run next to 261007_RRWaveNet_Ensemble_NoEvent.py and
+Running next to a training on the GPU (e.g. RespDiff)
+-----------------------------------------------------
+The defaults keep out of the way of another training on the same computer:
+* CPU only: the GPU is not touched (no second process on it, no CUDA
+  libraries loaded for it); the reloaded networks have 8,729-9,377
+  parameters, so the CPU is enough. --use-gpu uses the GPU;
+* lower process priority (below normal) and 2 CPU threads (--threads), so
+  the training keeps the computer first; --normal-priority to keep normal;
+* free memory check: before the raw data of a dataset are read (only for
+  the restored-model gap, a few GB of RAM), the free RAM is checked; below
+  4 GB (--min-free-ram-gb) the data are not read and that dataset gets the
+  learning-curve measures only (listed at the end; --min-free-ram-gb 0 reads
+  anyway). The datasets are read one at a time and released after use;
+* lightest run: --no-restored-gap reads only the learning curves and fold
+  summaries (no raw data, no model reloading), everything except the
+  restored-model gap (Gap_Loss, Gap_Loss_Pct, Gap_PCC);
+* the result folders of 261007, 261013 and 261028_Stem_ablation_noise_v1 are
+  only read; everything is written under --output-root, so nothing is shared
+  with a training writing its own results (RespDiff: 261020_RespDiff_v2).
+Start it in its own console (a new Spyder console or Anaconda Prompt), not in
+the console of the training.
+
+Run
+---
+Put this file in the folder of 261007_RRWaveNet_Ensemble_NoEvent.py and
 261013_RRWaveNet_Adult_SubjectVal_WD.py (their data paths, reading, split and
-model are used; Spyder: just run the file):
-  python 261030_StemFusion_Training_Dynamics.py
+model are used), or give their paths with --backbone-261007 /
+--backbone-261013. Spyder: run the file in a new console.
+  python 261030_StemFusion_Training_Dynamics.py                    (all measures)
+  python 261030_StemFusion_Training_Dynamics.py --no-restored-gap  (lightest)
 Options: --results-root-261007 / --results-root-261013 / --results-root-noise,
-  --output-root, --datasets capnobase bidmc steam2, --no-restored-gap (learning
-  curves only, no data or models needed), --force-cpu, --gpu, and the data
-  path options of 261007 / 261013.
+  --output-root, --datasets capnobase bidmc steam2, --use-gpu, --gpu,
+  --threads, --min-free-ram-gb, --normal-priority, and the data path options of
+  261007 / 261013.
 """
 
 import argparse
 import importlib.util
 import json
 import math
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -171,6 +198,11 @@ MODEL_COLORS = {MODEL_X: "#e8968c", MODEL_O: "#5b8db8"}
 TEXT_PRIMARY = "#0b0b0b"
 TEXT_SECONDARY = "#52514e"
 GRID_COLOR = "#e4e3df"
+
+# Sharing the computer with a training on the GPU: CPU threads of this
+# analysis and the free RAM needed before the raw data of a dataset are read.
+DEFAULT_THREADS = 2
+MIN_FREE_RAM_GB = 4.0
 
 LATE_PHASE_FRACTION = 0.20
 LATE_PHASE_MIN_EPOCHS = 5
@@ -222,6 +254,33 @@ def read_json(path: Path) -> Optional[dict]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def free_ram_gb() -> Optional[float]:
+    """Free (available) RAM in GB, None if it cannot be read."""
+    try:
+        import psutil
+
+        return psutil.virtual_memory().available / 2 ** 30
+    except Exception:
+        return None
+
+
+def lower_priority() -> str:
+    """Run this process below normal priority, so that a training running at
+    the same time keeps the CPU first."""
+    try:
+        import psutil
+
+        process = psutil.Process()
+        process.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS if os.name == "nt" else 10)
+        return "below normal"
+    except Exception:
+        try:
+            os.nice(10)
+            return "below normal"
+        except Exception:
+            return "normal (could not be lowered)"
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +479,7 @@ def collect(backbones: Dict[str, object], roots: Dict[str, Path], dataset_keys: 
     """Measures of every stored model, the curves (for the figures) and the
     coverage."""
     rows, coverage, curves = [], [], []
+    gap_notes: Dict[str, str] = {}
     x_network = backbones["261007"].VARIANTS[X_VARIANT]
     for dataset_key in dataset_keys:
         source = DATASET_SOURCES[dataset_key]
@@ -440,13 +500,23 @@ def collect(backbones: Dict[str, object], roots: Dict[str, Path], dataset_keys: 
         if not subjects:
             print(f"{label}: no stored folds under {listing}")
             continue
-        subject_data = None
+        subject_data, gap_note = None, "off (--no-restored-gap)" if args.no_restored_gap else ""
         if not args.no_restored_gap:
-            print(f"[{label}] reading the data with the {source} code (for the restored-model gap) ...", flush=True)
-            try:
-                subject_data = backbone.load_dataset(dataset_key, spec)
-            except Exception as exc:
-                print(f"[{label}] the data could not be read ({exc}); learning-curve measures only")
+            free = free_ram_gb()
+            if free is not None and free < args.min_free_ram_gb:
+                gap_note = (f"not computed: {free:.1f} GB RAM free, below {args.min_free_ram_gb:g} GB "
+                            "(--min-free-ram-gb)")
+                print(f"[{label}] only {free:.1f} GB RAM free: the raw data are not read, learning-curve "
+                      f"measures only (--min-free-ram-gb 0 reads anyway)", flush=True)
+            else:
+                print(f"[{label}] reading the data with the {source} code (for the restored-model gap"
+                      + (f"; {free:.1f} GB RAM free" if free is not None else "") + ") ...", flush=True)
+                try:
+                    subject_data = backbone.load_dataset(dataset_key, spec)
+                except Exception as exc:
+                    gap_note = f"not computed: the data could not be read ({exc})"
+                    print(f"[{label}] the data could not be read ({exc}); learning-curve measures only")
+        gap_notes[label] = gap_note or "computed"
         model_o = o_network.options.build().to(device)
         model_x = x_network.options.build().to(device)
         for subject in subjects:
@@ -466,7 +536,9 @@ def collect(backbones: Dict[str, object], roots: Dict[str, Path], dataset_keys: 
                 row = {"Dataset": label, "Subject": subject, "Model_Type": item["Model_Type"],
                        "Member": item["Member"], "Weight_Decay": item["Weight_Decay"],
                        "Model_Key": summary.get("Model", ""), **curve_measures(curve, max_epochs)}
-                if subject_data is not None:
+                if subject_data is None:
+                    row["Gap_Note"] = gap_notes[label]
+                else:
                     if not item["Files"]["checkpoint"].exists():
                         row["Gap_Note"] = "checkpoint not stored"
                     elif subject not in subject_data:
@@ -496,7 +568,7 @@ def collect(backbones: Dict[str, object], roots: Dict[str, Path], dataset_keys: 
             del loaders
         del subject_data, model_o, model_x
         backbone.release_memory(device)
-    return pd.DataFrame(rows), pd.DataFrame(coverage), curves
+    return pd.DataFrame(rows), pd.DataFrame(coverage), curves, gap_notes
 
 
 def add_pair_measures(models: pd.DataFrame, curves: List[dict]) -> pd.DataFrame:
@@ -870,9 +942,18 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--no-restored-gap", action="store_true",
                         help="Learning curves only (no data reading, no model reloading).")
     parser.add_argument("--batch-size", type=int, default=48)
-    parser.add_argument("--gpu", type=int, default=0)
-    parser.add_argument("--force-cpu", action="store_true")
-    parser.add_argument("--threads", type=int, default=None)
+    parser.add_argument("--use-gpu", action="store_true",
+                        help="Use the GPU for the restored-model gap (default: CPU, so that a training on the "
+                             "GPU, e.g. RespDiff, is not disturbed).")
+    parser.add_argument("--gpu", type=int, default=0, help="GPU index with --use-gpu.")
+    parser.add_argument("--force-cpu", action="store_true", help="CPU only (the default; kept for older commands).")
+    parser.add_argument("--threads", type=int, default=DEFAULT_THREADS,
+                        help="CPU threads of this analysis (default %(default)s).")
+    parser.add_argument("--min-free-ram-gb", type=float, default=MIN_FREE_RAM_GB,
+                        help="Free RAM needed before the raw data of a dataset are read for the restored-model "
+                             "gap; with less, that dataset gets the learning-curve measures only (0 = no check).")
+    parser.add_argument("--normal-priority", action="store_true",
+                        help="Keep normal process priority (default: below normal).")
     parser.add_argument("--capnobase-path", type=Path, default=None)
     parser.add_argument("--bidmc-path", type=Path, default=None)
     parser.add_argument("--steam2-ppg-dir", type=Path, default=None)
@@ -898,16 +979,27 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             configs["steam2"]["rsp_dir"] = str(args.steam2_rsp_dir)
     if args.threads:
         torch.set_num_threads(int(args.threads))
+    priority = "normal" if args.normal_priority else lower_priority()
     roots = {"261007": Path(args.results_root_261007), "261013": Path(args.results_root_261013),
              "noise": Path(args.results_root_noise)}
-    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() and not args.force_cpu else "cpu")
+    # The GPU is asked for only with --use-gpu (CPU by default, next to a
+    # training on the GPU).
+    device = torch.device("cpu")
+    if args.use_gpu and not args.force_cpu:
+        if torch.cuda.is_available():
+            device = torch.device(f"cuda:{args.gpu}")
+        else:
+            print("--use-gpu: no CUDA GPU found, the CPU is used")
     dataset_keys = [key for key in DATASET_ORDER if key in args.datasets]
     print(f"Results: CapnoBase {roots['261007']} (261007, O full / X no_stem_fusion, m0-m2)\n"
           f"         BIDMC, STEAM2 {roots['261013']} (261013, O = selected weight decay, m0-m2)\n"
           f"         BIDMC, STEAM2 X {roots['noise']} (261028_Stem_ablation_noise_v1, m0)\n"
-          f"Restored-model gap: {'off' if args.no_restored_gap else f'on ({device})'}", flush=True)
+          f"Output:  {Path(args.output_root)} (the result folders above are only read)\n"
+          f"Device {device}, {args.threads} CPU threads, priority {priority}; restored-model gap: "
+          + ("off (--no-restored-gap)" if args.no_restored_gap
+             else f"on (raw data read when at least {args.min_free_ram_gb:g} GB RAM is free)"), flush=True)
 
-    models, coverage, curves = collect(backbones, roots, dataset_keys, args, device)
+    models, coverage, curves, gap_notes = collect(backbones, roots, dataset_keys, args, device)
     output_root = Path(args.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     coverage.to_csv(output_root / "coverage.csv", index=False, encoding="utf-8-sig")
@@ -949,6 +1041,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         print(f"  {row['Dataset']:<10s} {row['Group']:<12s} {row['Verdict']:<14s}"
               + (f" O better: {row['O_Better']}" if row["O_Better"] else "")
               + (f" X better: {row['X_Better']}" if row["X_Better"] else ""))
+    print("\nRestored-model gap per dataset: "
+          + "; ".join(f"{dataset} {note}" for dataset, note in gap_notes.items()))
     print(f"\nSaved under: {output_root}")
 
 
