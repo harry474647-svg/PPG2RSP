@@ -46,11 +46,17 @@ What is drawn
 * One figure per recording: rows of 60 s (--panel-sec), GT in near-black
   (thick, underneath), RespDiff blue, deep corr-encoder orange, RRWaveNet
   green (the colours of 261030), one legend for the figure.
-* Scale: the models are scaled per window in training (RespDiff 5 s,
-  corr-encoder 9.6 s, RRWaveNet 10 s), so their values are on no common
-  scale; every waveform is z-scored (mean 0, SD 1) in each 60 s row
-  (--normalize panel, default) or over the whole recording (--normalize
-  recording). No filter is applied; the waveforms keep their own shape.
+* Scale: the targets of all three models were min-max scaled per window in
+  training (RespDiff 5 s to [0, 1], corr-encoder 9.6 s, RRWaveNet 10 s to
+  [-1, 1]), so their values are on no common scale. Every waveform (GT and
+  each model) is min-max scaled to [-1, 1] on its own (--scale minmax,
+  default; its smallest value -> -1, its largest -> +1) or z-scored (--scale
+  zscore: mean 0, SD 1), in each 60 s row (--scale-span row, default) or over
+  the whole recording (--scale-span recording). Min-max uses the single
+  largest and smallest sample, so one spike (e.g. a movement artifact of the
+  GT) shrinks the rest of that waveform in its row; z-score is less affected.
+  Scaling changes neither the timing nor the shape, nor the r in the legend.
+  No filter is applied; the waveforms keep their own shape.
 * Legend: per model the Pearson r with the GT over the recording (on the
   samples where both exist) and the share of the GT time with output.
 * Note for RRWaveNet: on CapnoBase its target is a sine wave of the
@@ -692,6 +698,19 @@ GT_NAMES = {"capnobase": "capnogram", "bidmc": "impedance pneumogram", "steam2":
 PANEL_SEC = 60.0
 
 
+def minmax(values: np.ndarray) -> np.ndarray:
+    """Smallest finite sample -> -1, largest -> +1; NaN stays NaN (all NaN
+    when fewer than 3 samples or no variation)."""
+    x = np.asarray(values, dtype=float)
+    out = np.full(x.shape, np.nan)
+    keep = np.isfinite(x)
+    if keep.sum() >= 3:
+        low, high = float(np.min(x[keep])), float(np.max(x[keep]))
+        if high - low > 1e-12:
+            out[keep] = 2.0 * (x[keep] - low) / (high - low) - 1.0
+    return out
+
+
 def zscore(values: np.ndarray) -> np.ndarray:
     """(x - mean) / SD over the finite samples; NaN stays NaN (all NaN when
     fewer than 3 samples or no variation)."""
@@ -720,15 +739,16 @@ def style_axis(axis) -> None:
 
 
 def overlay_figure(values: Dict[str, np.ndarray], labels: Dict[str, str], title: str, subtitle: str,
-                   panel_sec: float, normalize: str):
+                   panel_sec: float, scale: str, span: str):
     """Rows of panel_sec seconds; the GT underneath, then the models."""
     length = len(values["GT"])
     total_sec = length / FS
     # A remainder under 1 s (e.g. 480.03 s) is drawn in the last row, not in a row of its own.
     panels = max(1, int(math.ceil((total_sec - 1.0) / panel_sec)))
     keys = ["GT"] + [m for m in MODELS if m in values]
-    if normalize == "recording":
-        values = {k: zscore(v) for k, v in values.items()}
+    scaler = minmax if scale == "minmax" else zscore
+    if span == "recording":
+        values = {k: scaler(v) for k, v in values.items()}
     fig, axes = plt.subplots(panels, 1, figsize=(15.0, 1.3 + 1.9 * panels), squeeze=False)
     for row, axis in enumerate(axes[:, 0]):
         start = int(round(row * panel_sec * FS))
@@ -736,15 +756,18 @@ def overlay_figure(values: Dict[str, np.ndarray], labels: Dict[str, str], title:
         times = np.arange(start, end) / FS
         for order, key in enumerate(keys):
             y = values[key][start:end]
-            if normalize == "panel":
-                y = zscore(y)
+            if span == "row":
+                y = scaler(y)
             if key == "GT":
                 axis.plot(times, y, color=GT_COLOR, linewidth=2.2, alpha=0.85, zorder=1, solid_capstyle="round")
             else:
                 axis.plot(times, y, color=MODEL_COLORS[key], linewidth=1.25, zorder=2 + order,
                           solid_capstyle="round")
         axis.set_xlim(row * panel_sec, max((row + 1) * panel_sec, end / FS))
-        axis.set_ylabel("z", color=TEXT_SECONDARY, fontsize=8)
+        if scale == "minmax":
+            axis.set_ylim(-1.15, 1.15)
+            axis.set_yticks([-1, 0, 1])
+        axis.set_ylabel("scaled" if scale == "minmax" else "z", color=TEXT_SECONDARY, fontsize=8)
         style_axis(axis)
     axes[-1, 0].set_xlabel("time in the recording (s)", color=TEXT_SECONDARY, fontsize=9)
     handles = [Line2D([0], [0], color=GT_COLOR if k == "GT" else MODEL_COLORS[k],
@@ -831,11 +854,12 @@ def dataset_overlays(args: argparse.Namespace, dataset_key: str, output_root: Pa
                 missing = [m for m in MODELS if m not in values]
                 info["No_Result"] = ", ".join(missing)
                 title = f"{label} {subject}" + ("" if name == subject else f" - {name}")
-                subtitle = (f"{len(gt_values) / FS / 60:.1f} min; each waveform z-scored "
-                            f"{'per row' if args.normalize == 'panel' else 'over the recording'}; "
+                subtitle = (f"{len(gt_values) / FS / 60:.1f} min; each waveform "
+                            f"{'min-max scaled to [-1, 1]' if args.scale == 'minmax' else 'z-scored'} "
+                            f"{'per row' if args.scale_span == 'row' else 'over the recording'}; "
                             + (f"RRWaveNet: {rr_files[subject][1]}; " if "RRWaveNet" in values else "")
                             + (f"no result: {', '.join(missing)}" if missing else "all three models"))
-                fig = overlay_figure(values, legend, title, subtitle, args.panel_sec, args.normalize)
+                fig = overlay_figure(values, legend, title, subtitle, args.panel_sec, args.scale, args.scale_span)
                 if not args.no_png:
                     stem = safe_name(subject) if name == subject else f"{safe_name(subject)}__{safe_name(name)}"
                     fig.savefig(figure_root / f"{stem}.png", dpi=args.dpi)
@@ -857,8 +881,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--reference", choices=["raw", "stored"], default="raw",
                         help="GT: the reference of the data files (raw) or the one stored with the corr-encoder "
                              "results (stored).")
-    parser.add_argument("--normalize", choices=["panel", "recording"], default="panel",
-                        help="z-score every waveform per row (panel, default) or over the whole recording.")
+    parser.add_argument("--scale", choices=["minmax", "zscore"], default="minmax",
+                        help="Every waveform min-max scaled to [-1, 1] (default) or z-scored, on its own.")
+    parser.add_argument("--scale-span", choices=["row", "recording"], default="row",
+                        help="Scale every waveform per row (default) or over the whole recording.")
     parser.add_argument("--panel-sec", type=float, default=PANEL_SEC, help="Seconds per row (default 60).")
     parser.add_argument("--respdiff-sampling", default=RESPDIFF_SAMPLING)
     parser.add_argument("--respdiff-root", type=Path, default=RESPDIFF_ROOT)
