@@ -56,7 +56,16 @@ What is drawn
   largest and smallest sample, so one spike (e.g. a movement artifact of the
   GT) shrinks the rest of that waveform in its row; z-score is less affected.
   Scaling changes neither the timing nor the shape, nor the r in the legend.
-  No filter is applied; the waveforms keep their own shape.
+* Smoothing: RRWaveNet's output (an ensemble of 10 s windows at 64 Hz) is
+  low-pass filtered with the filter RespDiff applies to its own joined
+  output (Butterworth order 8, 1 Hz, zero phase; here in second-order
+  sections, which order 8 at 1 Hz needs at 64 Hz), on every continuous run of
+  output separately (gaps stay gaps); --rrwavenet-lowpass-hz 0 draws it as
+  stored. The corr-encoder (averaged shifted windows) and RespDiff (its own
+  1 Hz low-pass) are drawn as stored, the GT unfiltered. The 1 Hz edge is
+  above every breathing rate scored (BIDMC, STEAM2 up to 30, CapnoBase up to
+  60 breaths/min); the legend r of RRWaveNet is that of the smoothed
+  waveform.
 * Legend: per model the Pearson r with the GT over the recording (on the
   samples where both exist) and the share of the GT time with output.
 * Note for RRWaveNet: on CapnoBase its target is a sine wave of the
@@ -98,7 +107,7 @@ from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 import scipy.io as sio
-from scipy.signal import resample_poly
+from scipy.signal import butter, resample_poly, sosfiltfilt
 
 
 # ---------------------------------------------------------------------------
@@ -696,6 +705,23 @@ SATURATION_CONFIG = {"saturation_min_sec": 0.1, "saturation_margin_sec": 0.1}
 GT_COLOR = TEXT_PRIMARY
 GT_NAMES = {"capnobase": "capnogram", "bidmc": "impedance pneumogram", "steam2": "respiratory belt"}
 PANEL_SEC = 60.0
+RRWAVENET_LOWPASS_HZ = 1.0  # the low-pass of RespDiff's output (order 8, zero phase)
+RRWAVENET_LOWPASS_ORDER = 8
+
+
+def lowpass_runs(values: np.ndarray, fs: float, cutoff_hz: float, order: int) -> np.ndarray:
+    """Zero-phase Butterworth low-pass of every continuous run of finite
+    samples separately (NaN gaps stay); runs too short to filter are kept as
+    they are. cutoff_hz <= 0: unchanged."""
+    out = np.array(values, dtype=float)
+    if cutoff_hz <= 0:
+        return out
+    sos = butter(order, cutoff_hz, btype="low", fs=fs, output="sos")
+    padlen = 3 * (2 * sos.shape[0] + 1)
+    for start, end in finite_runs(np.isfinite(out), 1):
+        if end - start > padlen:
+            out[start:end] = sosfiltfilt(sos, out[start:end])
+    return out
 
 
 def minmax(values: np.ndarray) -> np.ndarray:
@@ -839,7 +865,9 @@ def dataset_overlays(args: argparse.Namespace, dataset_key: str, output_root: Pa
                         sign = -1.0 if r < 0 else 1.0
                     else:
                         sign = 1.0
-                    values["RRWaveNet"] = Track(sign * segment["output"], RRWAVENET_FS, lag).at(times)
+                    smoothed = lowpass_runs(sign * segment["output"], RRWAVENET_FS, args.rrwavenet_lowpass_hz,
+                                            RRWAVENET_LOWPASS_ORDER)
+                    values["RRWaveNet"] = Track(smoothed, RRWAVENET_FS, lag).at(times)
                     info.update({"RRWaveNet_Run": rr_files[subject][1], "RRWaveNet_Sign": sign,
                                  "RRWaveNet_Lag_Sec": lag})
                 legend = {"GT": f"GT: {GT_NAMES[dataset_key]} ({'data file' if gt_source == 'data file' else 'stored'})"}
@@ -850,7 +878,9 @@ def dataset_overlays(args: argparse.Namespace, dataset_key: str, output_root: Pa
                     covered = float(np.mean(np.isfinite(values[model])))
                     info[f"{model}_r"] = r
                     info[f"{model}_Coverage"] = covered
-                    legend[model] = f"{model} (r = {r:.2f}, {100 * covered:.0f}% of the time)"
+                    smoothed_note = (f", low-pass {args.rrwavenet_lowpass_hz:g} Hz"
+                                     if model == "RRWaveNet" and args.rrwavenet_lowpass_hz > 0 else "")
+                    legend[model] = f"{model} (r = {r:.2f}, {100 * covered:.0f}% of the time{smoothed_note})"
                 missing = [m for m in MODELS if m not in values]
                 info["No_Result"] = ", ".join(missing)
                 title = f"{label} {subject}" + ("" if name == subject else f" - {name}")
@@ -886,6 +916,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--scale-span", choices=["row", "recording"], default="row",
                         help="Scale every waveform per row (default) or over the whole recording.")
     parser.add_argument("--panel-sec", type=float, default=PANEL_SEC, help="Seconds per row (default 60).")
+    parser.add_argument("--rrwavenet-lowpass-hz", type=float, default=RRWAVENET_LOWPASS_HZ,
+                        help="Low-pass of RRWaveNet's output (Butterworth order 8, zero phase; default 1.0 Hz as "
+                             "RespDiff's output filter; 0 = as stored).")
     parser.add_argument("--respdiff-sampling", default=RESPDIFF_SAMPLING)
     parser.add_argument("--respdiff-root", type=Path, default=RESPDIFF_ROOT)
     parser.add_argument("--correncoder-root", type=Path, default=CORRENCODER_ROOT)
