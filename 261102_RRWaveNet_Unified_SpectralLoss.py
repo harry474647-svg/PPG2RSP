@@ -205,9 +205,11 @@ DEFAULT_RESULTS_ROOT = PROJECT_ROOT
 REFERENCE_261007_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1")
 # The same protocol without the spectral loss, for the paired comparison:
 # per dataset the first root holding the selected-weight-decay ensembles of
-# the folds (261013 for BIDMC / STEAM2; 261102_RRWaveNet_Unified_SubjectVal_WD
-# for CapnoBase when it was run); skipped when none is found.
+# the folds (261013 for BIDMC / STEAM2: its results folder, then its default
+# PROJECT_ROOT; 261102_RRWaveNet_Unified_SubjectVal_WD for CapnoBase when it
+# was run); skipped when none is found.
 BASELINE_ROOTS = (
+    Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWavNet_STEAM_BIDMC_v1"),
     Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWaveNet_Adult_SubjectVal_WD"),
     Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261102_RRWaveNet_Unified_SubjectVal_WD"),
 )
