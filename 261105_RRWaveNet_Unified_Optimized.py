@@ -1,59 +1,57 @@
-r"""261105_RRWaveNet_Unified_Optimized: the 261102 protocol (CapnoBase, BIDMC
-and STEAM2, LOSOCV, subject-wise validation, weight decay selected per fold,
-10 s windows without overlap, full model) with a changed training and
-ensemble; the network, its input and target, the validation subjects, the
-seeds, the inference and the 60 s evaluation are those of 261102.
+r"""261105_RRWaveNet_Unified_Optimized: RRWaveNet (full model) trained from
+scratch on CapnoBase, BIDMC and STEAM2 with one cross-validation protocol
+(LOSOCV, subject-wise validation, weight decay selected per fold, 10 s windows
+without overlap), with training windows at a random position, a learning rate
+lowered on validation plateaus and an ensemble of the trained models of a
+fold. Every model is trained in this script's own results folder; no result
+of another script is read or reused (--resume continues only this script's
+own runs, recognized by their model key).
 
-Changes from 261102_RRWaveNet_Unified_SubjectVal_WD (nothing else changes)
----------------------------------------------------------------------------
+Training and ensemble
+---------------------
 1. Training windows at a random position. Each time a training window (a
-   10 s window of a training subject that passed the 261102 rules, Train_OK)
-   is drawn, it is replaced by the 10 s stretch starting at a random point up
-   to half a window (5 s) earlier or later in the same continuous recording
-   segment, when that stretch passes the same Train_OK rule (one function
-   judges both: PPG usable >= 50%, reference usable >= 50%, reference usable
-   for training >= 50%, no labelled reference artifact); otherwise the window
-   itself is used. Input, target and breath events are cut from the same
-   continuous arrays as the fixed windows. This replaces the 261102 shift of
-   up to 0.094 s by torch.roll (which wrapped the end of the window around to
-   its start); the gain (0.95-1.05) and the noise stay. Unchanged: the number
-   of training windows per epoch, the training subjects and their shares;
-   validation and test windows are never moved. Stretches come only from the
-   fold's training subjects and never cross a segment end (STEAM2
-   boundaries), so no sample of a validation or test subject reaches the
-   training.
-2. Weight decay candidates 0.1, 1, 3 and 10 (261102: 0.01, 0.1 and 1, where
-   most folds chose 1, the largest). The selection is that of 261102: member
-   m0 with every candidate, the lowest validation loss of the validation
-   subjects.
-3. Learning rate lowered on a validation plateau (261102: cosine decay over
-   240 epochs). AdamW from 2e-4, halved after 8 epochs without a validation
-   loss lower by 1e-4 (the improvement early stopping counts), down to 1e-6.
-   Early stopping unchanged: at least 20 epochs, patience 25, the best
-   checkpoint restored, at most 240 epochs. With the cosine schedule the
-   BIDMC folds of 261102 stopped while the learning rate was still near
-   2e-4; the plateau rule lowers it where the validation loss stalls, by the
-   same rule in every fold and dataset. The learning rate of every epoch is
-   stored in the learning curves (LR).
+   10 s window of a training subject that passed the quality rules, Train_OK,
+   below) is drawn, it is replaced by the 10 s stretch starting at a random
+   point up to half a window (5 s) earlier or later in the same continuous
+   recording segment, when that stretch passes the same Train_OK rule (one
+   function judges both: PPG usable >= 50%, reference usable >= 50%,
+   reference usable for training >= 50%, no labelled reference artifact);
+   otherwise the window itself is used. Input, target and breath events are
+   cut from the same continuous arrays as the fixed windows; no window is
+   shifted by torch.roll (which would wrap its end around to its start). The
+   v16 gain (0.95-1.05) and small noise are added. The number of training
+   windows per epoch and the training subjects and their shares are those of
+   the fixed windows; validation and test windows are never moved.
+   Stretches come only from the fold's training subjects and never cross a
+   segment end (STEAM2 boundaries), so no sample of a validation or test
+   subject reaches the training.
+2. Weight decay candidates 0.1, 1, 3 and 10 (convolution weights only, see
+   the cross-validation below): member m0 is trained with every candidate,
+   and the one with the lowest validation loss of the validation subjects is
+   selected for members m1 and m2.
+3. Learning rate: AdamW from 2e-4, halved after 8 epochs without a validation
+   loss lower by 1e-4 (the improvement early stopping counts), down to 1e-6;
+   early stopping after at least 20 epochs with patience 25, the best
+   checkpoint restored, at most 240 epochs. The learning rate is lowered
+   where the validation loss stalls, by the same rule in every fold and
+   dataset; the learning rate of every epoch is stored in the learning
+   curves (LR).
 4. Final ensemble: member m0 of every weight decay candidate (trained for the
    selection anyway) and members m1 and m2 of the selected candidate, 6
-   models, the mean of their waveforms (261102: m0-m2 of the selected
-   candidate). The 261102 ensemble (m0-m2 of the selected candidate) is
-   scored as well, for comparison ({subject}_selected_ensemble_* files).
-5. Paired comparison with the 261102 final ensemble on the same subjects
-   (--reference-root, default the 261102 results folder; 261102 compared
-   with 261007).
+   models, the mean of their waveforms. The ensemble of the selected
+   candidate alone (m0-m2) is scored as well, for comparison
+   ({subject}_selected_ensemble_* files).
 
-The 261102 protocol (unchanged)
--------------------------------
+Data, cross-validation and model
+--------------------------------
 CapnoBase keeps everything of 261007 except the validation and the weight
 decay: the data reading (300 Hz CSV files, expert CO2 breath labels as the
 ground truth, expert artifact labels), the capnography profile (respiratory
 band 0.05 Hz to an upper edge that follows the PPG heart rate, target = the
 respiratory-phase waveform of the expert breath labels aligned to the PPG
 with fixed polarity, RR band 3-60 breaths/min, sub-harmonic check of the
-reference FFT rate), the network, loss, epochs, jitter, the seeds of the
-members, the inference and the 60 s evaluation. BIDMC and STEAM2 are read
+reference FFT rate), the network, loss, epochs, the seeds of the members,
+the inference and the 60 s evaluation. BIDMC and STEAM2 are read
 and processed as in 261013.
 
 Cross-validation (every dataset)
@@ -126,8 +124,8 @@ Raw PPG input without a band-pass; target = respiratory-phase waveform from
 the expert CO2 breath labels (CapnoBase) or the respiratory-band reference
 (BIDMC impedance, STEAM2 belt); loss = the v16 waveform loss (SmoothL1 +
 Pearson + derivative); AdamW, learning rate 2e-4 halved on a validation
-plateau (change 3), up to 240 epochs, at least 20, patience 25; training
-windows at a random position (change 1) with the v16 gain 0.95-1.05 and
+plateau (item 3), up to 240 epochs, at least 20, patience 25; training
+windows at a random position (item 1) with the v16 gain 0.95-1.05 and
 small noise. Every member's learning curve (training and validation loss and
 learning rate per epoch) is stored.
 
@@ -135,7 +133,7 @@ Evaluation (Davies & Mandic 2022 style; no subject is excluded)
 -----------------------------------------------------------------
 Inference: the held-out subject's 10 s windows without overlap (0%), their
 outputs placed one after another (as in 261007); the ensemble output is the
-mean of the six models' waveforms (change 4). Every complete 60 s minute with a
+mean of the six models' waveforms (item 4). Every complete 60 s minute with a
 valid reference is scored. Breathing rate = frequency of the largest FFT
 peak of the predicted waveform (3-60 breaths/min for CapnoBase, 6-30 for
 BIDMC and STEAM2); ground truth = the number of reference breaths in the
@@ -149,14 +147,12 @@ Mandic mAE and mMAE with IQR, waveform PCC mean +- SD.
 Summary
 -------
 * fft_davies_overall.csv / fft_davies_overall_mean_sd.csv: the final
-  ensemble (6 models), the ensemble of the selected candidate (m0-m2, the
-  261102 rule), the single models of the final ensemble, member m0 of every
-  weight decay candidate, and the 261102 final ensemble;
+  ensemble (6 models), the ensemble of the selected candidate (m0-m2), the
+  single models of the final ensemble and member m0 of every weight decay
+  candidate;
 * ensemble_comparison.csv: final ensemble vs its single models and vs the
   ensemble of the selected candidate (paired Wilcoxon on the subject MAE and
   the minute AE);
-* reference_comparison.csv: final ensemble vs the 261102 final ensemble on
-  the same subjects (--reference-root);
 * weight_decay_selection.csv / weight_decay_selection_counts.csv: per fold
   the validation loss of every candidate and the selected one;
 * training_gap.csv, learning curves (mean +- SD over folds, training and
@@ -237,10 +233,6 @@ from torch.utils.data import DataLoader, Dataset
 PROJECT_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261105_RRWaveNet_Unified_Optimized")
 # Every result of this script is written under PROJECT_ROOT.
 DEFAULT_RESULTS_ROOT = PROJECT_ROOT
-# Results of 261102_RRWaveNet_Unified_SubjectVal_WD (cosine schedule, weight
-# decay 0.01 / 0.1 / 1, ensemble of 3) for the paired comparison; skipped
-# when not found.
-REFERENCE_261102_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261102_RRWaveNet_Unified_SubjectVal_WD")
 
 DATASET_CONFIGS = {
     "bidmc": {
@@ -322,21 +314,18 @@ DEFAULT_EPOCHS = 240
 MIN_EPOCHS = 20
 PATIENCE = 25
 LEARNING_RATE = 2e-4
-# Learning rate on a validation plateau (this script; 261102: cosine decay
-# over the epochs): halved after LR_PLATEAU_PATIENCE epochs without a
-# validation loss lower by MIN_IMPROVEMENT, down to MIN_LEARNING_RATE.
+# Learning rate on a validation plateau: halved after LR_PLATEAU_PATIENCE
+# epochs without a validation loss lower by MIN_IMPROVEMENT, down to
+# MIN_LEARNING_RATE.
 LR_PLATEAU_FACTOR = 0.5
 LR_PLATEAU_PATIENCE = 8
 MIN_LEARNING_RATE = 1e-6
 # A validation loss counts as lower (early stopping, plateau) when it is lower
 # by at least this much.
 MIN_IMPROVEMENT = 1e-4
-# Weight decay of 261007 (all parameters; with AdamW the decay per step is
-# learning rate x weight decay = 1e-8, i.e. no regularization).
-WEIGHT_DECAY_261007 = 5e-5
-# Candidates of this script (261102: 0.01, 0.1 and 1, where most folds chose
-# 1), applied to the convolution weights only (AdamW, decoupled): per-step
-# decay 2e-5, 2e-4, 6e-4 and 2e-3 at the starting learning rate. In every
+# Weight decay candidates, applied to the convolution weights only (AdamW,
+# decoupled): per-step decay 2e-5, 2e-4, 6e-4 and 2e-3 at the starting
+# learning rate. In every
 # LOSOCV fold member m0 is trained with each candidate and the one with the
 # lowest subject-wise validation loss is used for m1 and m2.
 WEIGHT_DECAY_CANDIDATES = (1e-1, 1.0, 3.0, 10.0)
@@ -372,10 +361,9 @@ EVENT_SIGMA_PERIOD_FRACTION = 0.12
 EVENT_SIGMA_LIMITS_SEC = (0.15, 0.5)
 # Count loss: heatmap counted above this background level.
 EVENT_COUNT_THRESHOLD = 0.1
-# Training windows (this script): each draw moved by a random offset of up to
+# Training windows: each draw moved by a random offset of up to
 # CROP_REACH_FRACTION of the window inside its segment when the moved window
-# passes the Train_OK rule (261102: shift up to 0.094 s by torch.roll); the
-# v16 gain 0.95-1.05 and small noise are kept.
+# passes the Train_OK rule; the v16 gain 0.95-1.05 and small noise are added.
 CROP_REACH_FRACTION = 0.5
 # conv1x1: 1x1 stem fusion + GroupNorm; none: ablation, the concatenated
 # stem branches feed the encoder.
@@ -896,7 +884,7 @@ def window_rule(maps: Dict[str, np.ndarray], start: int, end: int) -> Tuple[bool
     PPG and the reference are usable for at least MIN_USABLE_PROPORTION of it;
     usable for training when, in addition, the reference is usable for
     training for that share and no sample lies in a labelled reference
-    artifact. The fixed windows and the moved training windows (change 1) are
+    artifact. The fixed windows and the moved training windows (item 1) are
     judged by this one rule."""
     passed = bool(
         maps["ppg_usable"][start:end].mean() >= MIN_USABLE_PROPORTION
@@ -1711,7 +1699,7 @@ def preprocess_segment(
         "model_input": model_input,
         "target_signal": np.asarray(target_signal, dtype=np.float32),
         "train_map": train_quality_map & ~rsp_artifact & (ppg_quality_map > 0),
-        # The maps of window_rule, to judge moved training windows (change 1).
+        # The maps of window_rule, to judge moved training windows (item 1).
         "crop_maps": crop_maps,
     }
     if not low_kept:
@@ -2792,7 +2780,7 @@ class SubjectWindowDataset(Dataset):
     subjects (training subjects or validation subjects of the fold; the split
     is by subject, not in time); "test" is every kept window (inference never
     depends on the reference). Training windows are moved at random inside
-    their segment (moved_window, change 1) and get the v16 gain 0.95-1.05
+    their segment (moved_window, item 1) and get the v16 gain 0.95-1.05
     and small noise; validation and test windows are used as they are.
     """
 
@@ -2847,7 +2835,7 @@ class SubjectWindowDataset(Dataset):
 
 
 def moved_window(record: dict, window_index: int) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, float]]:
-    """Change 1: a training window moved by a random offset of up to
+    """Item 1: a training window moved by a random offset of up to
     CROP_REACH_FRACTION of its length inside its segment, with input, target
     and breath events cut from the segment's continuous arrays (the arrays the
     fixed windows were cut from). None when the offset is 0 or the moved
@@ -3397,7 +3385,7 @@ def feature_representation_summary(features: np.ndarray) -> dict:
 def make_optimizer(model: DeepOnlyV16Decoder, weight_decay: float):
     """AdamW (decoupled weight decay) with the decay on the convolution
     weights only; biases and GroupNorm scale / shift are not decayed. The
-    learning rate is halved on a validation plateau (change 3)."""
+    learning rate is halved on a validation plateau (item 3)."""
     decay = [p for p in model.parameters() if p.ndim >= 2]
     no_decay = [p for p in model.parameters() if p.ndim < 2]
     optimizer = torch.optim.AdamW(
@@ -3435,7 +3423,7 @@ def fit_model(
 
     The best validation state is saved to `checkpoint`. The learning rate is
     halved after LR_PLATEAU_PATIENCE epochs without a validation loss lower by
-    MIN_IMPROVEMENT (change 3). With `state_path`, the full training state (weights,
+    MIN_IMPROVEMENT (item 3). With `state_path`, the full training state (weights,
     optimizer, schedule, early-stopping counters, history and the random
     number generators) is saved after every epoch, and an existing state is
     continued from, so an interrupted run resumes exactly where it stopped.
@@ -4301,7 +4289,7 @@ def build_manifest(
             "n_models": len(variants) + args.members - 1,
             "combination": "mean of the models' waveform outputs",
             "seed": "stable_seed('261006-ensemble-member', window, dataset, subject, member), as in 261006",
-            "also_scored": f"m0-m{args.members - 1} of the selected candidate (the 261102 ensemble)",
+            "also_scored": f"m0-m{args.members - 1} of the selected candidate",
         },
         "weight_decay_selection": {
             "candidates": [variant.options.weight_decay for variant in variants],
@@ -4388,7 +4376,7 @@ def member_paths(root: Path, subject: str, member: int) -> Tuple[Path, Path, Pat
 
 ENSEMBLE_KINDS = {
     "ensemble": "final ensemble (m0 of every weight decay candidate + m1.. of the selected)",
-    "selected_ensemble": "ensemble of the selected candidate (m0.., the 261102 rule)",
+    "selected_ensemble": "ensemble of the selected candidate (m0..)",
 }
 
 
@@ -4414,8 +4402,8 @@ def ensemble_models(
 ) -> List[Tuple["Variant", int, Path]]:
     """(candidate, member, folder) of every model of an ensemble: the final
     ensemble = member m0 of every weight decay candidate + members m1.. of the
-    selected candidate (change 4); the selected ensemble = members m0.. of the
-    selected candidate (261102)."""
+    selected candidate (item 4); the selected ensemble = members m0.. of the
+    selected candidate."""
     chosen_root = condition_root(results_root, chosen.name, spec, dataset_key)
     selected = [(chosen, member, chosen_root) for member in range(args.members)]
     if kind == "selected_ensemble":
@@ -4637,17 +4625,6 @@ def evaluate_ensemble(
         encoding="utf-8",
     )
     return summary
-
-
-def reference_windows(reference_root: Path, spec: WindowSpec, dataset_key: str, subject: str) -> Optional[Path]:
-    """Minute table of the 261102 final ensemble of a subject (in the folder of
-    the weight decay 261102 selected); None when not found."""
-    record = read_json(selection_path(reference_root, spec, dataset_key, subject))
-    variant = (record or {}).get("Selected_Variant")
-    if not variant:
-        return None
-    path = ensemble_paths(condition_root(reference_root, variant, spec, dataset_key), subject)[1]
-    return path if path.exists() else None
 
 
 def epoch_limit(args: argparse.Namespace, variant: Variant) -> int:
@@ -4898,13 +4875,11 @@ def summarize_results(
     dataset_keys: Sequence[str],
 ) -> None:
     """Score the final ensembles and the ensembles of the selected candidate and
-    write the summary, the weight decay selection, the learning curves and the
-    comparison with 261102."""
+    write the summary, the weight decay selection and the learning curves."""
     summary_root = results_root / "Summary"
     figure_root = summary_root / "Figures"
     figure_root.mkdir(parents=True, exist_ok=True)
-    reference_root = Path(args.reference_root) if args.reference_root else None
-    overall_rows, comparison_rows, reference_rows, subject_tables = [], [], [], []
+    overall_rows, comparison_rows, subject_tables = [], [], []
     ensemble_frames, member_frames, missing_rows, selection_rows, gap_rows = [], [], [], [], []
     for spec in window_specs:
         for dataset_key in dataset_keys:
@@ -4981,8 +4956,8 @@ def summarize_results(
                 rows.append((f"Final: m0 of every weight decay candidate + m1-m{args.members - 1} of the selected "
                              f"(ensemble of {n_final})", "final", final))
             if not selected.empty:
-                rows.append((f"Selected weight decay only, m0-m{args.members - 1} (ensemble of {args.members}, the "
-                             "261102 rule)", "selected_ensemble", selected))
+                rows.append((f"Selected weight decay only, m0-m{args.members - 1} (ensemble of {args.members})",
+                             "selected_ensemble", selected))
             if not members.empty:
                 members["Window_Config"] = spec.name
                 member_frames.append(members)
@@ -4998,13 +4973,6 @@ def summarize_results(
                 if not candidate.empty:
                     rows.append((f"Weight decay {variant.options.weight_decay:g}, member m{SELECTION_MEMBER} only "
                                  "(single model)", f"wd{variant.options.weight_decay:g}_m{SELECTION_MEMBER}", candidate))
-            reference = pd.DataFrame()
-            if reference_root is not None and final_subjects:
-                ref_paths = [reference_windows(reference_root, spec, dataset_key, subject) for subject in final_subjects]
-                reference = scored_minutes(read_minutes([p for p in ref_paths if p is not None]))
-                if not reference.empty:
-                    rows.append(("261102 final ensemble (cosine schedule, weight decay 0.01 / 0.1 / 1, ensemble of 3)",
-                                 "reference_261102", reference))
             for label, row_name, minutes in rows:
                 metrics = member_average_metrics(minutes) if row_name == "no_ensemble" else fft_davies_metrics(minutes)
                 overall_rows.append({"Dataset": dataset_label, "Window_Config": spec.name, "Row": row_name,
@@ -5023,13 +4991,8 @@ def summarize_results(
                 if not selected.empty:
                     result = paired_comparison(final, selected)
                     result.update({"Dataset": dataset_label, "Window_Config": spec.name,
-                                   "Comparison": "Final ensemble vs ensemble of the selected candidate (261102 rule)"})
+                                   "Comparison": "Final ensemble vs ensemble of the selected candidate"})
                     comparison_rows.append(result)
-                if not reference.empty:
-                    result = paired_comparison(final, reference)
-                    result.update({"Dataset": dataset_label, "Window_Config": spec.name,
-                                   "Comparison": "Final ensemble vs 261102 final ensemble"})
-                    reference_rows.append(result)
                 save_summary_figures(summary_root, dataset_label, spec,
                                      [(label, minutes) for label, _, minutes in rows])
             if curves:
@@ -5050,7 +5013,6 @@ def summarize_results(
     overall = pd.DataFrame(overall_rows)
     mean_sd = mean_sd_table(overall) if not overall.empty else pd.DataFrame()
     comparison = ordered(pd.DataFrame(comparison_rows), ["Dataset", "Window_Config", "Comparison"])
-    reference_table = ordered(pd.DataFrame(reference_rows), ["Dataset", "Window_Config", "Comparison"])
     selection = pd.DataFrame(selection_rows)
     selection_counts = (
         selection.groupby(["Dataset", "Window_Config", "Selected_Weight_Decay"]).size()
@@ -5066,7 +5028,6 @@ def summarize_results(
         "fft_davies_overall": overall,
         "fft_davies_overall_mean_sd": mean_sd,
         "ensemble_comparison": comparison,
-        "reference_comparison": reference_table,
         "weight_decay_selection": selection,
         "weight_decay_selection_counts": selection_counts,
         "training_gap": gaps,
@@ -5083,7 +5044,6 @@ def summarize_results(
             "Overall_mean_SD": mean_sd,
             "Overall_FFT_Davies": overall,
             "Ensemble_comparison": comparison,
-            "vs_261102": reference_table,
             "WD_selection": selection,
             "WD_selection_counts": selection_counts,
             "Training_gap": gaps,
@@ -5106,8 +5066,7 @@ def summarize_results(
         for dataset, frame in selection_counts.groupby("Dataset", sort=False):
             print("  " + dataset + ": " + ", ".join(
                 f"{row['Selected_Weight_Decay']:g} in {row['N_Folds']} folds" for _, row in frame.iterrows()))
-    for title, table in (("Final ensemble vs its single models / the ensemble of the selected candidate", comparison),
-                         ("Final ensemble vs 261102 final ensemble", reference_table)):
+    for title, table in (("Final ensemble vs its single models / the ensemble of the selected candidate", comparison),):
         if table.empty:
             continue
         print(f"\n{title} (per-subject MAE, mean ± SD; Wilcoxon):")
@@ -5307,12 +5266,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=float,
         default=VAL_SUBJECT_RATIO,
         help="Share of the training subjects held out as validation subjects (default %(default)s).",
-    )
-    parser.add_argument(
-        "--reference-root",
-        type=Path,
-        default=REFERENCE_261102_ROOT,
-        help="261102 results root for the paired comparison (skipped when not found).",
     )
     parser.add_argument(
         "--members",
