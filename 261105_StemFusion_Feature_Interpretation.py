@@ -112,23 +112,38 @@ is fixed per metric before the run (Favourable_If); Result = "favours O" /
 "descriptive" for metrics without a direction. B: final vs init of O (paired
 Wilcoxon). Every metric is reported whichever way it comes out.
 
-Outputs (default D:\PPG2RSP_RRWaveNet_Inspired\261105_StemFusion_Feature_Interpretation)
-  261105_StemFusion_Feature_Interpretation.xlsx   Tests, B_Training_Effect,
-      A_Gradients, B_Fusion, B_Fusion_Channels, C_Branch_Reliance,
-      D_Harmonics, E_Consistency, F_Phase, Coverage, Notes
-  the same tables as CSV, harmonic_curves.npz
-  Figures\  {source}_A_gradients.png, {source}_B_fusion_shares.png,
-      {source}_C_reliance.png, {source}_D_harmonics.png,
-      {source}_D_spectra.png, {source}_D_spectra_cases.png,
-      261007_E_consistency.png, {source}_F_phase.png,
-      {source}_F_tsne_{dataset}.pdf (+ PNG per subject)
+Folders
+-------
+The script is placed in and run from
+D:\PPG2RSP_RRWaveNet_Inspired\261105_StemFusion_Feature_Interpretation; every
+result is written there (--output-root), separately for 261007 and 261013.
+261007_RRWaveNet_Ensemble_NoEvent.py and 261013_RRWaveNet_Adult_SubjectVal_WD.py
+(data reading and network) are looked for in this folder, the current folder,
+the results folder of their run, D:\PPG2RSP_RRWaveNet_Inspired and its
+subfolders (first found; or --backbone-261007 / --backbone-261013). The result
+folders of 261007, 261013 and 261028_Stem_ablation_noise_v1 are only read.
 
-Run (next to 261007_RRWaveNet_Ensemble_NoEvent.py and
-261013_RRWaveNet_Adult_SubjectVal_WD.py):
+Outputs (in --output-root, one folder per source, written when the source is done)
+  261007\  and  261013\
+    {source}_StemFusion_Feature_Interpretation.xlsx   Tests, every table
+                               of the source, Coverage, Notes
+    Tests.csv, Coverage.csv
+    A_Gradients\        A_Gradients.csv, A_Gradients.png
+    B_Fusion\           B_Fusion.csv, B_Fusion_Channels.csv,
+                        B_Training_Effect.csv, B_Fusion_Shares.png
+    C_Branch_Reliance\  C_Branch_Reliance.csv, C_Branch_Reliance.png
+    D_Harmonics\        D_Harmonics.csv, D_Harmonics.png, D_Spectra.png,
+                        D_Spectra_Cases.png, harmonic_curves.npz
+    E_Consistency\      E_Consistency.csv, E_Consistency.png (261007 only)
+    F_Phase\            F_Phase.csv, F_Phase.png, tSNE_{dataset}.pdf,
+                        tSNE_{dataset}\{subject}.png
+
+Run (in D:\PPG2RSP_RRWaveNet_Inspired\261105_StemFusion_Feature_Interpretation):
   python 261105_StemFusion_Feature_Interpretation.py
 Options: --sources 261007 261013, --datasets capnobase bidmc steam2,
   --subjects, --results-root-261007 / --results-root-261013 /
-  --results-root-noise, --output-root, --grad-windows 384,
+  --results-root-noise, --backbone-261007 / --backbone-261013,
+  --output-root, --grad-windows 384,
   --case-subjects CapnoBase:0312 BIDMC:05 BIDMC:27, --tsne-per-dataset 3,
   --tsne-subjects BIDMC:05 ... or all, --no-tsne, --force-cpu, --gpu, and
   the data paths of 261007 / 261013.
@@ -157,12 +172,16 @@ from scipy.signal import hilbert
 from torch.utils.data import DataLoader, Subset
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-BACKBONE_261007 = SCRIPT_DIR / "261007_RRWaveNet_Ensemble_NoEvent.py"
-BACKBONE_261013 = SCRIPT_DIR / "261013_RRWaveNet_Adult_SubjectVal_WD.py"
-RESULTS_ROOT_261007 = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1")
-RESULTS_ROOT_261013 = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWavNet_STEAM_BIDMC_v1")
-RESULTS_ROOT_NOISE = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261028_Stem_ablation_noise_v1")
+# Where the script is run from; every result goes here (one folder per source).
 PROJECT_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261105_StemFusion_Feature_Interpretation")
+WORKSPACE = PROJECT_ROOT.parent
+RESULTS_ROOT_261007 = WORKSPACE / "261007_RRWaveNet_NoEvent_v1"
+RESULTS_ROOT_261013 = WORKSPACE / "261013_RRWavNet_STEAM_BIDMC_v1"
+RESULTS_ROOT_NOISE = WORKSPACE / "261028_Stem_ablation_noise_v1"
+BACKBONE_FILES = {"261007": "261007_RRWaveNet_Ensemble_NoEvent.py",
+                  "261013": "261013_RRWaveNet_Adult_SubjectVal_WD.py"}
+SECTION_FOLDERS = {"A": "A_Gradients", "B": "B_Fusion", "C": "C_Branch_Reliance", "D": "D_Harmonics",
+                   "E": "E_Consistency", "F": "F_Phase"}
 SOURCE_DATASETS = {"261007": ("capnobase", "bidmc", "steam2"), "261013": ("bidmc", "steam2")}
 WINDOW = "w10s_nonoverlap"
 MEMBERS = 3
@@ -212,6 +231,30 @@ FIGURE_METRICS = {
     "E": ("Output_Agreement_r", "CKA_B4", "Rate_Agreement_1bpm", "Harmonic_Disagreement"),
     "F": ("Phase_Probe_R2_B4", "Phase_Probe_Error_B4", "Phase_kNN_Error_B4"),
 }
+
+
+def find_backbone(source: str, explicit: Optional[Path], results_root: Path) -> Path:
+    """The 261007 / 261013 script: --backbone-*, else the first found in this
+    folder, the current folder, the results folder of the run, the workspace
+    and its subfolders."""
+    name = BACKBONE_FILES[source]
+    if explicit is not None:
+        if Path(explicit).is_file():
+            return Path(explicit).resolve()
+        raise FileNotFoundError(f"--backbone-{source}: {explicit} not found")
+    folders = [SCRIPT_DIR, Path.cwd(), results_root, WORKSPACE, SCRIPT_DIR.parent]
+    for base in (WORKSPACE, SCRIPT_DIR.parent):
+        if base.is_dir():
+            folders += sorted(child for child in base.iterdir() if child.is_dir())
+    tried = []
+    for folder in folders:
+        path = Path(folder) / name
+        if path not in tried:
+            tried.append(path)
+            if path.is_file():
+                return path.resolve()
+    raise FileNotFoundError(f"{name} not found (looked in {', '.join(str(p.parent) for p in tried[:6])} and the "
+                            f"subfolders of {WORKSPACE}); give it with --backbone-{source}")
 
 
 def load_backbone(path: Path, name: str):
@@ -942,12 +985,13 @@ def spectra_figure(path: Path, curves: dict, source: str, panels: List[Tuple[str
     plt.close(fig)
 
 
-def tsne_figures(out: Path, tsne: dict) -> None:
+def tsne_figures(folder: Path, tsne: dict) -> None:
     groups = {}
     for (source, dataset, subject, model), value in tsne.items():
         groups.setdefault((source, dataset), {}).setdefault(subject, {})[model] = value
     for (source, dataset), subjects in groups.items():
-        with PdfPages(out / f"{source}_F_tsne_{dataset}.pdf") as pdf:
+        folder.mkdir(parents=True, exist_ok=True)
+        with PdfPages(folder / f"tSNE_{dataset}.pdf") as pdf:
             for subject, models in sorted(subjects.items()):
                 if any(models.get(m, (None,))[0] is None for m in ("X", "O")):
                     continue
@@ -961,7 +1005,7 @@ def tsne_figures(out: Path, tsne: dict) -> None:
                 fig.colorbar(sc, ax=axes, label="respiratory phase of the target (rad)", shrink=0.8)
                 fig.suptitle(f"{source} {dataset} {subject}: t-SNE of the encoder output (B4) time points "
                              f"(held-out subject, member m0)", fontsize=10)
-                png = out / f"{source}_F_tsne_{dataset}" / f"{subject}.png"
+                png = folder / f"tSNE_{dataset}" / f"{subject}.png"
                 png.parent.mkdir(parents=True, exist_ok=True)
                 fig.savefig(png, dpi=130)
                 pdf.savefig(fig)
@@ -972,9 +1016,117 @@ def tsne_figures(out: Path, tsne: dict) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def notes_table(source: str, args) -> pd.DataFrame:
+    return pd.DataFrame({"Item": ["Source", "O / X", "Pairing", "Init", "Favourable_If", "A", "B", "C", "D", "E", "F",
+                                  "t-SNE"],
+                         "Meaning": [
+                             f"{source}: " + ("CapnoBase, BIDMC, STEAM2 as 261007 read and trained them"
+                                              if source == "261007" else "BIDMC, STEAM2 as 261013 read and trained them"),
+                             "Stem Fusion O = full model; X = no_stem_fusion (concatenated branches into the depthwise "
+                             "encoder: the time scales stay separate until the decoder)",
+                             "member m0 of O and X (E: m0-m2)" if source == "261007" else
+                             "O = full model of the weight decay selected in the fold (m0); X = "
+                             "261028_Stem_ablation_noise_v1 m0 trained with that weight decay",
+                             "initial weights drawn with the member's seed as in training (no training step run)",
+                             "direction fixed before the run; Result from the BH-FDR p (< 0.05)",
+                             f"gradients on {args.grad_windows} training windows of the fold (eval mode, no jitter): "
+                             "branch shares and balance (entropy / log 3), cosine coherence of the batch gradients of "
+                             "the stem, stem / decoder+head gradient norm",
+                             "O only: shares of k32 / k64 / k128 in every fused channel (|W| x branch SD), mixing "
+                             f"entropy, channels with >= 2 branches >= {MIXED_SHARE:.0%}; final vs init (B_Training_Effect)",
+                             "one branch replaced by its time mean per window: loss increase and output change; shares, "
+                             "balance, largest share",
+                             f"log10(P(2 f0) / P(f0)), +-{HARMONIC_HALF_WIDTH_HZ} Hz, f0 = target peak in the rate band "
+                             f"(f0 >= {HARMONIC_MIN_F0_HZ} Hz); the target's own ratio is listed",
+                             "agreement of members m0-m2 (output r, linear CKA, rates within 1 breath/min, one member at "
+                             "~2x another)" if source == "261007" else "not available (one model without stem fusion per fold)",
+                             "ridge probe of cos / sin of the target phase (blocked 5-fold CV), mean |phase error|, kNN "
+                             "phase difference to time points of other windows",
+                             "per subject (every fold has its own network); coloured by the target phase"]})
+
+
+def save_source(source: str, store: dict, args, folder: Path) -> None:
+    """Statistics, tables and figures of one source in its own folder."""
+    tables = {k: pd.DataFrame(store[k]) for k in ("A", "B", "B_channels", "C", "D", "E", "F")}
+    coverage = pd.concat([pd.DataFrame(store["coverage"]), pd.DataFrame(store["skipped"])], ignore_index=True)
+    folder.mkdir(parents=True, exist_ok=True)
+    if not coverage.empty:
+        coverage.to_csv(folder / "Coverage.csv", index=False, encoding="utf-8-sig")
+    if tables["A"].empty:
+        print(f"{source}: no subject with both models was found (check the result folders).")
+        return
+    per_subject = None
+    for name in ("A", "C", "D", "E", "F"):
+        t = tables[name]
+        if t.empty:
+            continue
+        keep = [c for c in t.columns if c in METRICS or c in ("Source", "Dataset", "Subject", "Model")]
+        per_subject = t[keep] if per_subject is None else per_subject.merge(
+            t[keep], on=["Source", "Dataset", "Subject", "Model"], how="outer")
+    tests = []
+    for dataset, e in per_subject.groupby("Dataset", sort=False):
+        tests += paired_tests(e, source, dataset)
+    if per_subject.Dataset.nunique() > 1:
+        tests += paired_tests(per_subject.assign(Subject=per_subject.Dataset + ":" + per_subject.Subject),
+                              source, ALL_DATASETS)
+    tests = pd.DataFrame(tests)
+    effect = training_effect(tables["B"]) if not tables["B"].empty else pd.DataFrame()
+
+    sections = {s: folder / name for s, name in SECTION_FOLDERS.items()}
+    tables_by_section = {"A": {"A_Gradients": tables["A"]},
+                         "B": {"B_Fusion": tables["B"], "B_Fusion_Channels": tables["B_channels"],
+                               "B_Training_Effect": effect},
+                         "C": {"C_Branch_Reliance": tables["C"]}, "D": {"D_Harmonics": tables["D"]},
+                         "E": {"E_Consistency": tables["E"]}, "F": {"F_Phase": tables["F"]}}
+    for section, frames in tables_by_section.items():
+        for name, frame in frames.items():
+            if not frame.empty:
+                sections[section].mkdir(parents=True, exist_ok=True)
+                frame.to_csv(sections[section] / f"{name}.csv", index=False, encoding="utf-8-sig")
+    for section in ("A", "C", "D", "E", "F"):
+        frame = tables[section]
+        if not frame.empty:
+            box_figure(sections[section] / f"{SECTION_FOLDERS[section]}.png", frame, tests, FIGURE_METRICS[section],
+                       f"{source}: {SECTION_FOLDERS[section]} (X left, O right; paired by subject, "
+                       + ("members m0-m2)" if section == "E" else "member m0)"))
+    if not tables["B_channels"].empty:
+        fusion_figure(sections["B"] / "B_Fusion_Shares.png", tables["B_channels"],
+                      f"{source}: k32 / k64 / k128 shares of the fused channels\n(O, |final weight| x branch SD)")
+    if not tables["D"].empty:
+        datasets = list(dict.fromkeys(tables["D"].Dataset))
+        spectra_figure(sections["D"] / "D_Spectra.png", store["curves"], source, [(d, None) for d in datasets],
+                       f"{source}: mean spectrum on the f / f0 axis (test windows, member m0)")
+        cases = [(c.split(":", 1)[0], c.split(":", 1)[1]) for c in args.case_subjects
+                 if any(k[1] == c.split(":", 1)[0] and k[2] == c.split(":", 1)[1] for k in store["curves"])]
+        spectra_figure(sections["D"] / "D_Spectra_Cases.png", store["curves"], source, cases,
+                       f"{source}: case subjects")
+        np.savez_compressed(sections["D"] / "harmonic_curves.npz", grid=F0_GRID,
+                            **{"|".join(k): v for k, v in store["curves"].items()})
+    if store["tsne"]:
+        tsne_figures(sections["F"], store["tsne"])
+
+    if not tests.empty:
+        tests.to_csv(folder / "Tests.csv", index=False, encoding="utf-8-sig")
+    sheets = {"Tests": tests, "B_Training_Effect": effect, "A_Gradients": tables["A"], "B_Fusion": tables["B"],
+              "B_Fusion_Channels": tables["B_channels"], "C_Branch_Reliance": tables["C"],
+              "D_Harmonics": tables["D"], "E_Consistency": tables["E"], "F_Phase": tables["F"],
+              "Coverage": coverage, "Notes": notes_table(source, args)}
+    with pd.ExcelWriter(folder / f"{source}_StemFusion_Feature_Interpretation.xlsx") as writer:
+        for name, frame in sheets.items():
+            if not frame.empty:
+                frame.round(5).to_excel(writer, sheet_name=name[:31], index=False)
+    print(f"\n{source}: O vs X (Result by BH-FDR, direction fixed beforehand)")
+    for r in tests.to_dict("records"):
+        print(f"  {r['Dataset']:<12s} {r['Metric']:<28s} O {r['O_Median']:.4g} vs X {r['X_Median']:.4g} "
+              f"(O higher {r['N_O_Higher']}/{r['N']}, p={r['Wilcoxon_p']:.2g}) {r['Result']}")
+    print(f"{source}: saved under {folder}", flush=True)
+
+
 def main(args: argparse.Namespace) -> None:
-    backbones = {"261007": load_backbone(Path(args.backbone_261007).resolve(), "rrwavenet_261007_interpretation"),
-                 "261013": load_backbone(Path(args.backbone_261013).resolve(), "rrwavenet_261013_interpretation")}
+    roots = {"261007": Path(args.results_root_261007), "261013": Path(args.results_root_261013)}
+    paths = {"261007": find_backbone("261007", args.backbone_261007, roots["261007"]),
+             "261013": find_backbone("261013", args.backbone_261013, roots["261013"])}
+    backbones = {source: load_backbone(path, f"rrwavenet_{source}_interpretation") for source, path in paths.items()}
     for module in backbones.values():
         configs = module.DATASET_CONFIGS
         if args.capnobase_path and "capnobase" in configs:
@@ -989,119 +1141,31 @@ def main(args: argparse.Namespace) -> None:
         torch.set_num_threads(int(args.threads))
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() and not args.force_cpu else "cpu")
     out = Path(args.output_root)
-    figures = out / "Figures"
-    figures.mkdir(parents=True, exist_ok=True)
-    roots = {"261007": Path(args.results_root_261007), "261013": Path(args.results_root_261013)}
-    print(f"261007: {roots['261007']}\n261013: {roots['261013']} (without stem fusion: {args.results_root_noise})\n"
-          f"device: {device}", flush=True)
-    store = {k: [] for k in ("A", "B", "B_channels", "C", "D", "E", "F", "coverage", "skipped")}
-    store["curves"], store["tsne"] = {}, {}
+    out.mkdir(parents=True, exist_ok=True)
+    print(f"Scripts: 261007 {paths['261007']}\n         261013 {paths['261013']}\n"
+          f"Results: 261007 {roots['261007']}\n         261013 {roots['261013']} "
+          f"(without stem fusion: {args.results_root_noise})\n"
+          f"Output:  {out / '261007'}, {out / '261013'}\ndevice:  {device}", flush=True)
     for source in args.sources:
+        store = {k: [] for k in ("A", "B", "B_channels", "C", "D", "E", "F", "coverage", "skipped")}
+        store["curves"], store["tsne"] = {}, {}
         analyse_source(source, backbones[source], backbones["261007"], roots[source], Path(args.results_root_noise),
                        args, device, store)
-    tables = {k: pd.DataFrame(store[k]) for k in ("A", "B", "B_channels", "C", "D", "E", "F")}
-    if tables["A"].empty:
-        print("No subject with both models was found (check the result folders).")
-        return
-
-    per_subject = None
-    for name in ("A", "C", "D", "E", "F"):
-        t = tables[name]
-        if t.empty:
-            continue
-        keep = [c for c in t.columns if c in METRICS or c in ("Source", "Dataset", "Subject", "Model")]
-        per_subject = t[keep] if per_subject is None else per_subject.merge(
-            t[keep], on=["Source", "Dataset", "Subject", "Model"], how="outer")
-    tests = []
-    for source, d in per_subject.groupby("Source", sort=False):
-        for dataset, e in d.groupby("Dataset", sort=False):
-            tests += paired_tests(e, source, dataset)
-        if d.Dataset.nunique() > 1:
-            pooled = d.assign(Subject=d.Dataset + ":" + d.Subject)
-            tests += paired_tests(pooled, source, ALL_DATASETS)
-    tests = pd.DataFrame(tests)
-    effect = training_effect(tables["B"]) if not tables["B"].empty else pd.DataFrame()
-
-    for source in args.sources:
-        s_tests = tests[tests.Source == source] if not tests.empty else tests
-        for section, frame_name in (("A", "A"), ("C", "C"), ("D", "D"), ("E", "E"), ("F", "F")):
-            frame = tables[frame_name]
-            if frame.empty or source not in set(frame.Source):
-                continue
-            box_figure(figures / f"{source}_{section}_{dict(A='gradients', C='reliance', D='harmonics', E='consistency', F='phase')[section]}.png",
-                       frame[frame.Source == source], s_tests, FIGURE_METRICS[section],
-                       f"{source}: {section} (X left, O right; paired by subject, member m0"
-                       + (", members m0-m2" if section == "E" else "") + ")")
-        if not tables["B_channels"].empty and source in set(tables["B_channels"].Source):
-            fusion_figure(figures / f"{source}_B_fusion_shares.png",
-                          tables["B_channels"][tables["B_channels"].Source == source],
-                          f"{source}: k32 / k64 / k128 shares of the fused channels\n(O, |final weight| x branch SD)")
-        datasets = [d for d in dict.fromkeys(tables["D"][tables["D"].Source == source].Dataset)]
-        spectra_figure(figures / f"{source}_D_spectra.png", store["curves"], source, [(d, None) for d in datasets],
-                       f"{source}: mean spectrum on the f / f0 axis (test windows, member m0)")
-        cases = [(c.split(":", 1)[0], c.split(":", 1)[1]) for c in args.case_subjects
-                 if any(k[0] == source and k[1] == c.split(":", 1)[0] and k[2] == c.split(":", 1)[1]
-                        for k in store["curves"])]
-        spectra_figure(figures / f"{source}_D_spectra_cases.png", store["curves"], source, cases,
-                       f"{source}: case subjects")
-    if store["tsne"]:
-        tsne_figures(figures, store["tsne"])
-    np.savez_compressed(out / "harmonic_curves.npz", grid=F0_GRID,
-                        **{"|".join(k): v for k, v in store["curves"].items()})
-
-    notes = pd.DataFrame({"Item": ["O / X", "Pairing", "Init", "Favourable_If", "A", "B", "C", "D", "E", "F",
-                                   "t-SNE"],
-                          "Meaning": [
-                              "Stem Fusion O = full model; X = no_stem_fusion (concatenated branches into the depthwise "
-                              "encoder: the time scales stay separate until the decoder)",
-                              "261007: O and X of 261007, member m0 (E: m0-m2); 261013: O = full model of the selected "
-                              "weight decay (m0), X = 261028_Stem_ablation_noise_v1 m0 with that weight decay",
-                              "initial weights drawn with the member's seed as in training (no training step run)",
-                              "direction fixed before the run; Result from the BH-FDR p (< 0.05)",
-                              f"gradients on {args.grad_windows} training windows of the fold (eval mode, no jitter): "
-                              "branch shares and balance (entropy / log 3), cosine coherence of the batch gradients of "
-                              "the stem, stem / decoder+head gradient norm",
-                              "O only: shares of k32 / k64 / k128 in every fused channel (|W| x branch SD), mixing "
-                              f"entropy, channels with >= 2 branches >= {MIXED_SHARE:.0%}; final vs init (B_Training_Effect)",
-                              "one branch replaced by its time mean per window: loss increase and output change; shares, "
-                              "balance, largest share",
-                              f"log10(P(2 f0) / P(f0)), +-{HARMONIC_HALF_WIDTH_HZ} Hz, f0 = target peak in the rate band "
-                              f"(f0 >= {HARMONIC_MIN_F0_HZ} Hz); the target's own ratio is listed",
-                              "261007 only: agreement of members m0-m2 (output r, linear CKA, rates within 1 breath/min, "
-                              "one member at ~2x another)",
-                              "ridge probe of cos / sin of the target phase (blocked 5-fold CV), mean |phase error|, kNN "
-                              "phase difference to time points of other windows",
-                              "per subject (every fold has its own network); coloured by the target phase"]})
-    path = out / "261105_StemFusion_Feature_Interpretation.xlsx"
-    sheets = {"Tests": tests, "B_Training_Effect": effect, "A_Gradients": tables["A"], "B_Fusion": tables["B"],
-              "B_Fusion_Channels": tables["B_channels"], "C_Branch_Reliance": tables["C"],
-              "D_Harmonics": tables["D"], "E_Consistency": tables["E"], "F_Phase": tables["F"],
-              "Coverage": pd.concat([pd.DataFrame(store["coverage"]), pd.DataFrame(store["skipped"])],
-                                    ignore_index=True), "Notes": notes}
-    with pd.ExcelWriter(path) as writer:
-        for name, frame in sheets.items():
-            if not frame.empty:
-                frame.round(5).to_excel(writer, sheet_name=name[:31], index=False)
-    for name, frame in sheets.items():
-        if not frame.empty and name != "Notes":
-            frame.to_csv(out / f"{name}.csv", index=False, encoding="utf-8-sig")
-    print("\nO vs X (Result by BH-FDR, direction fixed beforehand):")
-    if not tests.empty:
-        for r in tests.to_dict("records"):
-            print(f"  {r['Source']} {r['Dataset']:<12s} {r['Metric']:<28s} O {r['O_Median']:.4g} vs X {r['X_Median']:.4g} "
-                  f"(O higher {r['N_O_Higher']}/{r['N']}, p={r['Wilcoxon_p']:.2g}) {r['Result']}")
-    print(f"\nsaved under {out}")
+        save_source(source, store, args, out / source)
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--backbone-261007", type=Path, default=BACKBONE_261007)
-    parser.add_argument("--backbone-261013", type=Path, default=BACKBONE_261013)
+    parser.add_argument("--backbone-261007", type=Path, default=None,
+                        help="261007_RRWaveNet_Ensemble_NoEvent.py (default: looked for, see the docstring).")
+    parser.add_argument("--backbone-261013", type=Path, default=None,
+                        help="261013_RRWaveNet_Adult_SubjectVal_WD.py (default: looked for).")
     parser.add_argument("--results-root-261007", type=Path, default=RESULTS_ROOT_261007)
     parser.add_argument("--results-root-261013", type=Path, default=RESULTS_ROOT_261013)
     parser.add_argument("--results-root-noise", type=Path, default=RESULTS_ROOT_NOISE,
                         help="261028_Stem_ablation_noise_v1 results (261013 models without stem fusion).")
-    parser.add_argument("--output-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument("--output-root", type=Path, default=PROJECT_ROOT,
+                        help="Every result goes here, in 261007\\ and 261013\\.")
     parser.add_argument("--sources", nargs="+", default=["261007", "261013"], choices=["261007", "261013"])
     parser.add_argument("--datasets", nargs="+", default=["capnobase", "bidmc", "steam2"],
                         choices=["capnobase", "bidmc", "steam2"])
