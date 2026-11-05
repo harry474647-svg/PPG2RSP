@@ -20,11 +20,13 @@ the model's lowest score.
 
 Waveforms, alignment, windows and figures are those of
 261105_model_discussion_performance (imported): RespDiff and the
-corr-encoder as stored, RRWaveNet (261105_RRWaveNet_Unified_Optimized, the
-final ensemble by default) with its sign / lag undone and low-pass 1 Hz,
-every model shifted <= half a breath and, if needed, inverted once per
-recording to its best r with the GT; rate = FFT peak of the window, GT rate
-from the breaths in the window; cycles by 261030's detector, matched 1:1.
+corr-encoder as stored, RRWaveNet as 261104 (CapnoBase: 261007, ensemble of
+the full model; BIDMC / STEAM2: 261013, ensemble of the weight decay selected
+per fold; --rrwavenet-member for one member) with its sign / lag undone and
+low-pass 1 Hz, every model shifted <= half a breath and, if needed, inverted
+once per recording to its best r with the GT; rate = FFT peak of the window,
+GT rate from the breaths in the window; cycles by 261030's detector, matched
+1:1.
 Subjects need RRWaveNet and at least one other model (as in that script).
 
 Outputs (default D:\PPG2RSP_RRWaveNet_Inspired\261105_model_worst_subjects)
@@ -36,7 +38,9 @@ Outputs (default D:\PPG2RSP_RRWaveNet_Inspired\261105_model_worst_subjects)
 
 Run:          python 261105_model_worst_subjects.py
 Options:      --top 10, --per-dataset, --sizes 30 60, --step 5, result folders
-              and data files as in 261105_model_discussion_performance
+              (--respdiff-root, --correncoder-root, --rrwavenet-261007-root,
+              --rrwavenet-261013-root) and data files as in
+              261105_model_discussion_performance
 """
 
 import argparse
@@ -199,7 +203,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                               f"{-SPECIFIC_DEFICIT}, otherwise similar to others",
                               f"per listed subject and size, the window (start every {args.step:g} s) with the lowest "
                               "score of the model",
-                              f"{args.rrwavenet_output} of the weight decay selected per fold ({args.rrwavenet_root})"]})
+                              mdp.rrwavenet_note(args)]})
     with pd.ExcelWriter(out / "worst_subjects.xlsx") as writer:
         for name, frame in sheets.items():
             frame.round(4).to_excel(writer, sheet_name=name[:31], index=False)

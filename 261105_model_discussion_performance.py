@@ -40,9 +40,10 @@ with the highest score.
 
 Waveforms (as in the overlay figures and 261105_Model_Strength_Analysis,
 whose readers this script imports): RespDiff and the corr-encoder as stored,
-RRWaveNet (261105_RRWaveNet_Unified_Optimized: the final ensemble of the
-weight decay selected per fold, --rrwavenet-output) with its training sign /
-lag undone and low-pass 1 Hz; every model shifted by at most half a breath
+RRWaveNet (as 261104: CapnoBase from 261007, the ensemble of the full model;
+BIDMC / STEAM2 from 261013, the ensemble of the weight decay selected per fold;
+--rrwavenet-member m0 / m1 / m2 for one member instead) with its training sign
+/ lag undone and low-pass 1 Hz; every model shifted by at most half a breath
 and, if needed, inverted once per recording to its best r with the GT (the
 same rule for all).
 
@@ -60,7 +61,8 @@ Outputs (default D:\PPG2RSP_RRWaveNet_Inspired\261105_model_discussion_performan
                              PCC / cycles beside every row
 
 Run:                 python 261105_model_discussion_performance.py
-Result folders:      --respdiff-root, --correncoder-root, --rrwavenet-root
+Result folders:      --respdiff-root, --correncoder-root, --rrwavenet-261007-root,
+                     --rrwavenet-261013-root
 Data files:          --capnobase-path, --bidmc-path, --steam2-ppg-dir, --steam2-rsp-dir
 Some datasets:       --datasets capnobase bidmc
 """
@@ -98,7 +100,6 @@ ov = msa.ov
 FS = msa.FS
 
 PROJECT_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261105_model_discussion_performance")
-RRWAVENET_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired\261105_RRWaveNet_Unified_Optimized")
 MODELS = ("RespDiff", "Deep corr-encoder", "RRWaveNet")
 OTHERS = ("RespDiff", "Deep corr-encoder")
 WINDOW_SIZES = (30, 60)
@@ -117,34 +118,6 @@ OBSERVATIONS = {
     "rd_double": ("RespDiff at twice the rate, RRWaveNet right", ("RespDiff", "RRWaveNet")),
     "rr_coverage": ("RRWaveNet detects the breathing cycles the others miss", MODELS),
 }
-
-
-# ---------------------------------------------------------------------------
-# RRWaveNet results of 261105_RRWaveNet_Unified_Optimized
-# ---------------------------------------------------------------------------
-
-def rrwavenet_sources(root: Path, dataset_key: str, output: str) -> Dict[str, Tuple[Path, str]]:
-    """Subject -> (npz of the test outputs, run name): the weight decay selected
-    in the fold (WD_Selection), its final ensemble (ensemble), the ensemble of
-    the selected candidate (selected_ensemble) or one member (m0, m1, m2)."""
-    label = ov.DATASET_CONFIGS[dataset_key]["label"]
-    window = ov.RRWAVENET_WINDOW
-    files = {}
-    for selection in sorted((root / "WD_Selection" / window / label).glob("*_selection.json")):
-        subject = selection.name[: -len("_selection.json")]
-        variant = (ov.read_json(selection) or {}).get("Selected_Variant")
-        if not variant:
-            continue
-        condition = root / variant / window / label
-        if output in ("ensemble", "selected_ensemble"):
-            path = condition / "Ensemble_Predictions" / f"{subject}_{output}_outputs.npz"
-            summary = condition / "Fold_Summaries" / f"{subject}_{output}_summary.json"
-        else:
-            path = condition / "Members" / output / "Predictions" / f"{subject}_test_outputs.npz"
-            summary = condition / "Fold_Summaries" / f"{subject}_{output}_summary.json"
-        if path.exists() and summary.exists():
-            files[subject] = (path, f"{variant} {output}")
-    return files
 
 
 # ---------------------------------------------------------------------------
@@ -233,8 +206,8 @@ def dataset_windows(dataset_key: str, args, store: dict) -> List[dict]:
     band = msa.RATE_BAND_BPM[dataset_key]
     corr = ov.load_correncoder(Path(args.correncoder_root), label)
     respdiff = ov.load_respdiff(Path(args.respdiff_root), label, args.respdiff_sampling)
-    rr_files = rrwavenet_sources(Path(args.rrwavenet_root), dataset_key, args.rrwavenet_output)
-    rr_alignment = ov.rrwavenet_alignment_table(Path(args.rrwavenet_root), label)
+    rr_files, rr_root = msa.rrwavenet_sources(dataset_key, args)
+    rr_alignment = ov.rrwavenet_alignment_table(rr_root, label)
     subjects = sorted(set(rr_files) & (set(corr) | set(respdiff)))
     if args.subjects:
         subjects = [s for s in subjects if s in {str(x) for x in args.subjects}]
@@ -411,6 +384,11 @@ def draw(key: str, row: dict, data: dict, path: Path) -> plt.Figure:
 # Main
 # ---------------------------------------------------------------------------
 
+def rrwavenet_note(args) -> str:
+    return (f"{args.rrwavenet_member}: CapnoBase from 261007, full model ({args.rrwavenet_261007_root}); "
+            f"BIDMC / STEAM2 from 261013, weight decay selected per fold ({args.rrwavenet_261013_root})")
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--datasets", nargs="+", choices=list(ov.DATASET_ORDER), default=list(ov.DATASET_ORDER))
@@ -421,11 +399,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--respdiff-root", type=Path, default=ov.RESPDIFF_ROOT)
     parser.add_argument("--respdiff-sampling", default=ov.RESPDIFF_SAMPLING)
     parser.add_argument("--correncoder-root", type=Path, default=ov.CORRENCODER_ROOT)
-    parser.add_argument("--rrwavenet-root", type=Path, default=RRWAVENET_ROOT,
-                        help="261105_RRWaveNet_Unified_Optimized results folder.")
-    parser.add_argument("--rrwavenet-output", choices=["ensemble", "selected_ensemble", "m0", "m1", "m2"],
-                        default="ensemble", help="RRWaveNet output: the final ensemble (default), the ensemble of "
-                                                 "the selected weight decay, or one member of it.")
+    parser.add_argument("--rrwavenet-261007-root", type=Path, default=ov.RRWAVENET_261007_ROOT,
+                        help="261007 results folder (CapnoBase, full model).")
+    parser.add_argument("--rrwavenet-261013-root", type=Path, default=ov.RRWAVENET_261013_ROOT,
+                        help="261013 results folder (BIDMC / STEAM2, weight decay selected per fold).")
+    parser.add_argument("--rrwavenet-member", choices=["ensemble", "m0", "m1", "m2"], default="ensemble",
+                        help="RRWaveNet output: the ensemble (default) or one member.")
     parser.add_argument("--rrwavenet-lowpass-hz", type=float, default=ov.RRWAVENET_LOWPASS_HZ)
     parser.add_argument("--capnobase-path", type=Path, default=None)
     parser.add_argument("--bidmc-path", type=Path, default=None)
@@ -433,6 +412,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--steam2-rsp-dir", type=Path, default=None)
     parser.add_argument("--output-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument("--no-png", action="store_true", help="Only the PDF of every observation and dataset.")
+    parser.set_defaults(rrwavenet_unified_root=None)  # read by msa.rrwavenet_sources: 261007 / 261013 only
     return parser.parse_args(argv)
 
 
@@ -508,7 +488,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                               "highest score",
                               "261030 detector on the aligned waveforms; a GT cycle is matched by a model cycle "
                               "starting within half its length (1:1); clipped GT cycles are counted (GT_Clipped_Cycles)",
-                              f"{args.rrwavenet_output} of the weight decay selected per fold ({args.rrwavenet_root})"]})
+                              rrwavenet_note(args)]})
     with pd.ExcelWriter(out / "discussion_subjects.xlsx") as writer:
         for name, frame in sheets.items():
             frame.round(4).to_excel(writer, sheet_name=name[:31], index=False)
