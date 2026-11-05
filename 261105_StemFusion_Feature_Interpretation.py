@@ -553,13 +553,23 @@ def knn_phase_error(features: np.ndarray, phase: np.ndarray, windows: np.ndarray
 
 
 def tsne_map(features: np.ndarray) -> Optional[np.ndarray]:
+    """2-D t-SNE map, or None (scikit-learn missing or the map failed; the run goes on)."""
     try:
         from sklearn.manifold import TSNE
     except ImportError:
+        print("    t-SNE skipped (scikit-learn not installed)")
         return None
-    perplexity = min(TSNE_PERPLEXITY, max(5.0, (len(features) - 1) / 3.0))
-    return TSNE(n_components=2, perplexity=perplexity, init="pca", learning_rate="auto",
-                random_state=0).fit_transform(standardize(features))
+    n = len(features)
+    perplexity = min(TSNE_PERPLEXITY, max(5.0, (n - 1) / 3.0))
+    # learning rate as scikit-learn's "auto" (max(n / early exaggeration 12 / 4, 50)), given as a number so that
+    # versions before 1.0 (which do not know "auto") work too
+    learning_rate = max(n / 12.0 / 4.0, 50.0)
+    try:
+        return TSNE(n_components=2, perplexity=perplexity, init="pca", learning_rate=learning_rate,
+                    random_state=0).fit_transform(standardize(features))
+    except Exception as exc:
+        print(f"    t-SNE skipped ({type(exc).__name__}: {exc})")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -908,7 +918,8 @@ def box_figure(path: Path, frame: pd.DataFrame, tests: pd.DataFrame, metrics: Se
             for k, (m, v) in enumerate(zip(("X", "O"), values)):
                 ax.scatter(np.full(len(v), k + 1) + np.random.default_rng(k).uniform(-0.12, 0.12, len(v)), v,
                            s=9, color=MODEL_COLORS[m], alpha=0.8, zorder=3)
-            ax.set_xticks([1, 2], ["X", "O"])
+            ax.set_xticks([1, 2])
+            ax.set_xticklabels(["X", "O"])
             t = tests[(tests.Dataset == dataset) & (tests.Metric == metric)]
             note = ""
             if len(t):
