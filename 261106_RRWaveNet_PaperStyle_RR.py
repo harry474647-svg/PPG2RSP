@@ -14,6 +14,9 @@ pipeline (261105_RRWaveNet_Unified_Optimized):
   split at EEGLAB "boundary" events (removed data) so that no window spans a
   gap, all sessions of a person in one subject.
 - BIDMC: unchanged.
+RR labels: Welch peak of the reference window as in 260514, with the
+spectrum zero-padded to 0.1 breaths/min bins (RR_LABEL_RESOLUTION_BPM); in
+260514 the bins were 7.5 breaths/min apart.
 Input: only the 0.1-0.5 Hz PPG (input case low_only; ACTIVE_INPUT_CASES).
 The low_hilbert case (high-band PPG and its Hilbert envelope and frequency)
 is not trained.
@@ -143,6 +146,12 @@ RR_MAX_BPM = 45.0
 RESP_LOW_HZ = RR_MIN_BPM / 60.0
 RESP_HIGH_HZ = RR_MAX_BPM / 60.0
 RESP_BANDPASS_ORDER = 3
+# RR label resolution: the Welch spectrum is zero-padded to
+# nfft = fs * 60 / RR_LABEL_RESOLUTION_BPM points (30000 at 50 Hz), so its
+# bins are 0.1 breaths/min apart. Without it (nfft = nperseg = 8 s) the bins
+# were 0.125 Hz = 7.5 breaths/min apart and the labels took only the values
+# 7.5, 15, 22.5, ...
+RR_LABEL_RESOLUTION_BPM = 0.1
 LOW_BAND_HZ = (0.1, 0.5)
 HIGH_BAND_HZ = (0.5, 5.0)
 
@@ -464,7 +473,8 @@ def estimate_rr_bpm_from_reference(
     if sig.size < int(fs * 4):
         return np.nan
     nperseg = min(sig.size, int(fs * 8))
-    freqs, psd = welch(sig, fs=fs, nperseg=nperseg)
+    nfft = max(nperseg, int(round(float(fs) * 60.0 / RR_LABEL_RESOLUTION_BPM)))
+    freqs, psd = welch(sig, fs=fs, nperseg=nperseg, nfft=nfft)
     mask = (freqs >= low_hz) & (freqs <= high_hz)
     if not np.any(mask):
         return np.nan
@@ -473,7 +483,7 @@ def estimate_rr_bpm_from_reference(
     if band_freqs.size == 0 or not np.any(np.isfinite(band_psd)):
         return np.nan
     peak_idx = int(np.argmax(band_psd))
-    bpm = float(band_freqs[peak_idx] * 60.0)
+    bpm = float(np.round(band_freqs[peak_idx] * 60.0 / RR_LABEL_RESOLUTION_BPM) * RR_LABEL_RESOLUTION_BPM)
     if not np.isfinite(bpm) or bpm < rr_min or bpm > rr_max:
         return np.nan
     return bpm
@@ -640,7 +650,9 @@ def preprocess_subject_rr_windows(
 # ===========================================================
 def get_cache_path(cache_dir: str, dataset_key: str, subject: str, window_sec: float, enable_sqi: bool) -> str:
     sqi_tag = "sqi1" if enable_sqi else "sqi0"
-    tag = f"{dataset_key}_{safe_tag(subject)}_w{float(window_sec):g}_{sqi_tag}.npz"
+    # The label resolution is part of the name: caches with the old 7.5
+    # breaths/min labels are never read.
+    tag = f"{dataset_key}_{safe_tag(subject)}_w{float(window_sec):g}_{sqi_tag}_rr{RR_LABEL_RESOLUTION_BPM:g}.npz"
     return os.path.join(cache_dir, tag)
 
 
