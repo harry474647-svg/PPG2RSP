@@ -5,11 +5,15 @@ corr-encoder; each run drawn and saved in its own folder (no comparison
 between runs, no statistical test; nothing is trained or re-run).
 
 Changes from 261106_RRWaveNet_Performance_Boxplots (everything else is
-unchanged: the values, subject sets, window search, alignment and tables)
+unchanged: the values, subject sets, window search and tables)
 * Waveforms are not drawn over each other: one page per drawn window with
   three panels of the same time interval, (a) GT vs RRWaveNet of the run,
   (b) GT vs RespDiff, (c) GT vs the deep corr-encoder; one page set per run
   (261013, 261007, 261105), each in its own folder.
+* Every waveform of a page is the same time span sample for sample: no model
+  is shifted in time to the GT (v1 shifted each model by up to half a breath);
+  a model is only inverted when its r with the GT over the recording is
+  negative. The GT is drawn in black in every panel.
 * Box plots of RR MAE and of PCC only (the waveform MAE stays in the
   tables), each metric in its own folder inside the run's folder; the two
   side by side in a third folder.
@@ -79,9 +83,9 @@ Waveforms with the earlier models (each run, its own folder)
 ------------------------------------------------------------
 RRWaveNet of the run (the same stored ensemble output), RespDiff (261028 v3 / 261101 v4, {respdiff-root}\respdiff\{dataset}\
 Predictions\{subject}_ddpm50.npz) and the deep corr-encoder (261028,
-{correncoder-root}\{dataset}\Predictions\{subject}_outputs.npz), read,
-aligned and measured as in 261104_Waveform_Overlay and
-261105_model_discussion_analysis. Their readers, filters and the breathing
+{correncoder-root}\{dataset}\Predictions\{subject}_outputs.npz), read and
+measured as in 261104_Waveform_Overlay and 261105_model_discussion_analysis
+(without their time shift of each model, below). Their readers, filters and the breathing
 cycle detector of 261030_Waveform_Morphology_Analysis are copied into this
 script; only the CapnoBase reader with the expert breath labels
 (read_capnobase_case) is imported, from 261007_RRWaveNet_Ensemble_NoEvent.py
@@ -92,9 +96,11 @@ D:\PPG2RSP_RRWaveNet_Inspired\261028_Deep_correncoder; data files of the GT
 as in the three scripts (--capnobase-path, --bidmc-path, --steam2-ppg-dir,
 --steam2-rsp-dir).
 * GT = the reference as recorded at 30 Hz (CapnoBase capnogram, BIDMC
-  impedance, STEAM2 belt); RRWaveNet with its training sign / lag undone and
-  low-pass 1 Hz; every model shifted by <= half a breath and inverted if
-  needed, once per recording, to its best r with the GT (same rule for all).
+  impedance, STEAM2 belt); RRWaveNet with its training sign / lag undone (its
+  output put back on the GT's time axis) and low-pass 1 Hz; no model is
+  shifted in time, so every waveform of a page covers the same seconds of the
+  recording; a model is inverted, once per recording, when its r with the GT
+  is negative (same rule for all).
 * Windows of 30 s and 60 s (--sizes), one starting every 5 s (--step); in a
   window per model: AE = |FFT rate - GT rate| (breaths/min; GT rate from the
   breaths: CapnoBase expert labels, BIDMC ann1, STEAM2 the GT cycles), PCC
@@ -104,8 +110,9 @@ as in the three scripts (--capnobase-path, --bidmc-path, --steam2-ppg-dir,
   windows of the size.
 * One page per subject and size: the window with the largest Advantage, in
   three panels of the same time interval, (a) GT vs RRWaveNet of the run,
-  (b) GT vs RespDiff, (c) GT vs the deep corr-encoder; GT gray and thick,
-  each waveform min-max scaled in the window; beside every panel (outside
+  (b) GT vs RespDiff, (c) GT vs the deep corr-encoder, all three the same
+  seconds of the recording; GT black in every panel, each waveform min-max
+  scaled in the window; beside every panel (outside
   the waveforms) that model's subject MAE and PCC and this window's AE and
   r; a model without a result for the subject is marked in its panel.
 Outputs per run: {run}\Waveforms\{30s,60s}\{dataset}\{subject or recording}_{t0}-{t1}s.png,
@@ -1326,29 +1333,13 @@ def fft_rate(x: np.ndarray, fs: float, band_bpm: Tuple[float, float]) -> float:
     return float(f[keep][np.argmax(p[keep])])
 
 
-def shifted(values: np.ndarray, shift: int) -> np.ndarray:
-    out = np.full(len(values), np.nan)
-    if shift >= 0:
-        out[shift:] = values[: len(values) - shift]
-    else:
-        out[:shift] = values[-shift:]
-    return out
-
-
-def align(gt: np.ndarray, values: np.ndarray, period_sec: float) -> np.ndarray:
-    """The model shifted by at most half a breath and, if needed, inverted, to
-    its largest Pearson r with the GT over the recording (every model alike)."""
-    best = (-np.inf, 1.0, 0)
-    reach = int(round(0.5 * period_sec * FS30))
-    for shift in range(-reach, reach + 1):
-        r = pearson(gt, shifted(values, shift))
-        if np.isfinite(r):
-            for sign in (1.0, -1.0):
-                if sign * r > best[0]:
-                    best = (sign * r, sign, shift)
-    if not np.isfinite(best[0]):
-        return np.asarray(values, float)
-    return best[1] * shifted(values, best[2])
+def align(gt: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """The model on the GT's own time axis, not shifted in time (every sample
+    at the same second as the GT sample beside it); inverted when its Pearson
+    r with the GT over the recording is negative (every model alike)."""
+    values = np.asarray(values, float)
+    r = pearson(gt, values)
+    return -values if np.isfinite(r) and r < 0 else values
 
 
 def recording_cycles(values: Dict[str, np.ndarray], modality: str) -> Dict[str, List[dict]]:
@@ -1468,6 +1459,7 @@ def subject_means(rows: List[dict], size: int) -> Tuple[dict, str]:
 # Panels of a waveform page, top to bottom: the run's RRWaveNet, RespDiff, the
 # deep corr-encoder.
 PANEL_ORDER = ("RRWaveNet", "RespDiff", "Deep corr-encoder")
+GT_COLOR = "#000000"  # the GT in black in every panel
 
 
 def waveform_page(path: Path, pdf, run: str, dataset: str, subject: str, recording: Optional[str], size: int,
@@ -1480,7 +1472,7 @@ def waveform_page(path: Path, pdf, run: str, dataset: str, subject: str, recordi
     t0, t1 = row["Start_Sec"], row["End_Sec"]
     a, b = int(round(t0 * FS30)), int(round(t1 * FS30))
     t = t0 + np.arange(b - a) / FS30
-    side_in, left_in, top_in, bottom_in, panel_in, gap_in = 3.2, 0.75, 1.15, 0.6, 1.75, 0.38
+    side_in, left_in, top_in, bottom_in, panel_in, gap_in = 3.2, 0.75, 1.35, 0.6, 1.75, 0.38
     width = 7.0 + 4.0 * size / 60.0
     height = top_in + bottom_in + len(PANEL_ORDER) * panel_in + (len(PANEL_ORDER) - 1) * gap_in
     fig = plt.figure(figsize=(width, height))
@@ -1494,9 +1486,9 @@ def waveform_page(path: Path, pdf, run: str, dataset: str, subject: str, recordi
         s = SHORT[model]
         name = f"RRWaveNet ({run})" if model == "RRWaveNet" else model
         available = model in values and f"{s}_MAE" in means and f"{s}_AE" in row
-        ax.plot(t, gt, color="#0b0b0b", lw=2.6, alpha=0.35, zorder=1)
+        ax.plot(t, gt, color=GT_COLOR, lw=1.5, zorder=1)
         if available:
-            ax.plot(t, minmax(values[model][a:b]), color=MODEL_COLORS[model], lw=1.7, zorder=2)
+            ax.plot(t, minmax(values[model][a:b]), color=MODEL_COLORS[model], lw=1.3, zorder=2)
         else:
             ax.text(0.5, 0.5, f"{model}: no result for this subject", transform=ax.transAxes, ha="center",
                     va="center", fontsize=9, color=INK, zorder=3,
@@ -1513,10 +1505,10 @@ def waveform_page(path: Path, pdf, run: str, dataset: str, subject: str, recordi
             ax.tick_params(labelbottom=False)
         x = (width - side_in + 0.12) / width
         top = (bottom + panel_in) / height
-        handles = [Line2D([], [], color="#0b0b0b", lw=2.6, alpha=0.35)]
+        handles = [Line2D([], [], color=GT_COLOR, lw=1.5)]
         labels = [f"GT ({gt_name}), {row['GT_RR']:.1f} breaths/min"]
         if available:
-            handles.append(Line2D([], [], color=MODEL_COLORS[model], lw=1.7))
+            handles.append(Line2D([], [], color=MODEL_COLORS[model], lw=1.3))
             labels.append(name)
         fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(x, top), frameon=False, fontsize=7.5,
                    borderaxespad=0.0)
@@ -1535,8 +1527,8 @@ def waveform_page(path: Path, pdf, run: str, dataset: str, subject: str, recordi
     fig.text(left_in / width, 1.0 - 0.22 / height, f"{run} · {dataset} {name} · {size} s window {t0:.0f}-{t1:.0f} s",
              fontsize=10.5, color=INK, va="top")
     fig.text(left_in / width, 1.0 - 0.50 / height,
-             "models aligned to the GT (shift <= half a breath, sign); each waveform min-max scaled in the window; "
-             "RRWaveNet low-pass 1 Hz\n"
+             "all panels the same seconds of the recording (no model shifted in time; inverted when r < 0 over the "
+             "recording); GT black\neach waveform min-max scaled in the window; RRWaveNet low-pass 1 Hz\n"
              f"MAE / AE = |FFT rate - GT rate| (breaths/min); subject mean over {basis}",
              fontsize=7.2, color=MUTED, va="top", linespacing=1.4)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1576,7 +1568,7 @@ def overlay_dataset(args: argparse.Namespace, dataset: str, runs: Dict[str, dict
     if not plan:
         return
     recordings = read_recordings(key)
-    aligned = {}  # (subject, recording, model) -> RespDiff / corr-encoder aligned to the GT (same in every run)
+    aligned = {}  # (subject, recording, model) -> RespDiff / corr-encoder sign-matched to the GT (same in every run)
     for run, (files, subjects) in plan.items():
         info = runs[run]
         alignment = rrwavenet_alignment_table(info["root"], dataset)
@@ -1605,14 +1597,13 @@ def overlay_dataset(args: argparse.Namespace, dataset: str, runs: Dict[str, dict
                 breaths = rec["breaths"]
                 if breaths is None or len(breaths) < MIN_BREATHS:
                     breaths = np.array([c["start"] for c in recording_cycles({"GT": gt}, modality)["GT"]])
-                period = float(np.median(np.diff(breaths))) if len(breaths) >= 2 else 60.0 / np.mean(band)
                 values = {"GT": gt}
                 for model, v in raw.items():
                     if model == "RRWaveNet":
-                        values[model] = align(gt, v, period)
+                        values[model] = align(gt, v)
                     else:
                         if (subject, name, model) not in aligned:
-                            aligned[(subject, name, model)] = align(gt, v, period)
+                            aligned[(subject, name, model)] = align(gt, v)
                         values[model] = aligned[(subject, name, model)]
                 cycles = recording_cycles(values, modality)
                 clipped = np.asarray(rec["clipped"], bool)
@@ -1738,27 +1729,32 @@ def overlay_notes(args: argparse.Namespace) -> pd.DataFrame:
         ("GT", "the reference as recorded (CapnoBase capnogram, BIDMC impedance, STEAM2 belt) at 30 Hz, read as "
                "261104; GT rate from the breaths in the window (CapnoBase expert labels, BIDMC ann1, STEAM2 the "
                "GT cycles); a window needs >= 3 breaths and every waveform without a gap"),
-        ("Alignment", "every model shifted by <= half a breath and, if needed, inverted once per recording to its "
-                      "best r with the GT (the same rule for all); RRWaveNet: training sign / lag undone, "
+        ("Alignment", "no model is shifted in time: every waveform of a page covers the same seconds of the "
+                      "recording as the GT; a model is inverted once per recording when its r with the GT is "
+                      "negative (the same rule for all); RRWaveNet: training sign / lag undone (its output put "
+                      "back on the GT's time axis), "
                       f"low-pass {args.rrwavenet_lowpass_hz:g} Hz (as 261104 / 261105_model_discussion_analysis)"),
         ("AE / MAE", "|FFT peak rate of the model's waveform in the rate band - GT rate| (breaths/min); "
                      "CapnoBase band 3-60, BIDMC / STEAM2 6-30; subject MAE = mean AE over the subject's "
                      "non-overlapping windows of a size (all its windows when none is complete)"),
-        ("PCC", "Pearson r of the aligned model and the GT in the window; subject PCC = mean over the same windows"),
+        ("PCC", "Pearson r of the model and the GT over the same samples of the window (no time shift); subject "
+                "PCC = mean over the same windows"),
         ("Score / Advantage", f"score = PCC - {AE_WEIGHT} x min(AE, {AE_CAP}); Advantage = RRWaveNet's score - the "
                               "best score of the other models in the window (> 0: RRWaveNet ahead)"),
         ("Drawn window", "per subject and size the window (start every "
                          f"{args.step:g} s) with the largest Advantage, one page with three panels of the same "
                          "interval: (a) GT vs RRWaveNet of the run, (b) GT vs RespDiff, (c) GT vs the deep "
-                         "corr-encoder; beside each panel the model's subject means and this window's AE and r"),
+                         "corr-encoder, all the same seconds of the recording, GT black; beside each panel the "
+                         "model's subject means and this window's AE and r"),
         ("Candidates", f"drawn windows with RRWaveNet AE <= {RATE_OK_BPM} and Advantage > 0, largest Advantage "
                        "first; Why: the other models at twice / half the rate, rate off by > 2, >= 2 more GT "
                        "cycles missed than RRWaveNet, PCC lower by >= 0.3"),
         ("Official_RR_MAE / PCC", "the run's own per-subject values (60 s minutes, its target; the box plots), "
                                   "for reference; the overlay values use the recorded GT and the windows above"),
         ("In_Excluded_Sets", "the subject sets of the box plots that leave this subject out"),
-        ("Cycles", "261030 detector on the aligned waveforms; Missed = GT cycles without a model cycle starting "
-                   "within half their length (1:1); Extra = model cycles not matched; Coverage = matched / GT"),
+        ("Cycles", "261030 detector on the waveforms as drawn (not shifted in time); Missed = GT cycles without a "
+                   "model cycle starting within half their length (1:1); Extra = model cycles not matched; "
+                   "Coverage = matched / GT"),
     ]
     return pd.DataFrame(lines, columns=["Item", "Description"])
 
