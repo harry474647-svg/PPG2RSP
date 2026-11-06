@@ -10,9 +10,11 @@ AutoEncoder_AllCases experiment and changes the data pipeline to open datasets:
 - CapnoBase: plethysmography -> CO2-derived respiration
 - STEAM2: PPG -> respiratory belt (RSP)   [added in 261106]
 
-Only STEAM2 is run (ACTIVE_DATASETS). Everything else (preprocessing,
-quality check, model, loss, training, validation subjects, 30 s evaluation,
-outputs) is that of 260504_AutoEncoder_Opendata_ablation.
+Only STEAM2 is run (ACTIVE_DATASETS), and only the 0.1-0.5 Hz PPG input
+("low", model 01_low; ACTIVE_FEATURE_SETS): the high-band and Hilbert inputs
+are not trained. Everything else (preprocessing, quality check, model, loss,
+training, validation subjects, 30 s evaluation, outputs) is that of
+260504_AutoEncoder_Opendata_ablation.
 
 STEAM2 reading (the reader of 261028_Deep_correncoder / 261105): every
 session (one 2-back block) is an EEGLAB .mat file (EEG.data, EEG.srate =
@@ -24,13 +26,13 @@ processed and windowed on its own (no window spans two sessions or a
 boundary); all sessions of a person form one subject, so a person is never
 in the training and the test data of one LOSO fold.
 
-It trains every non-empty combination of:
+260504 trains every non-empty combination of:
 - low:  0.1-0.5 Hz PPG time series
 - high: 0.5-5.0 Hz PPG time series
 - env:  Hilbert envelope of high
 - freq: Hilbert instantaneous frequency of high
-
-Total: 15 feature-combination models per LOSO test subject per dataset.
+(15 feature-combination models per LOSO test subject per dataset); here only
+"low" (1 model per LOSO test subject).
 
 Saved outputs:
 1. Learning curves
@@ -225,7 +227,10 @@ def build_model_configs():
     return configs
 
 
-MODEL_CONFIGS = build_model_configs()
+# 261106: only the 0.1-0.5 Hz PPG input ("low"). Add feature sets here to
+# train other combinations of the 260504 ablation again.
+ACTIVE_FEATURE_SETS = (("low",),)
+MODEL_CONFIGS = [cfg for cfg in build_model_configs() if tuple(cfg["feature_keys"]) in ACTIVE_FEATURE_SETS]
 
 
 # ===========================================================
