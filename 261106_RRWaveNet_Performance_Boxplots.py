@@ -35,22 +35,42 @@ The PCC of every minute is recomputed from the same arrays and checked
 against the stored one (Coverage: PCC_Check_Max_Abs_Diff), so the waveform
 MAE is taken on the same samples as the stored PCC.
 
+Subject sets (each run, each in its own folder)
+  01_All_subjects               every subject
+  02_Excluded_STEAM2_worst1     CapnoBase without 0115, BIDMC without 27,
+                                STEAM2 without its subject with the largest
+                                subject RR MAE in this run
+  03_Excluded_STEAM2_worst2     the same, STEAM2 without its 2 subjects with
+                                the largest subject RR MAE in this run
+--exclude-capnobase / --exclude-bidmc change the given subjects (an ID
+written with or without leading zeros matches, 0115 = 115);
+--exclude-steam2 gives the STEAM2 subjects instead of the ranking;
+--steam2-worst sets the numbers of STEAM2 subjects (default 1 2). A given
+subject not found in a run is reported and nothing is removed for it.
+
 Outputs (default D:\PPG2RSP_RRWaveNet_Inspired\261106_RRWaveNet_Performance_Boxplots)
-  261105\  261007\  261013\    one folder per run, each with
-    {run}_RR_MAE_boxplot.png / .pdf
-    {run}_PCC_boxplot.png / .pdf
-    {run}_Waveform_MAE_boxplot.png / .pdf
-    {run}_Performance_boxplots.png / .pdf      the three side by side
-    {run}_Performance.xlsx      Summary (per dataset: N, mean, SD, median,
-                                IQR, min, max), Per_Subject, Per_Minute,
-                                Coverage (files found, PCC check), Notes
-    {run}_per_subject.csv, {run}_per_minute.csv, {run}_summary.csv,
-    {run}_coverage.csv
-Box: median and IQR, whiskers 1.5 IQR; every subject is a point.
+  {run}\                        261105, 261007, 261013
+    {run}_Summary_by_subject_set.xlsx   Summary of every subject set (per
+                                dataset: N, mean, SD, median, IQR, min,
+                                max), Exclusions (removed subjects, their
+                                RR MAE and rank), Coverage (files found, PCC
+                                check), Notes; the same as CSV files
+    01_All_subjects\, 02_Excluded_STEAM2_worst1\, 03_Excluded_STEAM2_worst2\
+      {run}_{set}_RR_MAE_boxplot.png / .pdf
+      {run}_{set}_PCC_boxplot.png / .pdf
+      {run}_{set}_Waveform_MAE_boxplot.png / .pdf
+      {run}_{set}_Performance_boxplots.png / .pdf   the three side by side
+      {run}_{set}_Performance.xlsx   Summary, Per_Subject, Per_Minute,
+                                     Exclusions, Notes (and CSV files)
+      ({set} = all, excl_worst1, excl_worst2)
+Box: median and IQR, whiskers 1.5 IQR; every subject is a point; the
+second title line names the subjects left out.
 
 Run:  python 261106_RRWaveNet_Performance_Boxplots.py
       [--runs 261105 261007 261013] [--root-261105 <folder>]
       [--root-261007 <folder>] [--root-261013 <folder>] [--output-root <folder>]
+      [--exclude-capnobase 0115] [--exclude-bidmc 27] [--steam2-worst 1 2]
+      [--exclude-steam2 <subject> <subject>]
 """
 
 import argparse
@@ -95,6 +115,10 @@ METRICS = (
     ("PCC", "PCC", "Subject waveform PCC (r)"),
     ("Waveform_MAE", "Waveform MAE", "Subject waveform MAE (target scale, [-1, 1])"),
 )
+# Subjects left out of the excluded subject sets (see the docstring).
+EXCLUDE_CAPNOBASE = ("0115",)
+EXCLUDE_BIDMC = ("27",)
+STEAM2_WORST = (1, 2)
 COLORS = {"CapnoBase": "#2a78d6", "BIDMC": "#eb6834", "STEAM2": "#1baf7a"}
 INK, MUTED, GRID = "#1f1f1f", "#6b6a66", "#e4e3df"
 
@@ -317,20 +341,23 @@ def save(fig, path: Path) -> None:
     plt.close(fig)
 
 
-def figures(run: str, title: str, subjects: pd.DataFrame, datasets: Sequence[str], out: Path) -> None:
+def figures(prefix: str, title: str, subset: str, subjects: pd.DataFrame, datasets: Sequence[str],
+            out: Path) -> None:
+    """One box plot per metric and the three side by side; `subset` names
+    the subjects left out (second title line)."""
     width = 1.6 + 1.3 * len(datasets)
     for key, label, ylabel in METRICS:
-        fig, ax = plt.subplots(figsize=(width, 4.2))
+        fig, ax = plt.subplots(figsize=(max(width, 4.6), 4.4))
         draw_box(ax, subjects, datasets, key, ylabel)
-        ax.set_title(f"{label}: {title}", fontsize=9, loc="left")
-        save(fig, out / f"{run}_{key}_boxplot")
-    fig, axes = plt.subplots(1, len(METRICS), figsize=(width * len(METRICS), 4.2))
+        ax.set_title(f"{label}: {title}\n{subset}", fontsize=8.5, loc="left")
+        save(fig, out / f"{prefix}_{key}_boxplot")
+    fig, axes = plt.subplots(1, len(METRICS), figsize=(width * len(METRICS), 4.4))
     for ax, (key, label, ylabel), letter in zip(axes, METRICS, "abc"):
         draw_box(ax, subjects, datasets, key, ylabel)
         ax.set_title(f"({letter}) {label}", fontsize=10, loc="left")
-    fig.suptitle(title, fontsize=10, x=0.01, ha="left")
+    fig.suptitle(f"{title}\n{subset}", fontsize=10, x=0.01, ha="left")
     fig.tight_layout()
-    save(fig, out / f"{run}_Performance_boxplots")
+    save(fig, out / f"{prefix}_Performance_boxplots")
 
 
 # ---------------------------------------------------------------------------
@@ -355,8 +382,82 @@ def notes(run: str, root: Path, title: str) -> pd.DataFrame:
         ("PCC check", "PCC recomputed from the stored waveforms vs the stored PCC "
                       "(Coverage: PCC_Check_Max_Abs_Diff); ~0 = the waveform MAE uses the same samples"),
         ("Box", "median and IQR, whiskers 1.5 IQR, every subject a point; no test (runs are not compared)"),
+        ("Subject sets", "01_All_subjects: every subject; 02 / 03: CapnoBase and BIDMC without the given "
+                         "subjects (default 0115 and 27) and STEAM2 without its 1 / 2 subjects with the "
+                         "largest subject RR MAE in this run (or the given ones, --exclude-steam2); the "
+                         "removed subjects with their RR MAE and rank are in Exclusions"),
     ]
     return pd.DataFrame(lines, columns=["Item", "Description"])
+
+
+# ---------------------------------------------------------------------------
+# Subject sets (all subjects / outliers removed)
+# ---------------------------------------------------------------------------
+
+def same_subject(a: object, b: object) -> bool:
+    """'0115' == '115' == '0115'; '27' == '27'; other names must match exactly."""
+    a, b = str(a).strip(), str(b).strip()
+    return a == b or (a.isdigit() and b.isdigit() and int(a) == int(b))
+
+
+def subject_sets(args: argparse.Namespace) -> List[Tuple[str, str, Optional[int]]]:
+    """(folder, file prefix, number of STEAM2 subjects removed or None)."""
+    sets = [("01_All_subjects", "all", None)]
+    for i, k in enumerate(args.steam2_worst, start=2):
+        sets.append((f"{i:02d}_Excluded_STEAM2_worst{k}", f"excl_worst{k}", k))
+    return sets
+
+
+def removed_subjects(subjects: pd.DataFrame, k: Optional[int], args: argparse.Namespace,
+                     folder: str) -> pd.DataFrame:
+    """Subjects left out of a set, with their subject RR MAE and its rank
+    (1 = largest) within the dataset of this run."""
+    columns = ["Subject_Set", "Dataset", "Subject", "Rule", "Found", "N_Minutes", "RR_MAE", "Rank_RR_MAE",
+               "N_Subjects_Dataset"]
+    if k is None:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    for dataset in DATASETS:
+        frame = subjects[subjects["Dataset"] == dataset].sort_values("RR_MAE", ascending=False)
+        frame = frame.reset_index(drop=True)
+        if frame.empty:
+            continue
+        if dataset == "STEAM2":
+            if args.exclude_steam2:
+                wanted, rule = list(args.exclude_steam2[:k]), f"given (--exclude-steam2), first {k}"
+            else:
+                wanted, rule = frame["Subject"].head(k).tolist(), f"{k} largest subject RR MAE of this run"
+        else:
+            wanted = list(args.exclude_capnobase if dataset == "CapnoBase" else args.exclude_bidmc)
+            rule = "given"
+        for name in wanted:
+            hit = frame.index[frame["Subject"].map(lambda s: same_subject(s, name))]
+            row = {"Subject_Set": folder, "Dataset": dataset, "Subject": str(name), "Rule": rule,
+                   "Found": bool(len(hit)), "N_Subjects_Dataset": len(frame)}
+            if len(hit):
+                found = frame.loc[hit[0]]
+                row.update({"Subject": found["Subject"], "N_Minutes": int(found["N_Minutes"]),
+                            "RR_MAE": float(found["RR_MAE"]), "Rank_RR_MAE": int(hit[0]) + 1})
+            rows.append(row)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def subset_text(removed: pd.DataFrame) -> str:
+    found = removed[removed["Found"].astype(bool)]
+    if found.empty:
+        return "All subjects"
+    parts = [f"{d} {', '.join(found.loc[found['Dataset'] == d, 'Subject'].astype(str))}"
+             for d in DATASETS if (found["Dataset"] == d).any()]
+    return "Excluded: " + "; ".join(parts)
+
+
+def without(frame: pd.DataFrame, removed: pd.DataFrame) -> pd.DataFrame:
+    if removed.empty:
+        return frame
+    found = removed[removed["Found"].astype(bool)]
+    drop = set(zip(found["Dataset"], found["Subject"].astype(str)))
+    keep = [(d, str(s)) not in drop for d, s in zip(frame["Dataset"], frame["Subject"])]
+    return frame[np.asarray(keep, bool)]
 
 
 def write_excel(path: Path, sheets: Dict[str, pd.DataFrame]) -> None:
@@ -369,7 +470,7 @@ def write_excel(path: Path, sheets: Dict[str, pd.DataFrame]) -> None:
                 sheet.column_dimensions[sheet.cell(1, i + 1).column_letter].width = min(max(width + 2, 8), 80)
 
 
-def run_one(run: str, root: Path, out_root: Path) -> None:
+def run_one(run: str, root: Path, out_root: Path, args: argparse.Namespace) -> None:
     config = RUNS[run]
     title = config["title"]
     if not root.exists():
@@ -394,24 +495,12 @@ def run_one(run: str, root: Path, out_root: Path) -> None:
         return
     minutes = pd.concat(minute_frames, ignore_index=True)
     subjects = per_subject(minutes)
-    summary = summary_table(subjects, datasets)
     out = out_root / run
     out.mkdir(parents=True, exist_ok=True)
-    figures(run, title, subjects, datasets, out)
-    tables = {"summary": summary, "per_subject": subjects, "per_minute": minutes, "coverage": coverage}
-    for name, frame in tables.items():
-        frame.to_csv(out / f"{run}_{name}.csv", index=False, encoding="utf-8-sig")
-    write_excel(out / f"{run}_Performance.xlsx", {
-        "Summary": summary.round(4), "Per_Subject": subjects.round(4), "Per_Minute": minutes.round(4),
-        "Coverage": coverage, "Notes": notes(run, root, title)})
     print(f"\n[{run}] {title}")
     for dataset in datasets:
         n_ok = int(((coverage["Dataset"] == dataset) & (coverage["Status"] == "ok")).sum())
-        n_all = int((coverage["Dataset"] == dataset).sum())
-        rows = summary[summary["Dataset"] == dataset].set_index("Metric")
-        parts = [f"{m} {rows.loc[m, 'Median']:.3f} [{rows.loc[m, 'Q1']:.3f}, {rows.loc[m, 'Q3']:.3f}]"
-                 for _, m, _ in METRICS if m in rows.index]
-        print(f"  {dataset:<9s} subjects {n_ok}/{n_all}  median [IQR]: " + "; ".join(parts))
+        print(f"  {dataset:<9s} subjects with results {n_ok}/{int((coverage['Dataset'] == dataset).sum())}")
     bad = coverage[coverage["Status"] != "ok"]
     if not bad.empty:
         print(f"  {len(bad)} fold(s) not used (see {run}_coverage.csv)")
@@ -419,6 +508,49 @@ def run_one(run: str, root: Path, out_root: Path) -> None:
         check = pd.to_numeric(coverage["PCC_Check_Max_Abs_Diff"], errors="coerce").to_numpy(float)
         if np.isfinite(check).any():
             print(f"  PCC check: largest |recomputed - stored| = {np.nanmax(check):.2e}")
+
+    summaries, removals = [], []
+    for folder, tag, k in subject_sets(args):
+        removed = removed_subjects(subjects, k, args, folder)
+        subset = subset_text(removed)
+        kept = without(subjects, removed)
+        kept_minutes = without(minutes, removed)
+        summary = summary_table(kept, datasets)
+        target = out / folder
+        target.mkdir(parents=True, exist_ok=True)
+        prefix = f"{run}_{tag}"
+        figures(prefix, title, subset, kept, datasets, target)
+        for name, frame in {"summary": summary, "per_subject": kept, "per_minute": kept_minutes,
+                            "exclusions": removed}.items():
+            frame.to_csv(target / f"{prefix}_{name}.csv", index=False, encoding="utf-8-sig")
+        write_excel(target / f"{prefix}_Performance.xlsx", {
+            "Summary": summary.round(4), "Per_Subject": kept.round(4), "Per_Minute": kept_minutes.round(4),
+            "Exclusions": removed.round(4), "Notes": notes(run, root, title)})
+        summaries.append(summary.assign(Subject_Set=folder, Subjects_Excluded=subset))
+        removals.append(removed)
+        print(f"  {folder}: {subset}")
+        found = removed["Found"].astype(bool)
+        for _, row in removed[~found].iterrows():
+            print(f"    ! {row['Dataset']} {row['Subject']} not found in this run (nothing removed)")
+        for _, row in removed[found].iterrows():
+            print(f"    removed {row['Dataset']} {row['Subject']}: RR MAE {row['RR_MAE']:.2f} "
+                  f"(rank {int(row['Rank_RR_MAE'])} of {int(row['N_Subjects_Dataset'])})")
+        for dataset in datasets:
+            rows = summary[summary["Dataset"] == dataset].set_index("Metric")
+            parts = [f"{m} {rows.loc[m, 'Median']:.3f} [{rows.loc[m, 'Q1']:.3f}, {rows.loc[m, 'Q3']:.3f}]"
+                     for _, m, _ in METRICS if m in rows.index]
+            n = int(rows["N_Subjects"].iloc[0]) if len(rows) else 0
+            print(f"    {dataset:<9s} n={n:<3d} median [IQR]: " + "; ".join(parts))
+
+    by_set = pd.concat(summaries, ignore_index=True)
+    by_set = by_set[["Subject_Set", "Subjects_Excluded"] + [c for c in by_set.columns
+                                                          if c not in ("Subject_Set", "Subjects_Excluded")]]
+    removals = pd.concat(removals, ignore_index=True)
+    for name, frame in {"summary_by_subject_set": by_set, "exclusions": removals, "coverage": coverage}.items():
+        frame.to_csv(out / f"{run}_{name}.csv", index=False, encoding="utf-8-sig")
+    write_excel(out / f"{run}_Summary_by_subject_set.xlsx", {
+        "Summary": by_set.round(4), "Exclusions": removals.round(4), "Coverage": coverage,
+        "Notes": notes(run, root, title)})
     print(f"  saved under {out}")
 
 
@@ -429,9 +561,18 @@ def main() -> None:
         parser.add_argument(f"--root-{run}", type=Path, default=config["root"],
                             help=f"results folder of {run} (default {config['root']})")
     parser.add_argument("--output-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument("--exclude-capnobase", nargs="*", default=list(EXCLUDE_CAPNOBASE),
+                        help="CapnoBase subjects left out of the excluded sets (default 0115)")
+    parser.add_argument("--exclude-bidmc", nargs="*", default=list(EXCLUDE_BIDMC),
+                        help="BIDMC subjects left out of the excluded sets (default 27)")
+    parser.add_argument("--steam2-worst", nargs="+", type=int, default=list(STEAM2_WORST),
+                        help="number of STEAM2 subjects left out, one subject set each (default 1 2)")
+    parser.add_argument("--exclude-steam2", nargs="*", default=[],
+                        help="STEAM2 subjects to leave out, in order (default: the subjects with the largest "
+                             "subject RR MAE of each run)")
     args = parser.parse_args()
     for run in args.runs:
-        run_one(run, Path(getattr(args, f"root_{run}")), Path(args.output_root))
+        run_one(run, Path(getattr(args, f"root_{run}")), Path(args.output_root), args)
 
 
 if __name__ == "__main__":
