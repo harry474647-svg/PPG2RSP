@@ -8,10 +8,23 @@ is still training STEAM2.
 PaperStyle_All) runs dataset by dataset, every window size within a dataset:
 STEAM2 W16, W32, W64, then BIDMC W16, W32, W64, then CapnoBase W16, W32, W64.
 This script runs, in this order (default --jobs):
-    BIDMC W16, CapnoBase W16
+    STEAM2 W16, BIDMC W16, CapnoBase W16
 with the 261106 code unchanged (data, RR labels at 0.1 breaths/min, 0.1-0.5 Hz
 input only, model, training, LOSO with inner subject-level 5-fold CV,
-evaluation, file names); only the order and the results folder are new.
+evaluation, file names); only the order, the results folder and the resume
+below are new.
+
+Whatever is done already is not trained again (same results folder):
+  * a finished job (final results) is skipped (see below);
+  * a job that stopped part way (its running tables exist, no final results)
+    goes on where it stopped: every fold (test subject, inner fold, input
+    case) in metrics\RRWaveNet_PaperStyle_Running_PerFold.csv with all its
+    test windows in ..._Running_PerWindow.csv and the same validation
+    subjects is kept as it is (its model file and curve stay), only the
+    missing folds are trained; the final tables then hold the kept and the
+    new folds. --redo trains the job from the start.
+  (A fold trained after a resume starts from a different random state than
+  in an uninterrupted run; the data, folds and settings are the same.)
 
 Results folder (the same as the running run, found automatically when
 --output-root is not given): the first of
@@ -29,7 +42,8 @@ A job is skipped when
   * its final results exist (metrics\RRWaveNet_PaperStyle_Final_Summary.csv;
     --redo runs it again), or
   * its running results were written in the last 30 minutes and no final
-    results exist (another process is training it; --redo runs it anyway).
+    results exist (another process is training it; --redo runs it anyway);
+otherwise a job with running results goes on where it stopped (above).
 Every job starts from the same seed (SEED), so its result does not depend on
 the order of the jobs.
 At the end, the global tables of every finished dataset / window in the
@@ -37,14 +51,13 @@ results folder (also those of the 261106 run) are written as
 RRWaveNet_PaperStyle_Global{Summary,PerSubject,PerFold}_AllFinished.csv (the
 261106 run writes its own RRWaveNet_PaperStyle_Global*.csv when it ends).
 
-!! The running 261106 run still has BIDMC W16 and CapnoBase W16 in its queue.
-   Stop it (Ctrl+C) when its STEAM2 part is done, i.e. when its log prints
-   "Dataset: BIDMC | Window: 16"; otherwise it trains them again and
-   overwrites these results. The windows it leaves undone (BIDMC and
-   CapnoBase W32 and W64) are run afterwards with
+!! If the 261106 run is still going, it still has BIDMC W16 and CapnoBase
+   W16 in its queue: stop it (Ctrl+C) when its log prints "Dataset: BIDMC |
+   Window: 16"; otherwise it trains them again and overwrites these results.
+   Other windows: --jobs, e.g.
      python 261107_RRWaveNet_PaperStyle_RR_W16_BIDMC_CapnoBase.py --jobs bidmc:32 capnobase:32 bidmc:64 capnobase:64
 
-Run (a second terminal while the 261106 run goes on; both use GPU 0):
+Run (as often as needed; finished jobs and folds are kept):
     python 261107_RRWaveNet_PaperStyle_RR_W16_BIDMC_CapnoBase.py
 Options: --jobs dataset:window ... (order kept), --output-root <folder>,
     --redo, --max-epochs, --batch-size
@@ -1679,12 +1692,40 @@ def summarize_dataset_results(per_window_df: pd.DataFrame) -> pd.DataFrame:
     return summary.sort_values(["Dataset", "Window_Sec", "Input_Case"])
 
 
+def finished_folds(metrics_dir: str) -> Dict[Tuple[str, int, str], Tuple[dict, List[dict]]]:
+    """Folds of a job that stopped part way: (test subject, fold index, input case) -> its row of
+    RRWaveNet_PaperStyle_Running_PerFold.csv and its rows of ..._Running_PerWindow.csv, for every fold with all
+    its test windows written (a fold is written there only after its training and testing ended)."""
+    fold_path = os.path.join(metrics_dir, "RRWaveNet_PaperStyle_Running_PerFold.csv")
+    window_path = os.path.join(metrics_dir, "RRWaveNet_PaperStyle_Running_PerWindow.csv")
+    if not (os.path.exists(fold_path) and os.path.exists(window_path)):
+        return {}
+    try:
+        folds = pd.read_csv(fold_path, dtype={"Test_Subject": str, "Val_Subjects": str, "Train_Subjects": str},
+                            encoding="utf-8-sig")
+        windows = pd.read_csv(window_path, dtype={"Test_Subject": str}, encoding="utf-8-sig")
+    except (pd.errors.EmptyDataError, OSError, ValueError):
+        return {}
+    if folds.empty or windows.empty:
+        return {}
+    grouped = {(str(s), int(f), str(c)): part.to_dict("records")
+               for (s, f, c), part in windows.groupby(["Test_Subject", "Fold_Index", "Input_Case"], sort=False)}
+    out = {}
+    for row in folds.to_dict("records"):
+        key = (str(row["Test_Subject"]), int(row["Fold_Index"]), str(row["Input_Case"]))
+        rows = grouped.get(key, [])
+        if rows and len(rows) == int(row["Num_Test_Windows"]):
+            out[key] = (row, rows)
+    return out
+
+
 def run_dataset_experiment(
     dataset_key: str,
     window_sec: float,
     output_root: str,
     max_epochs: int = MAX_EPOCHS,
     batch_size: int = BATCH_SIZE,
+    resume: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     dirs = prepare_output_dirs(output_root, dataset_key, window_sec)
     print(f"\n{'=' * 88}")
@@ -1712,6 +1753,12 @@ def run_dataset_experiment(
     fold_rows = []
     per_window_rows = []
     start_all = time.time()
+    # 261107: the folds finished before an interruption are kept (resume)
+    previous = finished_folds(dirs["metrics"]) if resume else {}
+    if previous:
+        print(f"Resume: {len(previous)} finished fold(s) in the running tables of {dirs['metrics']}; "
+              "they are kept, the others are trained")
+    kept = trained = 0
 
     for test_subject in subjects:
         remaining_subjects = [subj for subj in subjects if subj != test_subject]
@@ -1723,6 +1770,16 @@ def run_dataset_experiment(
             if not train_subjects or not val_subjects:
                 continue
             for case_key in ACTIVE_INPUT_CASES:
+                old = previous.get((str(test_subject), fold_idx + 1, case_key))
+                if old is not None and str(old[0].get("Val_Subjects", "")) == ",".join(val_subjects):
+                    fold_rows.append(old[0])
+                    per_window_rows += old[1]
+                    kept += 1
+                    print(f"[{DATASET_CONFIGS[dataset_key]['label']}] W{int(window_sec)} | Test {test_subject} | "
+                          f"Fold {fold_idx + 1}/{INNER_FOLDS}: finished before, kept "
+                          f"(Test MAE {float(old[0]['Test_MAE']):.4f})")
+                    continue
+                trained += 1
                 fold_start = time.time()
                 result = train_one_fold(
                     dataset_key=dataset_key,
@@ -1801,6 +1858,9 @@ def run_dataset_experiment(
                 )
 
     total_elapsed = time.time() - start_all
+    if kept:
+        print(f"\n{DATASET_CONFIGS[dataset_key]['label']} W{int(window_sec)}: {kept} fold(s) kept from before, "
+              f"{trained} trained now")
     fold_df = pd.DataFrame(fold_rows)
     per_window_df = pd.DataFrame(per_window_rows)
     per_subject_df = summarize_subject_window_results(per_window_df)
@@ -1826,7 +1886,7 @@ def run_dataset_experiment(
 # 11. CLI / Main (261107: BIDMC and CapnoBase W16 first, in the results
 #     folder of the running 261106 run)
 # ===========================================================
-DEFAULT_JOBS = ("bidmc:16", "capnobase:16")
+DEFAULT_JOBS = ("steam2:16", "bidmc:16", "capnobase:16")  # a finished job is skipped
 MERGED_RESULTS_ROOT = (
     r"D:\PPG2RSP_RRWaveNet_Inspired\261106_DeepCorrencoder_PaperStyle_All\RRWaveNet_PaperStyle_RR"
 )
@@ -1935,7 +1995,7 @@ def parse_args() -> argparse.Namespace:
         description="Paper-style RRWaveNet RR: BIDMC and CapnoBase W16 first, in the results folder of the 261106 run"
     )
     parser.add_argument("--jobs", nargs="+", type=parse_job, default=[parse_job(job) for job in DEFAULT_JOBS],
-                        help="dataset:window in the order to run, e.g. bidmc:16 capnobase:16 (default)")
+                        help="dataset:window in the order to run (default steam2:16 bidmc:16 capnobase:16)")
     parser.add_argument("--output-root", type=str, default=None,
                         help="results folder of the 261106 run (default: found automatically)")
     parser.add_argument("--redo", action="store_true",
@@ -1975,7 +2035,8 @@ def main() -> None:
             status.append(f"{label}: skipped, being trained by another process")
             continue
         if state == "partial":
-            print(f"\n[Note] {label}: an earlier run stopped before the end; it is trained from the start")
+            print(f"\n[Note] {label}: an earlier run stopped before the end; it goes on where it stopped "
+                  "(finished folds kept; --redo trains it from the start)")
         set_seed(SEED, deterministic=False)
         started = time.time()
         summary_df, _, _ = run_dataset_experiment(
@@ -1984,6 +2045,7 @@ def main() -> None:
             output_root=output_root,
             max_epochs=args.max_epochs,
             batch_size=args.batch_size,
+            resume=not args.redo,
         )
         status.append(f"{label}: {'finished' if not summary_df.empty else 'no result (too few subjects)'} "
                       f"({(time.time() - started) / 3600:.2f} h)")
@@ -1993,8 +2055,8 @@ def main() -> None:
     for line in status:
         print(line)
     print(f"Global tables of every finished dataset / window: {output_root}\\RRWaveNet_PaperStyle_Global*_AllFinished.csv")
-    print("Reminder: stop the 261106 run when its log reaches 'Dataset: BIDMC | Window: 16', or it trains BIDMC and "
-          "CapnoBase W16 again and overwrites these results.")
+    print("Reminder: if the 261106 run is still going, stop it when its log reaches 'Dataset: BIDMC | Window: 16', "
+          "or it trains BIDMC and CapnoBase W16 again and overwrites these results.")
 
 
 if __name__ == "__main__":
