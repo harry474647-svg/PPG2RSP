@@ -45,13 +45,17 @@ Drawn_Windows, Notes) in the output folder (run 261007: CapnoBase, run
 
 Part 2. Box plots of the three models
 -------------------------------------
-Per dataset, the same subjects; measures:
-  MAE         Subject_Summary of part 1 (Size_Sec 60): RRWaveNet_MAE, CorrEncoder_MAE, RespDiff_MAE
-  PCC         Subject_Summary of part 1 (Size_Sec 60): RRWaveNet_PCC, CorrEncoder_PCC, RespDiff_PCC
-  Duty error  Duty_MAE (rule of 261107_DutyCycle_RespDiff_DeepCorrencoder, the official RespDiff code):
-              RRWaveNet  261107_DutyCycle_Results.xlsx, sheet RRWaveNet_Results (Run 261007 / 261013)
-              RespDiff   261107_DutyCycle_Results.xlsx, sheet RespDiff_Duty
-              Corr-enc.  261107_DeepCorrencoder_PaperVersion_v1_results.xlsx, sheet Per_subject
+Per dataset, the same subjects; measures and where every value is read:
+  Deep corr-encoder: the results stored by 261107_DeepCorrencoder_PaperVersion_v1, as they are,
+      {correncoder-root}\Summary\261107_DeepCorrencoder_PaperVersion_v1_results.xlsx, sheet
+      Per_subject, rows Evaluation_Window_Sec = 60.6: MAE, PCC, Duty_MAE
+      ({correncoder-root} = D:\PPG2RSP_RRWaveNet_Inspired\261107_DeepCorrencoder_PaperVersion_v1;
+      MAE = |FFT rate of the fused output - reference rate|, PCC = Pearson r of fused output and
+      reference, both over its 60.6 s windows, the paper's evaluation)
+  RRWaveNet and RespDiff:
+      MAE, PCC    Subject_Summary of part 1 (Size_Sec 60): RRWaveNet_MAE / _PCC, RespDiff_MAE / _PCC
+      Duty error  261107_DutyCycle_Results.xlsx: RRWaveNet_Results (Run 261007 / 261013), RespDiff_Duty
+                  (Duty_MAE; rule of 261107_DutyCycle_RespDiff_DeepCorrencoder, as the corr-encoder's)
 Friedman test of the three models (subjects with all three), Kendall's W;
 paired Wilcoxon signed-rank tests of the three pairs, Benjamini-Hochberg over
 the 3 pairs; only significant pairs (FDR < 0.05) marked (* < 0.05, ** < 0.01,
@@ -68,8 +72,8 @@ Box plots again without the waveforms (from Waveform_Summary_all_runs.xlsx of an
 Options: --root-261007, --root-261013, --output-root, --correncoder-root,
   --respdiff-root, --respdiff-sampling, --sizes, --step, --subjects,
   --scripts-dir, --capnobase-path, --bidmc-path, --steam2-ppg-dir,
-  --steam2-rsp-dir, --duty-results, --correncoder-results, --waveform-summary,
-  --exclude-*, --allow-other-correncoder
+  --steam2-rsp-dir, --duty-results, --correncoder-results (default: the
+  workbook in --correncoder-root), --waveform-summary, --exclude-*
 """
 
 import argparse
@@ -125,15 +129,16 @@ RUN_DATASETS = {"261007": ("CapnoBase",), "261013": ("BIDMC", "STEAM2")}
 EXCLUDED = {"STEAM2": ("22_LMS", "26_CKK", "12_YJJ"), "BIDMC": ("27",), "CapnoBase": ("0115",)}
 
 # Box plots
-PAPER_CE_FOLDER = "261107_DeepCorrencoder_PaperVersion_v1"
+# The deep corr-encoder: its results folder (outputs for the waveform pages, stored results for the box plots)
+# and, in it, the workbook of its stored per-subject results.
+CORRENCODER_FOLDER = WORKSPACE / "261107_DeepCorrencoder_PaperVersion_v1"
+CORRENCODER_RESULTS_FILE = Path("Summary") / "261107_DeepCorrencoder_PaperVersion_v1_results.xlsx"
 WAVEFORM_SUMMARY = PROJECT_ROOT / "Waveform_Summary_all_runs.xlsx"
 DUTY_RESULTS = WORKSPACE / "261107_DutyCycle_RespDiff_DeepCorrencoder" / "261107_DutyCycle_Results.xlsx"
-CORRENCODER_RESULTS = (WORKSPACE / PAPER_CE_FOLDER / "Summary"
-                       / "261107_DeepCorrencoder_PaperVersion_v1_results.xlsx")
 BOX_DATASETS = ("STEAM2", "BIDMC", "CapnoBase")  # panel order (a), (b), (c)
 RRWAVENET_RUN = {"CapnoBase": "261007", "BIDMC": "261013", "STEAM2": "261013"}
 SIZE_SEC = 60
-CORRENCODER_WINDOW_SEC = 60.6  # the paper version's per-subject rows (duty is the same in both rows)
+CORRENCODER_WINDOW_SEC = 60.6  # the corr-encoder's stored per-subject rows used (30.6 / 60.6 s; duty is the same)
 ID_DIGITS = {"CapnoBase": 4, "BIDMC": 2}
 BOX_MODELS = ("RRWaveNet", "Deep corr-encoder", "RespDiff")
 BOX_LABEL = {"RRWaveNet": "RRWaveNet", "Deep corr-encoder": "Corr-encoder", "RespDiff": "RespDiff"}
@@ -144,14 +149,15 @@ BOX_PAIRS = (("RRWaveNet", "Deep corr-encoder"), ("Deep corr-encoder", "RespDiff
 
 # measure -> (better, title, y label, note)
 MEASURES = {
-    "MAE": ("lower", "Respiratory rate MAE", "Subject RR MAE (breaths/min), 60 s windows",
-            "MAE: |FFT rate of the model\nwaveform - GT rate from the\nbreaths|, mean over the subject's\n"
-            "60 s windows (the same rule\nfor the three models)."),
-    "PCC": ("higher", "Waveform PCC", "Subject waveform PCC with the recorded GT (r)",
-            "PCC: Pearson r of model and\nrecorded GT, mean over the\nsubject's 60 s windows; no time\n"
-            "shift, sign matched once per\nrecording."),
+    "MAE": ("lower", "Respiratory rate MAE", "Subject RR MAE (breaths/min)",
+            "MAE: |FFT rate - reference rate|,\nmean over the subject's windows.\nRRWaveNet, RespDiff: 60 s windows,\n"
+            "GT rate from the breaths.\nCorr-encoder: its stored result\n(60.6 s windows, paper evaluation)."),
+    "PCC": ("higher", "Waveform PCC", "Subject waveform PCC (r)",
+            "PCC: Pearson r with the GT, mean\nover the subject's windows.\nRRWaveNet, RespDiff: 60 s windows,\n"
+            "sign matched once per recording.\nCorr-encoder: its stored result\n(60.6 s windows, paper evaluation)."),
     "Duty_error": ("lower", "Duty cycle error", "Subject duty cycle error |model - GT| (0-1)",
-                   "Duty = share of time the [0, 1]\nwaveform is >= 0.5 in 60 s\nwindows (RespDiff definition)."),
+                   "Duty = share of time the [0, 1]\nwaveform is >= 0.5 in 60 s\nwindows (RespDiff definition).\n"
+                   "Corr-encoder: its stored result."),
 }
 
 
@@ -1511,16 +1517,8 @@ def read_sheet(path: Path, sheet: str) -> pd.DataFrame:
     return frame
 
 
-def waveform_values(path: Path, allow_other: bool) -> Tuple[pd.DataFrame, str]:
-    """MAE and PCC of the three models (v2 Subject_Summary, 60 s)."""
-    notes = pd.read_excel(path, sheet_name="Notes")
-    models = " ".join(str(v) for v in notes.loc[notes["Item"].astype(str) == "Models", "Description"])
-    if PAPER_CE_FOLDER.lower() not in models.lower():
-        message = (f"{path}: its corr-encoder is not the paper version ({models or 'Notes: no Models row'}).\n"
-                   "Run this script without --no-waveforms (or give --correncoder-root the paper-version folder).")
-        if not allow_other:
-            raise SystemExit(message)
-        print("[Warning] " + message.splitlines()[0] + " (--allow-other-correncoder: used anyway)")
+def waveform_values(path: Path) -> pd.DataFrame:
+    """MAE and PCC of RRWaveNet and RespDiff (Subject_Summary of part 1, 60 s)."""
     summary = read_sheet(path, "Subject_Summary")
     summary["Run"] = summary["Run"].astype(str).str.replace(r"\.0+$", "", regex=True)
     rows = []
@@ -1528,32 +1526,28 @@ def waveform_values(path: Path, allow_other: bool) -> Tuple[pd.DataFrame, str]:
         part = summary[(summary["Dataset"] == dataset) & (summary["Run"] == RRWAVENET_RUN[dataset])
                        & (pd.to_numeric(summary["Size_Sec"], errors="coerce") == SIZE_SEC)]
         for measure in ("MAE", "PCC"):
-            for model, prefix in (("RRWaveNet", "RRWaveNet"), ("Deep corr-encoder", "CorrEncoder"),
-                                  ("RespDiff", "RespDiff")):
-                column = f"{prefix}_{measure}"
+            for model in ("RRWaveNet", "RespDiff"):
+                column = f"{model}_{measure}"
                 if column not in part:
                     continue
                 for subject, value in zip(part["Subject"], pd.to_numeric(part[column], errors="coerce")):
                     rows.append({"Dataset": dataset, "Subject": subject, "Model": model, "Measure": measure,
-                                 "Value": value, "Source": f"{path.name}: Subject_Summary {column} "
+                                 "Value": value, "Source": f"{path}: Subject_Summary {column} "
                                                            f"(Run {RRWAVENET_RUN[dataset]}, {SIZE_SEC} s)"})
-    return pd.DataFrame(rows), models
+    return pd.DataFrame(rows)
 
 
-def duty_values(duty_path: Path, ce_path: Path) -> pd.DataFrame:
-    """Duty_MAE of RRWaveNet and RespDiff (261107 duty workbook) and of the paper-version corr-encoder."""
+def duty_values(duty_path: Path) -> pd.DataFrame:
+    """Duty_MAE of RRWaveNet and RespDiff (261107 duty workbook)."""
     rows = []
     rr = read_sheet(duty_path, "RRWaveNet_Results")
     rr["Run"] = rr["Run"].astype(str).str.replace(r"\.0+$", "", regex=True)
     rd = read_sheet(duty_path, "RespDiff_Duty")
-    ce = read_sheet(ce_path, "Per_subject")
-    ce = ce[np.isclose(pd.to_numeric(ce["Evaluation_Window_Sec"], errors="coerce"), CORRENCODER_WINDOW_SEC)]
     for dataset in BOX_DATASETS:
         sources = (
             ("RRWaveNet", rr[(rr["Dataset"] == dataset) & (rr["Run"] == RRWAVENET_RUN[dataset])],
-             f"{duty_path.name}: RRWaveNet_Results Duty_MAE (Run {RRWAVENET_RUN[dataset]})"),
-            ("Deep corr-encoder", ce[ce["Dataset"] == dataset], f"{ce_path.name}: Per_subject Duty_MAE"),
-            ("RespDiff", rd[rd["Dataset"] == dataset], f"{duty_path.name}: RespDiff_Duty Duty_MAE"),
+             f"{duty_path}: RRWaveNet_Results Duty_MAE (Run {RRWAVENET_RUN[dataset]})"),
+            ("RespDiff", rd[rd["Dataset"] == dataset], f"{duty_path}: RespDiff_Duty Duty_MAE"),
         )
         for model, part, source in sources:
             if "Duty_MAE" not in part:
@@ -1561,6 +1555,29 @@ def duty_values(duty_path: Path, ce_path: Path) -> pd.DataFrame:
             for subject, value in zip(part["Subject"], pd.to_numeric(part["Duty_MAE"], errors="coerce")):
                 rows.append({"Dataset": dataset, "Subject": subject, "Model": model, "Measure": "Duty_error",
                              "Value": value, "Source": source})
+    return pd.DataFrame(rows)
+
+
+def correncoder_values(path: Path) -> pd.DataFrame:
+    """The deep corr-encoder's results as 261107_DeepCorrencoder_PaperVersion_v1 stored them (sheet Per_subject,
+    rows of the CORRENCODER_WINDOW_SEC evaluation windows): MAE, PCC and Duty_MAE, unchanged."""
+    ce = read_sheet(path, "Per_subject")
+    window = pd.to_numeric(ce["Evaluation_Window_Sec"], errors="coerce")
+    ce = ce[np.isclose(window, CORRENCODER_WINDOW_SEC)]
+    if ce.empty:
+        raise SystemExit(f"{path}: no Per_subject rows with Evaluation_Window_Sec = {CORRENCODER_WINDOW_SEC}")
+    rows = []
+    for measure, column in (("MAE", "MAE"), ("PCC", "PCC"), ("Duty_error", "Duty_MAE")):
+        if column not in ce:
+            print(f"[Warning] {path}: no column {column}; corr-encoder {measure} left out")
+            continue
+        for dataset, subject, value in zip(ce["Dataset"], ce["Subject"], pd.to_numeric(ce[column], errors="coerce")):
+            if dataset in BOX_DATASETS:
+                rows.append({"Dataset": dataset, "Subject": subject, "Model": "Deep corr-encoder", "Measure": measure,
+                             "Value": value, "Source": f"{path}: Per_subject {column} "
+                                                       f"(Evaluation_Window_Sec {CORRENCODER_WINDOW_SEC:g})"})
+    print(f"Deep corr-encoder: stored results of {path} ("
+          + ", ".join(f"{d} {int((ce['Dataset'] == d).sum())}" for d in BOX_DATASETS) + " subjects)")
     return pd.DataFrame(rows)
 
 
@@ -1806,9 +1823,8 @@ def boxplots(args: argparse.Namespace, out_root: Path, summary_path: Path) -> No
     for path in (summary_path, Path(args.duty_results), Path(args.correncoder_results)):
         if not path.is_file():
             raise SystemExit(f"Not found: {path}")
-    waveform, models_note = waveform_values(summary_path, args.allow_other_correncoder)
-    values = pd.concat([waveform, duty_values(Path(args.duty_results), Path(args.correncoder_results))],
-                       ignore_index=True)
+    values = pd.concat([waveform_values(summary_path), duty_values(Path(args.duty_results)),
+                        correncoder_values(Path(args.correncoder_results))], ignore_index=True)
     removed = []
     for dataset, subjects in excluded.items():
         for subject in subjects:
@@ -1833,9 +1849,6 @@ def boxplots(args: argparse.Namespace, out_root: Path, summary_path: Path) -> No
                               aggfunc="first")
     wide.columns = [f"{m}__{BOX_LABEL[model]}" for m, model in wide.columns]
     sources = values.drop_duplicates(["Dataset", "Model", "Measure"])[["Dataset", "Model", "Measure", "Source"]]
-    sources = pd.concat([sources, pd.DataFrame([{"Dataset": "", "Model": "all", "Measure": "MAE / PCC",
-                                                 "Source": f"waveform summary Notes: {models_note}"}])],
-                        ignore_index=True)
     tables = {"Friedman": friedman, "Pairwise": pairwise, "Values": wide.reset_index(), "Sources": sources,
               "Excluded": pd.DataFrame(removed)}
     with pd.ExcelWriter(out_root / "261107_Boxplot_Tests.xlsx", engine="openpyxl") as writer:
@@ -1873,7 +1886,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     wave.add_argument("--subjects", nargs="+", default=None, help="only these subjects")
     wave.add_argument("--respdiff-root", type=Path, default=RESPDIFF_ROOT)
     wave.add_argument("--respdiff-sampling", default=RESPDIFF_SAMPLING)
-    wave.add_argument("--correncoder-root", type=Path, default=CORRENCODER_ROOT)
+    wave.add_argument("--correncoder-root", type=Path, default=CORRENCODER_FOLDER,
+                      help="results folder of 261107_DeepCorrencoder_PaperVersion_v1 (its outputs for the pages, "
+                           "its stored results for the box plots)")
     wave.add_argument("--rrwavenet-lowpass-hz", type=float, default=RRWAVENET_LOWPASS_HZ)
     wave.add_argument("--scripts-dir", type=Path, default=None,
                       help="folder of 261007_RRWaveNet_Ensemble_NoEvent.py (CapnoBase breath labels)")
@@ -1885,11 +1900,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     box.add_argument("--waveform-summary", type=Path, default=None,
                      help="Waveform_Summary_all_runs.xlsx (default: the one in the output folder)")
     box.add_argument("--duty-results", type=Path, default=DUTY_RESULTS, help="261107_DutyCycle_Results.xlsx")
-    box.add_argument("--correncoder-results", type=Path, default=CORRENCODER_RESULTS,
-                     help="261107_DeepCorrencoder_PaperVersion_v1_results.xlsx")
-    box.add_argument("--allow-other-correncoder", action="store_true",
-                     help="go on when the waveform summary's corr-encoder is not the paper version")
+    box.add_argument("--correncoder-results", type=Path, default=None,
+                     help=f"the corr-encoder's stored results (default: {{correncoder-root}}\\{CORRENCODER_RESULTS_FILE})")
     args = parser.parse_args(argv)
+    if args.correncoder_results is None:
+        args.correncoder_results = Path(args.correncoder_root) / CORRENCODER_RESULTS_FILE
     args.root_261105 = None  # the CapnoBase reader is looked for in the 261007 folder (and the usual places)
     args.excluded = {"STEAM2": [norm_id("STEAM2", s) for s in args.exclude_steam2],
                      "BIDMC": [norm_id("BIDMC", s) for s in args.exclude_bidmc],
@@ -1904,7 +1919,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
     out_root = Path(args.output_root)
     out_root.mkdir(parents=True, exist_ok=True)
-    print(f"Output: {out_root}\nCorr-encoder: {args.correncoder_root}\nRespDiff: {args.respdiff_root}")
+    print(f"Output: {out_root}\nCorr-encoder: {args.correncoder_root} (box plots: {args.correncoder_results})\n"
+          f"RespDiff: {args.respdiff_root}")
     print("Left out: " + "; ".join(f"{d} {', '.join(s)}" for d, s in args.excluded.items() if s))
     if not args.no_waveforms:
         waveforms(args, out_root)
