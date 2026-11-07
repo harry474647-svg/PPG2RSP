@@ -1692,6 +1692,16 @@ def summarize_dataset_results(per_window_df: pd.DataFrame) -> pd.DataFrame:
     return summary.sort_values(["Dataset", "Window_Sec", "Input_Case"])
 
 
+def subject_key(subject) -> str:
+    """A subject ID compared without leading zeros (01 = 1, 0009 = 9), also when a table was saved by Excel."""
+    text = re.sub(r"\.0+$", "", str(subject).strip())
+    return text.lstrip("0") or "0"
+
+
+def subjects_key(text) -> Tuple[str, ...]:
+    return tuple(sorted(subject_key(s) for s in str(text).split(",") if s.strip()))
+
+
 def finished_folds(metrics_dir: str) -> Dict[Tuple[str, int, str], Tuple[dict, List[dict]]]:
     """Folds of a job that stopped part way: (test subject, fold index, input case) -> its row of
     RRWaveNet_PaperStyle_Running_PerFold.csv and its rows of ..._Running_PerWindow.csv, for every fold with all
@@ -1708,11 +1718,11 @@ def finished_folds(metrics_dir: str) -> Dict[Tuple[str, int, str], Tuple[dict, L
         return {}
     if folds.empty or windows.empty:
         return {}
-    grouped = {(str(s), int(f), str(c)): part.to_dict("records")
+    grouped = {(subject_key(s), int(f), str(c)): part.to_dict("records")
                for (s, f, c), part in windows.groupby(["Test_Subject", "Fold_Index", "Input_Case"], sort=False)}
     out = {}
     for row in folds.to_dict("records"):
-        key = (str(row["Test_Subject"]), int(row["Fold_Index"]), str(row["Input_Case"]))
+        key = (subject_key(row["Test_Subject"]), int(row["Fold_Index"]), str(row["Input_Case"]))
         rows = grouped.get(key, [])
         if rows and len(rows) == int(row["Num_Test_Windows"]):
             out[key] = (row, rows)
@@ -1770,10 +1780,11 @@ def run_dataset_experiment(
             if not train_subjects or not val_subjects:
                 continue
             for case_key in ACTIVE_INPUT_CASES:
-                old = previous.get((str(test_subject), fold_idx + 1, case_key))
-                if old is not None and str(old[0].get("Val_Subjects", "")) == ",".join(val_subjects):
-                    fold_rows.append(old[0])
-                    per_window_rows += old[1]
+                old = previous.get((subject_key(test_subject), fold_idx + 1, case_key))
+                if old is not None and subjects_key(old[0].get("Val_Subjects", "")) == subjects_key(",".join(val_subjects)):
+                    fold_rows.append({**old[0], "Test_Subject": test_subject, "Val_Subjects": ",".join(val_subjects),
+                                      "Train_Subjects": ",".join(train_subjects)})
+                    per_window_rows += [{**row, "Test_Subject": test_subject} for row in old[1]]
                     kept += 1
                     print(f"[{DATASET_CONFIGS[dataset_key]['label']}] W{int(window_sec)} | Test {test_subject} | "
                           f"Fold {fold_idx + 1}/{INNER_FOLDS}: finished before, kept "
