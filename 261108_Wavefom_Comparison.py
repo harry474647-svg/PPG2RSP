@@ -41,20 +41,20 @@ rule are drawn (filled up by Advantage when fewer qualify), as the first version
 Subjects left out (MAE issue): STEAM2 22_LMS, 26_CKK, 12_YJJ; BIDMC 27;
 CapnoBase 0115 (--exclude-*).
 
-Figures (every drawn window, all panels the same seconds of the recording,
-every waveform min-max scaled in the window)
-  overlap   (a) GT vs RRWaveNet, (b) GT vs Deep Corr-Encoder, (c) GT vs RespDiff:
-            each model drawn over the GT
-  separate  GT, RRWaveNet, Deep Corr-Encoder, RespDiff, each in its own panel
+Figures: overlap only (one per drawn window)
+  (a) GT vs RRWaveNet, (b) GT vs Deep Corr-Encoder, (c) GT vs RespDiff: each
+  model drawn over the GT. Time synchronised: the three panels share one time
+  axis (the same seconds of the recording, the same grid), and no model is
+  shifted in time against the GT. Every waveform min-max scaled in the window.
 GT black solid; RRWaveNet coral, Deep Corr-Encoder blue, RespDiff teal (solid).
-Beside every model panel: its AE and r in the window and its subject means.
+Beside every panel: the model's AE and r in the window and its subject means.
 
 Outputs (default D:\PPG2RSP_RRWaveNet_Inspired\261108_Wavefom_Comparison)
   every subject (default):
-  All_Subjects\{Dataset}\{30s,60s}\{rank}_{subject}_{t0}-{t1}s_overlap.png / _separate.png
+  All_Subjects\{Dataset}\{30s,60s}\{rank}_{subject}_{t0}-{t1}s_overlap.png
      (STEAM2, several recordings per subject: {rank}_{recording}_{t0}-{t1}s_...;
      rank zero-padded so the folder lists them by Advantage)
-  All_Subjects\{Dataset}\{30s,60s}\{Dataset}_{size}s_overlap.pdf / _separate.pdf
+  All_Subjects\{Dataset}\{30s,60s}\{Dataset}_{size}s_overlap.pdf
      (every subject, one page each, by Advantage)
   261108_Waveform_All_Subjects.xlsx
      All_Subjects     every drawn window (rank, AE, r, rate of every model,
@@ -1190,8 +1190,9 @@ def model_text(model: str, row: dict, means: dict, size: int) -> str:
 
 
 def draw_window(fig_root: Path, pdfs: dict, dataset: str, run: str, row: dict, values: Dict[str, np.ndarray],
-                means: dict, basis: str, single: bool, place: str, digits: int) -> Dict[str, str]:
-    """The overlap and the separate figure of one window (a model without a stored output: its panel says so)."""
+                means: dict, basis: str, single: bool, place: str, digits: int) -> str:
+    """The overlap figure of one window: GT vs each model, the panels on one time axis (a model without a stored
+    output: its panel says so). Returns the figure file (relative to fig_root)."""
     size = int(row["Size_Sec"])
     t0, t1 = row["Start_Sec"], row["End_Sec"]
     a, b = int(round(t0 * FS30)), int(round(t1 * FS30))
@@ -1207,28 +1208,21 @@ def draw_window(fig_root: Path, pdfs: dict, dataset: str, run: str, row: dict, v
     stem = f"{row['Rank']:0{digits}d}_{safe_name(row['Subject'] if single else row['Recording'])}_{t0:.0f}-{t1:.0f}s"
     folder = fig_root / dataset / f"{size}s"
     missing = "no stored output for this recording"
-    overlap, separate = [], [{"title": f"(a) GT ({MODALITIES[DATASET_KEYS[dataset]]})",
-                              "lines": [(gt, GT_LINE, gt_label, 1.5)]}]
+    overlap = []
     for k, m in enumerate(FIG_MODELS):
         if m in values:
-            line = (minmax(values[m][a:b]), FIG_COLOR[m], name[m], 1.7)
-            overlap.append({"title": f"({'abc'[k]}) GT vs {name[m]}", "lines": [(gt, GT_LINE, gt_label, 1.5), line],
+            overlap.append({"title": f"({'abc'[k]}) GT vs {name[m]}",
+                            "lines": [(gt, GT_LINE, gt_label, 1.5), (minmax(values[m][a:b]), FIG_COLOR[m], name[m], 1.7)],
                             "text": model_text(m, row, means, size)})
-            separate.append({"title": f"({'bcd'[k]}) {name[m]}", "lines": [line], "text": model_text(m, row, means, size)})
         else:
             overlap.append({"title": f"({'abc'[k]}) GT vs {name[m]}", "lines": [(gt, GT_LINE, gt_label, 1.5)],
                             "empty": f"{name[m]}: {missing}"})
-            separate.append({"title": f"({'bcd'[k]}) {name[m]}", "lines": [], "empty": f"{name[m]}: {missing}"})
-    paths = {}
-    for kind, panels in (("overlap", overlap), ("separate", separate)):
-        if (size, kind) not in pdfs:
-            pdf_path = folder / f"{dataset}_{size}s_{kind}.pdf"
-            pdf_path.parent.mkdir(parents=True, exist_ok=True)
-            pdfs[(size, kind)] = PdfPages(pdf_path)
-        path = folder / f"{stem}_{kind}.png"
-        page(path, pdfs[(size, kind)], header, notes_text, t, panels)
-        paths[kind] = str(path.relative_to(fig_root))
-    return paths
+    if size not in pdfs:
+        folder.mkdir(parents=True, exist_ok=True)
+        pdfs[size] = PdfPages(folder / f"{dataset}_{size}s_overlap.pdf")
+    path = folder / f"{stem}_overlap.png"
+    page(path, pdfs[size], header, notes_text, t, overlap)
+    return str(path.relative_to(fig_root))
 
 
 def notes(args: argparse.Namespace) -> pd.DataFrame:
@@ -1254,8 +1248,9 @@ def notes(args: argparse.Namespace) -> pd.DataFrame:
         ("GT_Clipped_Cycles", "GT breaths in the window with saturated (flat-topped) reference samples"),
         ("Why", "what the other models do in the window (2x / half rate, rate off, missed cycles, lower PCC)"),
         ("Left out", "; ".join(f"{d} {', '.join(s)}" for d, s in args.excluded.items() if s)),
-        ("Figures", "overlap: each model over the GT; separate: GT and every model in its own panel; GT black, "
-                    "RRWaveNet coral, Deep Corr-Encoder blue, RespDiff teal; every waveform min-max scaled in the window"),
+        ("Figures", "overlap only: (a) GT vs RRWaveNet, (b) GT vs Deep Corr-Encoder, (c) GT vs RespDiff on one time axis "
+                    "(the same seconds, no model shifted); GT black, RRWaveNet coral, Deep Corr-Encoder blue, RespDiff "
+                    "teal; every waveform min-max scaled in the window"),
     ], columns=["Item", "Description"])
 
 
@@ -1296,7 +1291,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 FIRST_COLUMNS = ["Dataset", "Run", "Size_Sec", "Rank", "Filled", "Meets_Candidate_Rule", "Subject", "Recording",
                  "Start_Sec", "End_Sec", "GT_RR", "GT_Clipped_Cycles", "Advantage", "RRWaveNet_AE", "RRWaveNet_PCC",
                  "RRWaveNet_Rate", "CorrEncoder_AE", "CorrEncoder_PCC", "CorrEncoder_Rate", "RespDiff_AE",
-                 "RespDiff_PCC", "RespDiff_Rate", "Why", "Overlap_Figure", "Separate_Figure"]
+                 "RespDiff_PCC", "RespDiff_Rate", "Why", "Overlap_Figure"]
 
 
 def ordered(rows: List[dict]) -> pd.DataFrame:
@@ -1339,7 +1334,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             best_all += ranked
             if every:
                 pick = [dict(r, Rank=r["Order"]) for r in ranked]
-                print(f"  {dataset} {size} s: every subject, {len(pick)} figures of each kind", flush=True)
+                print(f"  {dataset} {size} s: every subject, {len(pick)} overlap figures", flush=True)
             else:
                 pick = choose(ranked, args.top)
                 print(f"  {dataset} {size} s: " + ("; ".join(
@@ -1353,9 +1348,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 else:
                     place = f"candidate {c['Rank']}" + (" (filled up)" if c["Filled"] else "")
                 means, basis = subject_means([r for r in rows if r["Subject"] == c["Subject"]], size)
-                paths = draw_window(fig_root, pdfs, dataset, run, c, store[(c["Subject"], c["Recording"])], means,
-                                    basis, n_recordings.get(c["Subject"], 1) == 1, place, digits)
-                drawn.append({**c, "Overlap_Figure": paths["overlap"], "Separate_Figure": paths["separate"]})
+                figure = draw_window(fig_root, pdfs, dataset, run, c, store[(c["Subject"], c["Recording"])], means,
+                                     basis, n_recordings.get(c["Subject"], 1) == 1, place, digits)
+                drawn.append({**c, "Overlap_Figure": figure})
         for pdf in pdfs.values():
             pdf.close()
     if every:
