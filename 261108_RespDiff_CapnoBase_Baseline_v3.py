@@ -2,38 +2,49 @@
 """
 RespDiff waveform model: CapnoBase only, Baseline only
 (from 260519_RespDiff_AllDatasets_v3; model, preprocessing, losses, training,
-sampling, evaluation and output layout unchanged).
+sampling and evaluation unchanged).
 
 What this script does
 1. Trains the diffusion waveform model (LOSO) on CapnoBase only (CSV folder),
    with the Baseline input setting only (low-band PPG). The Proposed setting
    (low/high/envelope/instantaneous-frequency) is not trained.
-2. Keeps what is already in the results folder:
-   - the results go where v3 put them: {save-root}\CapnoBase\{run tag}\
-     (Models, Learning_Curves, Waveform_Comparison, Metrics, Predictions);
-     the run tag comes from the speed settings, so run with the settings of the
-     earlier run (default --speed-preset balanced) to continue that folder
-   - a test subject whose Baseline result is already stored (RespDiff_Final_* /
-     RespDiff_Running_* PerSubject) is skipped; its stored rows (Baseline and,
-     from the earlier v3 run, Proposed), predictions and models stay as they are
-   - only the subjects without a stored Baseline result are trained; a subject
-     interrupted mid-training (no stored result) is trained from the start
-   - --force-subjects retrains the Baseline of the named subjects only; their
-     stored Proposed rows and Proposed predictions are kept
-   - subject IDs match with or without leading zeros (0009 = 9)
-   - _Combined\{run tag}: the CapnoBase rows are replaced by the updated ones,
-     the rows of the other datasets (STEAM, BIDMC) are kept
-3. At the start, every run folder already under {save-root}\CapnoBase is listed
-   with its number of subjects with a Baseline result.
-4. Learning curves (total loss and each loss component), the 30 s waveform
-   plot (GT vs Baseline) and the prediction bundle are saved per subject.
+2. The earlier v3 results are only READ, never written:
+     {previous-root}\CapnoBase\{run tag}\Metrics\RespDiff_Final_* / RespDiff_Running_*
+   (default previous-root ...\Hilbert_OpenDataset\RespDiff_AllDatasets_v3).
+   A subject with a stored Baseline result there is skipped (not retrained);
+   the preprocessing cache there ({previous-root}\CapnoBase\Processed_Subject_Cache)
+   is read too.
+3. Everything this run makes is saved SEPARATELY:
+     {save-root}\CapnoBase\{run tag}\
+         Models\              {case}_baseline_best.pt
+         Learning_Curves\     {case}_Learning_Curves.png
+         Waveform_Comparison\ {case}_30s_Comparison.png (GT vs Baseline, first 30 s)
+         Predictions\         {case}_predictions.npz
+         Metrics\             RespDiff_Running_* / RespDiff_Final_*   (.csv, .xlsx): this run's subjects only
+                              RespDiff_Baseline_AllSubjects (.csv, .xlsx): the Baseline of every subject,
+                                  from the earlier folder and from this run (column Source)
+                              progress.json
+     {save-root}\CapnoBase\Processed_Subject_Cache\ (cache files not found in the earlier folder)
+   (default save-root ...\Hilbert_OpenDataset\RespDiff_CapnoBase_Baseline_261108).
+   A subject already finished in this new folder is skipped too, so a stopped
+   run continues where it stopped.
+4. A result file that cannot be written because another program holds it
+   (e.g. open in Excel) no longer stops the run: it is written next to it as
+   {name}_{YYYYMMDD_HHMMSS}.csv / .xlsx, and such files are read when resuming.
+5. --force-subjects retrains the Baseline of the named subjects; the new result
+   goes to the new folder (the earlier folder is not changed).
+6. Subject IDs match with or without leading zeros (0009 = 9).
+
+The run tag comes from the speed settings (default --speed-preset balanced:
+preset_balanced_e90_ss80_ve2_tr2_va2_te1_mtr240_mva160); --previous-run-tag
+names another earlier folder to read.
 
 Run:
   python 261108_RespDiff_CapnoBase_Baseline_v3.py
-Options: --speed-preset (default balanced), --run-tag, --epochs, --sample-steps,
-  --batch-size, --val-every, --train/val/test-window-step,
-  --max-train/val/test-windows-per-subject, --subjects, --force-subjects,
-  --save-root
+Options: --save-root, --previous-root, --previous-run-tag, --speed-preset
+  (default balanced), --run-tag, --epochs, --sample-steps, --batch-size,
+  --val-every, --train/val/test-window-step, --max-train/val/test-windows-per-subject,
+  --subjects, --force-subjects
 """
 
 import argparse
@@ -41,6 +52,7 @@ import gc
 import json
 import os
 import random
+import re
 import time
 from contextlib import nullcontext
 from math import gcd
@@ -108,6 +120,16 @@ BIDMC_DATA_PATH = (
     r"\bidmc-ppg-and-respiration-dataset-1.0.0\bidmc_data.mat"
 )
 CAPNOBASE_CSV_DIR = r"D:\STEAM\Multimodal_prediction\PPG-RSP\Opendata\Capnobase\data\csv"
+
+# The earlier v3 results: read only (which subjects are finished, the preprocessing cache)
+PREVIOUS_SAVE_ROOT = BASE_SAVE_ROOT
+# This run's results: a separate folder
+NEW_SAVE_ROOT = (
+    r"D:\STEAM\Multimodal_prediction\PPG-RSP\Results\Waveform"
+    r"\Hilbert_OpenDataset\RespDiff_CapnoBase_Baseline_261108"
+)
+CACHE_READ_DIRS = []  # extra preprocessing-cache folders that are read (never written): the earlier v3 cache
+ALL_SUBJECTS_NAME = "RespDiff_Baseline_AllSubjects"
 
 DEFAULT_ACTIVE_DATASETS = ["capnobase"]  # this version: CapnoBase only
 ACTIVE_MODES = ["baseline"]  # this version: Baseline only (Proposed is not trained)
@@ -669,22 +691,24 @@ def get_cache_path(cache_dir, dataset_key, subject, window_sec, stride_sec):
 
 
 def load_subject_cache(cache_dir, dataset_key, subject, window_sec, stride_sec):
-    cache_path = get_cache_path(cache_dir, dataset_key, subject, window_sec, stride_sec)
-    if not os.path.exists(cache_path):
-        return None
-    try:
-        cached = np.load(cache_path, allow_pickle=False)
-        return {
-            "low": cached["low"].astype(np.float32),
-            "high": cached["high"].astype(np.float32),
-            "env": cached["env"].astype(np.float32),
-            "freq": cached["freq"].astype(np.float32),
-            "label": cached["label"].astype(np.float32),
-            "fs": int(cached["fs"]),
-        }
-    except Exception as exc:
-        print(f"   [Cache Load Fail] {subject}: {exc}")
-        return None
+    """The cache of this run's folder, else the earlier folder's cache (CACHE_READ_DIRS, read only)."""
+    for folder in [cache_dir] + [d for d in CACHE_READ_DIRS if d != cache_dir]:
+        cache_path = get_cache_path(folder, dataset_key, subject, window_sec, stride_sec)
+        if not os.path.exists(cache_path):
+            continue
+        try:
+            cached = np.load(cache_path, allow_pickle=False)
+            return {
+                "low": cached["low"].astype(np.float32),
+                "high": cached["high"].astype(np.float32),
+                "env": cached["env"].astype(np.float32),
+                "freq": cached["freq"].astype(np.float32),
+                "label": cached["label"].astype(np.float32),
+                "fs": int(cached["fs"]),
+            }
+        except Exception as exc:
+            print(f"   [Cache Load Fail] {subject} ({cache_path}): {exc}")
+    return None
 
 
 def save_subject_cache(cache_dir, dataset_key, subject, data, window_sec, stride_sec):
@@ -1439,14 +1463,26 @@ def read_metric_csv(path):
     dtype_map = {"Subject": str, "Model": str}
     try:
         return pd.read_csv(path, dtype=dtype_map)
+    except PermissionError:
+        raise SystemExit(f"Cannot read {path}: it is held by another program (e.g. open in Excel). "
+                         "Close it and run again.")
     except Exception:
         return pd.read_csv(path)
 
 
+def metric_csv_versions(metrics_dir, prefix, name):
+    """{prefix}_{name}.csv and the copies written next to it while it was locked ({prefix}_{name}_YYYYMMDD_HHMMSS.csv)."""
+    if not os.path.isdir(metrics_dir):
+        return []
+    pattern = re.compile(rf"^{re.escape(prefix)}_{re.escape(name)}(_\d{{8}}_\d{{6}})?\.csv$")
+    return [os.path.join(metrics_dir, f) for f in os.listdir(metrics_dir) if pattern.match(f)]
+
+
 def merge_metric_versions(metrics_dir, name, dedupe_cols):
-    final_df = read_metric_csv(metric_csv_path(metrics_dir, FINAL_PREFIX, name))
-    running_df = read_metric_csv(metric_csv_path(metrics_dir, RUNNING_PREFIX, name))
-    merged = concat_dataframes([final_df, running_df])
+    """Final and Running tables (and their side-stepped copies); the newest file wins for a duplicated row."""
+    paths = metric_csv_versions(metrics_dir, FINAL_PREFIX, name) + metric_csv_versions(metrics_dir, RUNNING_PREFIX, name)
+    paths.sort(key=os.path.getmtime)
+    merged = concat_dataframes([read_metric_csv(p) for p in paths])
     if merged.empty:
         return merged
     return merged.drop_duplicates(subset=list(dedupe_cols), keep="last").reset_index(drop=True)
@@ -1502,9 +1538,9 @@ def drop_subject_windows(per_window_df, subject):
     return per_window_df[keep].reset_index(drop=True)
 
 
-def report_existing_runs(save_root, dataset_key, run_tag):
-    """List the run folders already under {save-root}\{dataset}: subjects with a stored Baseline result each."""
-    dataset_base = os.path.join(save_root, DATASET_CONFIGS[dataset_key]["save_name"])
+def report_existing_runs(previous_root, dataset_key, previous_tag):
+    """List the earlier run folders under {previous-root}\\{dataset} (read only): subjects with a Baseline result."""
+    dataset_base = os.path.join(previous_root, DATASET_CONFIGS[dataset_key]["save_name"])
     if not os.path.isdir(dataset_base):
         print(f"No earlier results under {dataset_base}")
         return
@@ -1521,14 +1557,33 @@ def report_existing_runs(save_root, dataset_key, run_tag):
     if not found:
         print(f"No earlier run folders under {dataset_base}")
         return
-    print(f"Earlier run folders under {dataset_base}:")
+    print(f"Earlier run folders under {dataset_base} (read only; * = the one used):")
     for name, n_done in found:
-        print(f"  {'*' if name == run_tag else ' '} {name}: {n_done} subjects with a Baseline result")
-    current = dict(found).get(run_tag, 0)
-    others = [name for name, n_done in found if name != run_tag and n_done > 0]
+        print(f"  {'*' if name == previous_tag else ' '} {name}: {n_done} subjects with a Baseline result")
+    current = dict(found).get(previous_tag, 0)
+    others = [name for name, n_done in found if name != previous_tag and n_done > 0]
     if current == 0 and others:
-        print(f"  Note: this run ({run_tag}) has no stored result yet; to continue an earlier folder, run with "
-              f"its speed settings or --run-tag (e.g. --run-tag {others[0]}).")
+        print(f"  Note: {previous_tag} has no stored result; to use another earlier folder, run with "
+              f"--previous-run-tag {others[0]}")
+
+
+def write_file(path, write):
+    """Write a result file; when it is held by another program (e.g. open in Excel), write it next to it as
+    {name}_{YYYYMMDD_HHMMSS}{ext} instead of stopping the run."""
+    try:
+        write(path)
+        return path
+    except PermissionError:
+        root, ext = os.path.splitext(path)
+        alt = f"{root}_{time.strftime('%Y%m%d_%H%M%S')}{ext}"
+        try:
+            write(alt)
+            print(f"   [Locked] {os.path.basename(path)} is held by another program (e.g. Excel); "
+                  f"saved as {os.path.basename(alt)}")
+            return alt
+        except Exception as exc:
+            print(f"   [Save skipped] {path}: {exc}")
+            return None
 
 
 def save_dataframe_bundle(metrics_dir, prefix, dataframes):
@@ -1536,21 +1591,27 @@ def save_dataframe_bundle(metrics_dir, prefix, dataframes):
     paths = {}
     for name, df in dataframes.items():
         csv_path = os.path.join(metrics_dir, f"{prefix}_{name}.csv")
-        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-        paths[name] = csv_path
-    xlsx_path = os.path.join(metrics_dir, f"{prefix}.xlsx")
-    try:
-        with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
+        paths[name] = write_file(csv_path, lambda p, df=df: df.to_csv(p, index=False, encoding="utf-8-sig"))
+
+    def write_xlsx(path):
+        with pd.ExcelWriter(path, engine="openpyxl") as writer:
             for name, df in dataframes.items():
                 df.to_excel(writer, sheet_name=name[:31], index=False)
-        paths["excel"] = xlsx_path
+
+    xlsx_path = os.path.join(metrics_dir, f"{prefix}.xlsx")
+    try:
+        paths["excel"] = write_file(xlsx_path, write_xlsx)
     except Exception as exc:
         print(f"Excel save skipped for {prefix}: {exc}")
     return paths
 
 
-def save_progress_json(metrics_dir, dataset_key, all_subjects, per_subject_df, args):
+def save_progress_json(metrics_dir, dataset_key, all_subjects, per_subject_df, args, previous_subject_df=None):
     completed = sorted([str(s) for s in all_subjects if subject_is_complete(per_subject_df, s)])
+    earlier = []
+    if previous_subject_df is not None:
+        earlier = sorted([str(s) for s in all_subjects if subject_is_complete(previous_subject_df, s)
+                          and str(s) not in completed])
     payload = {
         "run_tag": build_run_tag(args),
         "speed_preset": args.speed_preset,
@@ -1559,14 +1620,21 @@ def save_progress_json(metrics_dir, dataset_key, all_subjects, per_subject_df, a
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "completed_subjects": completed,
         "num_completed": len(completed),
+        "completed_in_earlier_folder": earlier,
+        "num_completed_in_earlier_folder": len(earlier),
         "num_total": len(all_subjects),
         "mode_keys": ACTIVE_MODES,
-        "note": "CapnoBase only, Baseline only (completed = a stored Baseline result)",
+        "note": "CapnoBase only, Baseline only; completed_subjects = trained in this folder, "
+                "completed_in_earlier_folder = Baseline result in the earlier v3 folder (read only)",
+        "earlier_folder": previous_metrics_dir(args, dataset_key),
     }
     save_path = os.path.join(metrics_dir, "progress.json")
-    with open(save_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    return save_path
+
+    def write_json(path):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    return write_file(save_path, write_json)
 
 
 def build_parameter_table(dataset_keys, args):
@@ -1881,17 +1949,79 @@ def build_summary_dataframe(per_subject_df):
 # ===========================================================
 # 7. Dataset Runner
 # ===========================================================
+def previous_metrics_dir(args, dataset_key):
+    """Metrics folder of the earlier v3 run (read only)."""
+    tag = safe_tag(args.previous_run_tag) if args.previous_run_tag else build_run_tag(args)
+    return os.path.join(args.previous_root, DATASET_CONFIGS[dataset_key]["save_name"], tag, "Metrics")
+
+
+def subject_sort(df, extra=()):
+    if df.empty or "Subject" not in df.columns:
+        return df
+    keys = df["Subject"].map(subject_key)
+    order = df.assign(_n=keys.map(lambda k: int(k) if k.isdigit() else 10 ** 9), _s=keys)
+    by = ["_n", "_s"] + [c for c in extra if c in df.columns]
+    return order.sort_values(by, kind="stable").drop(columns=["_n", "_s"]).reset_index(drop=True)
+
+
+def save_all_subjects(metrics_dir, previous_subject_df, previous_window_df, per_subject_df, per_window_df):
+    """The Baseline of every subject: the earlier folder's (read only) and this run's (this run wins), in one file."""
+    new_keys = set(per_subject_df["Subject"].map(subject_key)) if not per_subject_df.empty else set()
+
+    def earlier(df):
+        if df.empty or not {"Subject", "Model"} <= set(df.columns):
+            return pd.DataFrame()
+        df = df[active_mode_mask(df)]
+        return df[~df["Subject"].map(subject_key).isin(new_keys)]
+
+    def tagged(df, source):
+        if df.empty:
+            return df
+        df = df.copy()
+        df.insert(0, "Source", source)
+        return df
+
+    subject_df = concat_dataframes([tagged(earlier(previous_subject_df), "earlier v3 folder"),
+                                    tagged(per_subject_df, "this run")])
+    window_df = concat_dataframes([tagged(earlier(previous_window_df), "earlier v3 folder"),
+                                   tagged(per_window_df[active_mode_mask(per_window_df)]
+                                          if not per_window_df.empty else per_window_df, "this run")])
+    if subject_df.empty:
+        return None
+    subject_df = subject_sort(subject_df)
+    window_df = subject_sort(window_df, extra=("Window_Index",))
+    sources = subject_df.groupby("Source")["Subject"].nunique().rename("Num_Subjects").reset_index()
+    save_dataframe_bundle(
+        metrics_dir,
+        ALL_SUBJECTS_NAME,
+        {
+            "Summary": build_summary_dataframe(subject_df),
+            "Sources": sources,
+            "PerSubject": subject_df,
+            "PerWindow": window_df,
+        },
+    )
+    return os.path.join(metrics_dir, f"{ALL_SUBJECTS_NAME}.xlsx")
+
+
 def run_dataset_comparison(dataset_key, args):
     dataset_cfg = DATASET_CONFIGS[dataset_key]
     dirs = prepare_output_dirs(args.save_root, dataset_key, args)
+    prev_dir = previous_metrics_dir(args, dataset_key)
     print("\n" + "=" * 78)
     print(f"Dataset: {dataset_cfg['label']}")
-    print(f"Save root: {dirs['root']}")
+    print(f"This run is saved in: {dirs['root']}")
+    print(f"Earlier results (read only): {prev_dir}")
     print(f"Run tag: {build_run_tag(args)}")
     print(f"Speed preset: {args.speed_preset}")
-    print(f"Modes: {ACTIVE_MODES} | stored results are kept (subjects with a Baseline result are skipped)")
+    print(f"Modes: {ACTIVE_MODES}")
     print("=" * 78)
 
+    if os.path.isdir(prev_dir):
+        previous_subject_df, previous_window_df = load_existing_metrics(prev_dir)
+    else:
+        print(f"No earlier results folder: {prev_dir} (every subject is trained)")
+        previous_subject_df, previous_window_df = pd.DataFrame(), pd.DataFrame()
     per_subject_df, per_window_df = load_existing_metrics(dirs["metrics"])
 
     subject_data = load_dataset(dataset_key, dirs)
@@ -1906,19 +2036,25 @@ def run_dataset_comparison(dataset_key, args):
         print(f"No matching test subjects for dataset {dataset_cfg['label']}.")
         return build_summary_dataframe(per_subject_df), per_subject_df, per_window_df
 
-    completed_subjects = sum(subject_is_complete(per_subject_df, s) for s in all_subjects)
-    print(f"Existing completed subjects (Baseline): {completed_subjects}/{len(all_subjects)}")
+    in_earlier = [s for s in all_subjects if subject_is_complete(previous_subject_df, s)]
+    in_new = [s for s in all_subjects if subject_is_complete(per_subject_df, s)]
+    left = [s for s in all_subjects if s not in in_earlier and s not in in_new]
+    print(f"Baseline results: earlier folder {len(in_earlier)}, this folder {len(in_new)}, "
+          f"to train {len(left)} of {len(all_subjects)} subjects")
 
     for test_subject in test_subjects:
-        done_count = completed_mode_count(per_subject_df, test_subject)
         force_this_subject = subject_in_selection(test_subject, force_selector)
-        if not force_this_subject and subject_is_complete(per_subject_df, test_subject):
+        done_earlier = subject_is_complete(previous_subject_df, test_subject)
+        done_here = subject_is_complete(per_subject_df, test_subject)
+        if not force_this_subject and (done_earlier or done_here):
+            where = "this folder" if done_here else "the earlier folder (kept, read only)"
             print(f"\n===== [{dataset_cfg['label']}] LOSO Test Subject: {test_subject} =====")
-            print(f"Skip subject {test_subject}: already complete ({done_count}/{len(ACTIVE_MODES)} modes).")
+            print(f"Skip subject {test_subject}: Baseline result already in {where}.")
             continue
 
-        if done_count > 0:
-            print(f"\nForced rerun of {test_subject}: its stored Baseline result is replaced (other modes kept).")
+        if done_earlier or done_here:
+            print(f"\nForced rerun of {test_subject}: the new result is saved in this folder "
+                  f"(the earlier folder is not changed).")
         print(f"\n===== [{dataset_cfg['label']}] LOSO Test Subject: {test_subject} =====")
 
         per_subject_df = drop_subject_rows(per_subject_df, test_subject)
@@ -1989,7 +2125,10 @@ def run_dataset_comparison(dataset_key, args):
                 "PerWindow": per_window_df,
             },
         )
-        progress_path = save_progress_json(dirs["metrics"], dataset_key, all_subjects, per_subject_df, args)
+        progress_path = save_progress_json(dirs["metrics"], dataset_key, all_subjects, per_subject_df, args,
+                                           previous_subject_df)
+        all_path = save_all_subjects(dirs["metrics"], previous_subject_df, previous_window_df, per_subject_df,
+                                     per_window_df)
 
         best_line = subject_result_df[["Model_Label", "MAE_Mean", "Waveform_Corr_Mean"]].sort_values(
             ["MAE_Mean", "Waveform_Corr_Mean"], ascending=[True, False]
@@ -1998,69 +2137,38 @@ def run_dataset_comparison(dataset_key, args):
         print(f"Saved waveform plot: {plot_path}")
         print(f"Saved prediction bundle: {pred_path}")
         print(f"Saved progress file: {progress_path}")
+        print(f"Saved Baseline of every subject: {all_path}")
         print(f"Evaluation windows: {n_windows}")
         print(best_line.to_string(index=False))
         clear_runtime_memory()
 
     summary_df = build_summary_dataframe(per_subject_df)
-    save_dataframe_bundle(
-        dirs["metrics"],
-        FINAL_PREFIX,
-        {
-            "ParameterSet": build_parameter_table([dataset_key], args),
-            "Summary": summary_df,
-            "PerSubject": per_subject_df,
-            "PerWindow": per_window_df,
-        },
-    )
-    save_progress_json(dirs["metrics"], dataset_key, all_subjects, per_subject_df, args)
+    if not per_subject_df.empty:
+        save_dataframe_bundle(
+            dirs["metrics"],
+            FINAL_PREFIX,
+            {
+                "ParameterSet": build_parameter_table([dataset_key], args),
+                "Summary": summary_df,
+                "PerSubject": per_subject_df,
+                "PerWindow": per_window_df,
+            },
+        )
+    save_progress_json(dirs["metrics"], dataset_key, all_subjects, per_subject_df, args, previous_subject_df)
+    all_path = save_all_subjects(dirs["metrics"], previous_subject_df, previous_window_df, per_subject_df,
+                                 per_window_df)
+    print(f"\nThis run's results: {dirs['metrics']}")
+    if all_path:
+        print(f"Baseline of every subject (earlier folder + this run): {all_path}")
     return summary_df, per_subject_df, per_window_df
-
-
-def replace_dataset_rows(existing_df, new_df, labels):
-    """The rows of the other datasets as stored, then the new rows of the datasets run here."""
-    if existing_df.empty or "Dataset" not in existing_df.columns:
-        return new_df
-    kept = existing_df[~existing_df["Dataset"].astype(str).isin(labels)]
-    return concat_dataframes([kept, new_df])
-
-
-def save_global_outputs(save_root, args, summary_frames, subject_frames, window_frames):
-    combined_summary = concat_dataframes(summary_frames)
-    combined_subject = concat_dataframes(subject_frames)
-    combined_window = concat_dataframes(window_frames)
-    if combined_summary.empty and combined_subject.empty and combined_window.empty:
-        return
-
-    combined_dir = os.path.join(save_root, "_Combined", build_run_tag(args))
-    os.makedirs(combined_dir, exist_ok=True)
-    labels = [DATASET_CONFIGS[k]["label"] for k in args.datasets]
-    stored = {name: read_metric_csv(metric_csv_path(combined_dir, FINAL_PREFIX, name))
-              for name in ("ParameterSet", "DatasetSummary", "PerSubject", "PerWindow")}
-    combined_subject = replace_dataset_rows(stored["PerSubject"], combined_subject, labels)
-    combined_window = replace_dataset_rows(stored["PerWindow"], combined_window, labels)
-    combined_summary = replace_dataset_rows(stored["DatasetSummary"], combined_summary, labels)
-    parameter_set = replace_dataset_rows(stored["ParameterSet"], build_parameter_table(args.datasets, args), labels)
-    global_summary = build_summary_dataframe(combined_subject)
-    save_dataframe_bundle(
-        combined_dir,
-        FINAL_PREFIX,
-        {
-            "ParameterSet": parameter_set,
-            "DatasetSummary": combined_summary,
-            "GlobalSummary": global_summary,
-            "PerSubject": combined_subject,
-            "PerWindow": combined_window,
-        },
-    )
 
 
 # ===========================================================
 # 8. Main
 # ===========================================================
 def parse_args():
-    parser = argparse.ArgumentParser(description="RespDiff waveform model, CapnoBase only, Baseline only; stored "
-                                                 "results are kept and only the remaining subjects are trained.")
+    parser = argparse.ArgumentParser(description="RespDiff waveform model, CapnoBase only, Baseline only; the "
+                                                 "earlier v3 results are read only, this run is saved separately.")
     parser.add_argument(
         "--subjects",
         nargs="*",
@@ -2071,9 +2179,14 @@ def parse_args():
         "--force-subjects",
         nargs="*",
         default=None,
-        help="Optional subjects/cases whose Baseline is rerun even if already stored (their Proposed rows are kept).",
+        help="Optional subjects/cases whose Baseline is rerun even if already stored (saved in the new folder).",
     )
-    parser.add_argument("--save-root", type=str, default=BASE_SAVE_ROOT, help="Base result directory.")
+    parser.add_argument("--save-root", type=str, default=NEW_SAVE_ROOT,
+                        help="Where this run is saved (separate from the earlier v3 results).")
+    parser.add_argument("--previous-root", type=str, default=PREVIOUS_SAVE_ROOT,
+                        help="Earlier v3 results, read only: which subjects are finished, preprocessing cache.")
+    parser.add_argument("--previous-run-tag", type=str, default=None,
+                        help="Run folder of the earlier results to read (default: the run tag of this run).")
     parser.add_argument(
         "--speed-preset",
         type=str,
@@ -2162,7 +2275,7 @@ if __name__ == "__main__":
     print(f"Datasets: {args.datasets} | Modes: {ACTIVE_MODES}")
     print(f"Subjects filter: {args.subjects}")
     print(f"Force subjects: {args.force_subjects}")
-    print(f"Save root: {args.save_root}")
+    print(f"Save root (this run): {args.save_root}")
     print(f"Speed preset: {args.speed_preset}")
     print(f"Run tag: {build_run_tag(args)}")
     print(
@@ -2175,25 +2288,11 @@ if __name__ == "__main__":
         f"max_test={args.max_test_windows_per_subject}"
     )
 
-    combined_summary_frames = []
-    combined_subject_frames = []
-    combined_window_frames = []
-
+    print(f"Earlier results (read only): {args.previous_root}")
     for dataset_key in args.datasets:
-        report_existing_runs(args.save_root, dataset_key, build_run_tag(args))
-        summary_df, per_subject_df, per_window_df = run_dataset_comparison(dataset_key, args)
-        if not summary_df.empty:
-            combined_summary_frames.append(summary_df)
-        if not per_subject_df.empty:
-            combined_subject_frames.append(per_subject_df)
-        if not per_window_df.empty:
-            combined_window_frames.append(per_window_df)
-
-    save_global_outputs(
-        save_root=args.save_root,
-        args=args,
-        summary_frames=combined_summary_frames,
-        subject_frames=combined_subject_frames,
-        window_frames=combined_window_frames,
-    )
+        CACHE_READ_DIRS.append(
+            os.path.join(args.previous_root, DATASET_CONFIGS[dataset_key]["save_name"], "Processed_Subject_Cache"))
+        previous_tag = safe_tag(args.previous_run_tag) if args.previous_run_tag else build_run_tag(args)
+        report_existing_runs(args.previous_root, dataset_key, previous_tag)
+        run_dataset_comparison(dataset_key, args)
     print("\nRespDiff CapnoBase (Baseline) finished.")
