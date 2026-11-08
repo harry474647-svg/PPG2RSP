@@ -29,19 +29,21 @@ Models (stored outputs)
                      weighted mean (triangular weights) of the z-scored windows; windows
                      v3 left out (its quality check) stay gaps. Placement per subject:
                      the RespDiff_Placement sheet.
-GT: the reference as recorded, at 30 Hz (CapnoBase capnogram, BIDMC impedance,
-STEAM2 belt), with the breaths (CapnoBase expert labels, BIDMC ann1, STEAM2 the
-GT cycles). Readers, alignment and window measures: those of
-261106_RRWaveNet_Performance_Boxplots_v2 (copied unchanged): no model is shifted
-in time; a model is inverted once per recording when its r with the GT is
-negative (the same rule for all); RRWaveNet with its training sign / lag
-undone and low-pass 1 Hz.
+GT: the reference at 30 Hz (CapnoBase capnogram, BIDMC impedance, STEAM2
+belt), band-passed 0.1-0.5 Hz (3rd-order Butterworth, zero phase: the filter
+of RespDiff v3) for the figures and for every r; the breaths (CapnoBase expert
+labels, BIDMC ann1, STEAM2 the GT cycles) and the breathing-cycle detector
+use the GT as recorded. Readers, alignment and window measures: those of
+261106_RRWaveNet_Performance_Boxplots_v2: no model is shifted in time; a model
+is inverted once per recording when its r with the band-passed GT is negative
+(the same rule for all); RRWaveNet with its training sign / lag undone and
+low-pass 1 Hz.
 
 Windows (one figure per subject and window size)
 ------------------------------------------------
 Windows of 30 s and 60 s (--sizes), one starting every 5 s (--step). In every
 window, per model: AE = |FFT rate of the waveform - GT rate from the breaths|
-(breaths/min), r = Pearson r with the GT, score = r - 0.1 x min(AE, 5);
+(breaths/min), r = Pearson r with the band-passed GT, score = r - 0.1 x min(AE, 5);
 Advantage = RRWaveNet's score - the better score of the two others.
 Per subject and size the window with the largest Advantage (among the windows
 with the most models of the subject) is drawn, for EVERY subject; the subjects
@@ -138,6 +140,8 @@ RUNS = {
 }
 RUN_DATASETS = {"261007": ("CapnoBase",), "261013": ("BIDMC", "STEAM2")}
 EXCLUDED = {"STEAM2": ("22_LMS", "26_CKK", "12_YJJ"), "BIDMC": ("27",), "CapnoBase": ("0115",)}
+GT_BAND_HZ = (0.1, 0.5)  # GT band-pass for the figures and r (RespDiff v3's bandpass_filter)
+GT_BAND_ORDER = 3
 TOP = 0  # 0: every subject drawn (in All_Subjects); N > 0: only N candidates per dataset and size (--top)
 ALL_FOLDER = "All_Subjects"
 
@@ -1367,8 +1371,10 @@ def dataset_windows(args: argparse.Namespace, dataset: str, run: str, root: Path
             breaths = rec["breaths"]
             if breaths is None or len(breaths) < MIN_BREATHS:
                 breaths = np.array([c["start"] for c in recording_cycles({"GT": gt}, modality)["GT"]])
-            values = {"GT": gt, **{model: align(gt, v) for model, v in raw.items()}}
-            cycles = recording_cycles(values, modality)
+            # the GT of the figures and of every r: band-passed 0.1-0.5 Hz; breathing cycles on the GT as recorded
+            gt_band = gt_bandpass(gt)
+            values = {"GT": gt_band, **{model: align(gt_band, v) for model, v in raw.items()}}
+            cycles = recording_cycles({**values, "GT": gt}, modality)
             clipped = np.asarray(rec["clipped"], bool)
             for c in cycles["GT"]:
                 c["clipped"] = bool(clipped[int(c["start"] * FS30):int(math.ceil(c["end"] * FS30)) + 1].any())
@@ -1390,6 +1396,11 @@ def dataset_windows(args: argparse.Namespace, dataset: str, run: str, root: Path
 
 def n_models(row: dict) -> int:
     return sum(np.isfinite(row.get(f"{SHORT[m]}_AE", math.nan)) for m in THREE)
+
+
+def gt_bandpass(gt: np.ndarray) -> np.ndarray:
+    """The GT band-passed GT_BAND_HZ (3rd-order Butterworth, zero phase; RespDiff v3's bandpass_filter)."""
+    return v3_bandpass_filter(gt, FS30, GT_BAND_HZ[0], GT_BAND_HZ[1], GT_BAND_ORDER).astype(np.float64)
 
 
 def has_three(row: dict) -> bool:
@@ -1491,13 +1502,16 @@ def draw_window(fig_root: Path, pdfs: dict, dataset: str, run: str, row: dict, v
     a, b = int(round(t0 * FS30)), int(round(t1 * FS30))
     t = t0 + np.arange(b - a) / FS30
     gt = minmax(values["GT"][a:b])
-    gt_label = f"GT ({MODALITIES[DATASET_KEYS[dataset]]}), {row['GT_RR']:.1f} breaths/min"
+    band = f"{GT_BAND_HZ[0]:g}-{GT_BAND_HZ[1]:g} Hz"
+    gt_label = f"GT ({MODALITIES[DATASET_KEYS[dataset]]}, {band}), {row['GT_RR']:.1f} breaths/min"
     name = {m: f"RRWaveNet ({run})" if m == "RRWaveNet" else FIG_NAME[m] for m in FIG_MODELS}
     who = row["Subject"] + ("" if single else f" ({row['Recording']})")
     header = f"{dataset} {who} · {size} s window {t0:.0f}-{t1:.0f} s · {place} · Advantage {row['Advantage']:.2f}"
     notes_text = ("all panels the same seconds of the recording (no model shifted in time; a model inverted when r < 0 "
-                  "over the recording); GT black\neach waveform min-max scaled in the window; RRWaveNet low-pass 1 Hz\n"
-                  f"AE = |FFT rate - GT rate| (breaths/min); r = Pearson r with the GT; subject mean over {basis}")
+                  f"over the recording); GT black, band-passed {band}\neach waveform min-max scaled in the window; "
+                  "RRWaveNet low-pass 1 Hz\n"
+                  f"AE = |FFT rate - GT rate| (breaths/min); r = Pearson r with the band-passed GT; subject mean over "
+                  f"{basis}")
     stem = f"{row['Rank']:0{digits}d}_{safe_name(row['Subject'] if single else row['Recording'])}_{t0:.0f}-{t1:.0f}s"
     folder = fig_root / dataset / f"{size}s"
     missing = "no stored output for this recording"
@@ -1537,11 +1551,13 @@ def notes(args: argparse.Namespace) -> pd.DataFrame:
                                       f"reference (|r| >= {RESPDIFF_MATCH_MIN_R}); overlaps joined by a weighted mean "
                                       "of the z-scored windows (triangular weights); windows v3 left out stay gaps "
                                       "(RespDiff_Placement)"),
-        ("GT", "the reference as recorded at 30 Hz; GT rate from the breaths in the window (CapnoBase expert labels, "
-               "BIDMC ann1, STEAM2 the GT cycles); a window needs >= 3 breaths and every waveform without a gap"),
-        ("Alignment", "no model shifted in time; a model inverted once per recording when its r with the GT is "
-                      "negative; RRWaveNet training sign / lag undone, low-pass 1 Hz"),
-        ("AE / r / score", f"AE = |FFT rate - GT rate| (breaths/min); r = Pearson r with the GT; score = r - "
+        ("GT", f"the reference at 30 Hz, band-passed {GT_BAND_HZ[0]:g}-{GT_BAND_HZ[1]:g} Hz ({GT_BAND_ORDER}rd-order "
+               "Butterworth, zero phase) for the figures and every r; GT rate from the breaths in the window (CapnoBase "
+               "expert labels, BIDMC ann1, STEAM2 the cycles of the GT as recorded); breathing cycles on the GT as "
+               "recorded; a window needs >= 3 breaths and every waveform without a gap"),
+        ("Alignment", "no model shifted in time; a model inverted once per recording when its r with the band-passed "
+                      "GT is negative; RRWaveNet training sign / lag undone, low-pass 1 Hz"),
+        ("AE / r / score", f"AE = |FFT rate - GT rate| (breaths/min); r = Pearson r with the band-passed GT; score = r - "
                            f"{AE_WEIGHT} x min(AE, {AE_CAP}); Advantage = RRWaveNet's score - the better of the others"),
         ("Windows drawn", choice),
         ("GT_Clipped_Cycles", "GT breaths in the window with saturated (flat-topped) reference samples"),
