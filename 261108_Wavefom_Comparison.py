@@ -14,7 +14,21 @@ Models (stored outputs)
   Deep Corr-Encoder  261107_DeepCorrencoder_PaperVersion_v1 (the paper's model,
                      LOSOCV): {correncoder-root}\{Dataset}\Predictions\{subject}_outputs.npz
                      (fused 30 Hz output of every recording)
-  RespDiff           261020_RespDiff_v2: respdiff\{Dataset}\Predictions\{subject}_ddpm50.npz
+  RespDiff           Baseline outputs (low-band PPG input) of 260519_RespDiff_AllDatasets_v3:
+                     CapnoBase from 261108_RespDiff_CapnoBase_Baseline_v3
+                     (RespDiff_CapnoBase_Baseline_261108, the current run) and, for the
+                     subjects not there, from RespDiff_AllDatasets_v3; BIDMC and STEAM2
+                     from RespDiff_AllDatasets_v3:
+                     {root}\{CapnoBase|BIDMC|STEAM}\{run tag}\Predictions\{subject}_predictions.npz
+                     (baseline_processed: 32 s windows, 16 s apart; Proposed is not used).
+                     The windows are put back on the recording's time axis: v3's own
+                     preprocessing of the same data files is redone (resampling, band-pass
+                     0.1-0.5 Hz, 32 s / 16 s windows) and every stored window is matched
+                     to its window of the recording through the reference v3 stored with
+                     it (|r| >= 0.98, in order); overlapping windows are joined by a
+                     weighted mean (triangular weights) of the z-scored windows; windows
+                     v3 left out (its quality check) stay gaps. Placement per subject:
+                     the RespDiff_Placement sheet.
 GT: the reference as recorded, at 30 Hz (CapnoBase capnogram, BIDMC impedance,
 STEAM2 belt), with the breaths (CapnoBase expert labels, BIDMC ann1, STEAM2 the
 GT cycles). Readers, alignment and window measures: those of
@@ -67,7 +81,8 @@ Run:
   python 261108_Wavefom_Comparison.py            (every subject)
   python 261108_Wavefom_Comparison.py --top 4    (4 candidates per dataset and size)
 Options: --top, --sizes, --step, --datasets, --subjects, --root-261007,
-  --root-261013, --correncoder-root, --respdiff-root, --respdiff-sampling,
+  --root-261013, --correncoder-root, --respdiff-root, --respdiff-capnobase-root,
+  --respdiff-run-tag,
   --scripts-dir (CapnoBase breath labels: 261007_RRWaveNet_Ensemble_NoEvent.py),
   --capnobase-path, --bidmc-path, --steam2-ppg-dir, --steam2-rsp-dir,
   --exclude-steam2, --exclude-bidmc, --exclude-capnobase, --rrwavenet-lowpass-hz,
@@ -94,7 +109,7 @@ import pandas as pd
 import scipy.io as sio
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.lines import Line2D
-from scipy.signal import butter, detrend, resample_poly, sosfiltfilt
+from scipy.signal import butter, detrend, resample, resample_poly, savgol_filter, sosfiltfilt
 
 # ---------------------------------------------------------------------------
 # Folders and settings
@@ -201,11 +216,21 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 # 261007 script (or of the 261105 script, which keeps it unchanged)
 CAPNOBASE_READERS = (("261007", "261007_RRWaveNet_Ensemble_NoEvent.py"),
                      ("261105", "261105_RRWaveNet_Unified_Optimized.py"))
-RESPDIFF_ROOT = WORKSPACE / "261020_RespDiff_v2"
+# RespDiff: the Baseline outputs of 260519_RespDiff_AllDatasets_v3 (all datasets) and of
+# 261108_RespDiff_CapnoBase_Baseline_v3 (CapnoBase, the current run; used first)
+RESPDIFF_ROOT = Path(r"D:\STEAM\Multimodal_prediction\PPG-RSP\Results\Waveform\Hilbert_OpenDataset"
+                     r"\RespDiff_AllDatasets_v3")
+RESPDIFF_CAPNOBASE_ROOT = Path(r"D:\STEAM\Multimodal_prediction\PPG-RSP\Results\Waveform\Hilbert_OpenDataset"
+                               r"\RespDiff_CapnoBase_Baseline_261108")
+RESPDIFF_RUN_TAG = "preset_balanced_e90_ss80_ve2_tr2_va2_te1_mtr240_mva160"
 CORRENCODER_ROOT = WORKSPACE / "261107_DeepCorrencoder_PaperVersion_v1"  # the paper version (LOSOCV)
-RESPDIFF_SAMPLING = "ddpm50"
+RESPDIFF_MODE = "baseline"  # only the Baseline outputs of RespDiff v3 are used
+RESPDIFF_FOLDERS = {"CapnoBase": "CapnoBase", "BIDMC": "BIDMC", "STEAM2": "STEAM"}  # v3's dataset folders
+RESPDIFF_FS = {"capnobase": 125, "bidmc": 125, "steam2": 200}  # v3's target_fs
+RESPDIFF_WINDOW_SEC, RESPDIFF_STRIDE_SEC = 32.0, 16.0  # v3's WINDOW_SEC / STRIDE_SEC
+RESPDIFF_MATCH_MIN_R = 0.98  # a stored window is placed when its reference matches a recording window this well
 RRWAVENET_LOWPASS_HZ = 1.0
-FS30 = 30  # time axis of the overlays: the 30 Hz of RespDiff, the corr-encoder and the GT
+FS30 = 30  # time axis of the overlays: the 30 Hz of the corr-encoder and the GT
 MODELS = ("RespDiff", "Deep corr-encoder", "RRWaveNet")
 OTHERS = MODELS[:2]
 SHORT = {"RespDiff": "RespDiff", "Deep corr-encoder": "CorrEncoder", "RRWaveNet": "RRWaveNet"}
@@ -541,18 +566,285 @@ def load_correncoder(root: Path, label: str) -> Dict[str, List[dict]]:
     return subjects
 
 
-def load_respdiff(root: Path, label: str, sampling: str) -> Dict[str, Dict[str, np.ndarray]]:
-    folder = root / "respdiff" / label
-    subjects = {}
-    for path in sorted((folder / "Predictions").glob(f"*_{sampling}.npz")):
-        subject = path.name[: -len(f"_{sampling}.npz")]
-        if not (folder / "Fold_Results" / f"{subject}_{sampling}.json").exists():
+# --- RespDiff v3 (Baseline): v3's preprocessing, copied unchanged (sanitize_signal, bandpass_filter,
+# valid_odd_window, smooth_signal, maybe_resample, resample_signal_poly, instance_normalize,
+# postprocess_true_window, _extract_signal_and_fs), to find where every stored window lies in the recording
+
+def v3_sanitize_signal(sig):
+    sig = np.asarray(sig, dtype=np.float64).squeeze()
+    if sig.ndim != 1:
+        sig = sig.reshape(-1)
+    if sig.size == 0:
+        return sig.astype(np.float64)
+    finite_mask = np.isfinite(sig)
+    if not finite_mask.any():
+        return np.zeros_like(sig, dtype=np.float64)
+    fill_value = float(np.median(sig[finite_mask]))
+    sig = sig.copy()
+    sig[~finite_mask] = fill_value
+    return sig.astype(np.float64)
+
+
+def v3_bandpass_filter(sig, fs, low=0.1, high=0.5, order=3):
+    sig = v3_sanitize_signal(sig)
+    if sig.size < max(32, order * 6 + 1):
+        return sig.astype(np.float32)
+    nyq = 0.5 * float(fs)
+    low = max(float(low), 1e-5)
+    high = min(float(high), nyq * 0.99)
+    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
+        return sig.astype(np.float32)
+    try:
+        sos = butter(order, [low / nyq, high / nyq], btype="band", output="sos")
+        return sosfiltfilt(sos, sig).astype(np.float32)
+    except Exception:
+        return sig.astype(np.float32)
+
+
+def v3_valid_odd_window(length, desired):
+    if length < 5:
+        return None
+    win = int(max(5, desired))
+    if win % 2 == 0:
+        win += 1
+    max_win = length if length % 2 == 1 else length - 1
+    win = min(win, max_win)
+    if win < 5:
+        return None
+    return win
+
+
+def v3_smooth_signal(sig, fs, smooth_sec=0.20, polyorder=3):
+    sig = v3_sanitize_signal(sig).astype(np.float32)
+    if sig.size < 5:
+        return sig
+    desired = int(round(float(smooth_sec) * float(fs)))
+    win = v3_valid_odd_window(sig.size, desired)
+    if win is None:
+        return sig
+    use_poly = min(int(polyorder), win - 1)
+    if use_poly < 1:
+        return sig
+    try:
+        return savgol_filter(sig, window_length=win, polyorder=use_poly, mode="interp").astype(np.float32)
+    except Exception:
+        return sig
+
+
+def v3_maybe_resample(sig, orig_fs, target_fs):
+    sig = v3_sanitize_signal(sig).astype(np.float32)
+    if int(round(orig_fs)) == int(round(target_fs)):
+        return sig
+    target_len = int(round(len(sig) * float(target_fs) / float(orig_fs)))
+    target_len = max(target_len, 1)
+    return resample(sig, target_len).astype(np.float32)
+
+
+def v3_resample_signal_poly(sig, src_fs, dst_fs):
+    sig = v3_sanitize_signal(sig)
+    src_fs = int(round(float(src_fs)))
+    dst_fs = int(round(float(dst_fs)))
+    if src_fs <= 0 or dst_fs <= 0:
+        raise ValueError(f"Invalid sampling rate: src={src_fs}, dst={dst_fs}")
+    if sig.size == 0 or src_fs == dst_fs:
+        return sig.astype(np.float32)
+    factor = math.gcd(src_fs, dst_fs)
+    return resample_poly(sig, dst_fs // factor, src_fs // factor).astype(np.float32)
+
+
+def v3_instance_normalize(x):
+    x = np.asarray(x, dtype=np.float32)
+    std = float(np.std(x))
+    return ((x - np.mean(x)) / (std if std >= 1e-6 else 1.0)).astype(np.float32)
+
+
+def v3_postprocess_true_window(sig, fs):
+    sig = v3_bandpass_filter(sig, fs, 0.10, 0.50)
+    sig = v3_smooth_signal(sig, fs, smooth_sec=0.10, polyorder=3)
+    return sig.astype(np.float32)
+
+
+def v3_signal_and_fs(path: Path) -> Tuple[np.ndarray, float]:
+    """v3's STEAM reader: the first variable of the MAT file, its data and srate."""
+    payload = _first_mat_payload(sio.loadmat(path))
+    signal = v3_sanitize_signal(_unwrap_mat(payload["data"]))
+    srate = float(np.asarray(_unwrap_mat(payload["srate"])).squeeze())
+    if not np.isfinite(srate) or srate <= 0:
+        raise ValueError(f"Invalid srate: {srate}")
+    return signal, srate
+
+
+_BIDMC_MAT: Dict[str, dict] = {}
+RESPDIFF_PLACEMENT: List[dict] = []  # per subject: how its stored windows were placed (sheet RespDiff_Placement)
+
+
+def v3_sources(dataset_key: str, subject: str) -> List[Tuple[str, np.ndarray, np.ndarray]]:
+    """v3's (source name, PPG, target) of a subject at v3's rate, in v3's order: CapnoBase CSV (resampled to
+    125 Hz), BIDMC (125 Hz), STEAM: every PPG / RSP file pair of the subject folder (common stems, sorted;
+    resampled to 200 Hz)."""
+    cfg = DATASET_CONFIGS[dataset_key]
+    fs = RESPDIFF_FS[dataset_key]
+    if dataset_key == "capnobase":
+        csv_dir = Path(cfg["data_path"])
+        signal = pd.read_csv(csv_dir / f"{subject}_8min_signal.csv")
+        param = pd.read_csv(csv_dir / f"{subject}_8min_param.csv")
+        orig_fs = int(param["samplingrate_pleth"].values[0])
+        return [(subject, v3_maybe_resample(signal["pleth_y"].values.astype(np.float32), orig_fs, fs),
+                 v3_maybe_resample(signal["co2_y"].values.astype(np.float32), orig_fs, fs))]
+    if dataset_key == "bidmc":
+        path = str(cfg["data_path"])
+        if path not in _BIDMC_MAT:
+            _BIDMC_MAT[path] = sio.loadmat(path)
+        record = _BIDMC_MAT[path]["data"][0][int(subject) - 1]
+        ppg = np.array(record["ppg"][0, 0]["v"]).squeeze()
+        imp = np.array(record["ref"][0, 0]["resp_sig"][0, 0]["imp"][0, 0]["v"]).squeeze()
+        return [(subject, ppg, imp)]
+    ppg_dir, rsp_dir = Path(cfg["ppg_dir"]) / subject, Path(cfg["rsp_dir"]) / subject
+    common = sorted({p.stem for p in ppg_dir.glob("*.mat")} & {p.stem for p in rsp_dir.glob("*.mat")})
+    out = []
+    for stem in common:
+        ppg, ppg_fs = v3_signal_and_fs(ppg_dir / f"{stem}.mat")
+        rsp, rsp_fs = v3_signal_and_fs(rsp_dir / f"{stem}.mat")
+        out.append((stem, v3_resample_signal_poly(ppg, ppg_fs, fs), v3_resample_signal_poly(rsp, rsp_fs, fs)))
+    return out
+
+
+def v3_candidate_windows(dataset_key: str, subject: str, fs: int) -> Tuple[List[dict], Dict[str, int]]:
+    """Every 32 s window (16 s apart) of v3's target of the subject, before v3's quality check: source,
+    start (s) and the reference as v3 stored it for a test window (instance-normalized, post-processed)."""
+    candidates, lengths = [], {}
+    win, stride = int(round(RESPDIFF_WINDOW_SEC * fs)), int(round(RESPDIFF_STRIDE_SEC * fs))
+    for name, ppg, target in v3_sources(dataset_key, subject):
+        ppg = v3_sanitize_signal(ppg).astype(np.float32)
+        target = v3_sanitize_signal(target).astype(np.float32)
+        m = min(len(ppg), len(target))
+        if m < win:
             continue
+        target_f = v3_bandpass_filter(target[:m], fs, 0.1, 0.5)
+        lengths[name] = m
+        for start in range(0, m - win + 1, stride):
+            reference = v3_postprocess_true_window(v3_instance_normalize(target_f[start:start + win]), fs)
+            candidates.append({"source": name, "start": start, "reference": reference})
+    return candidates, lengths
+
+
+def place_windows(stored_references: np.ndarray, candidates: List[dict]) -> List[Tuple[Optional[int], float]]:
+    """Every stored window: the recording window whose reference it is (|r| >= RESPDIFF_MATCH_MIN_R, in
+    order; None when none matches)."""
+    placed, first = [], 0
+    for reference in stored_references:
+        best_k, best_r = None, 0.0
+        for k in range(first, len(candidates)):
+            if len(candidates[k]["reference"]) != len(reference):
+                continue
+            r = abs(pearson(reference, candidates[k]["reference"]))
+            if np.isfinite(r) and r > best_r:
+                best_k, best_r = k, r
+                if r > 0.9999:
+                    break
+        if best_k is not None and best_r >= RESPDIFF_MATCH_MIN_R:
+            placed.append((best_k, best_r))
+            first = best_k + 1
+        else:
+            placed.append((None, best_r))
+    return placed
+
+
+def respdiff_run_dir(base: Path, run_tag: str) -> Optional[Path]:
+    """{base}\\{run tag} when it has Predictions, else the run folder with the most prediction files."""
+    if (base / run_tag / "Predictions").is_dir():
+        return base / run_tag
+    runs = sorted(p for p in base.glob("*") if (p / "Predictions").is_dir()) if base.is_dir() else []
+    if not runs:
+        return None
+    best = max(runs, key=lambda p: len(list((p / "Predictions").glob("*_predictions.npz"))))
+    print(f"  RespDiff: {base / run_tag} not found; using {best}")
+    return best
+
+
+def respdiff_files(args: argparse.Namespace, dataset: str) -> Dict[str, Path]:
+    """Subject -> RespDiff v3 prediction file with Baseline outputs: RespDiff_AllDatasets_v3, then (CapnoBase)
+    the 261108 run, which wins for a subject in both."""
+    roots = [Path(args.respdiff_root)]
+    if dataset == "CapnoBase":
+        roots.append(Path(args.respdiff_capnobase_root))
+    files = {}
+    for root in roots:
+        run_dir = respdiff_run_dir(root / RESPDIFF_FOLDERS[dataset], args.respdiff_run_tag)
+        if run_dir is None:
+            continue
+        for path in sorted((run_dir / "Predictions").glob("*_predictions.npz")):
+            files[path.name[: -len("_predictions.npz")]] = path
+    return files
+
+
+def respdiff_tracks(dataset: str, subject: str, path: Path) -> Dict[str, Track]:
+    """Recording name (as read_recordings names it) -> RespDiff v3 Baseline track on its time axis."""
+    key = DATASET_KEYS[dataset]
+    info = {"Dataset": dataset, "Subject": subject, "File": str(path)}
+    try:
         with np.load(path, allow_pickle=False) as data:
-            names = [str(name) for name in data["recording_names"]]
-            subjects[subject] = {name: data[f"recording{i}_prediction"].astype(np.float64)
-                                 for i, name in enumerate(names) if f"recording{i}_prediction" in data.files}
-    return subjects
+            if f"{RESPDIFF_MODE}_processed" not in data.files or "true" not in data.files:
+                raise KeyError(f"{RESPDIFF_MODE}_processed / true not in the file")
+            fs = int(data["fs"]) if "fs" in data.files else RESPDIFF_FS[key]
+            outputs = data[f"{RESPDIFF_MODE}_processed"].astype(np.float64)
+            stored = data["true"].astype(np.float64)
+        candidates, lengths = v3_candidate_windows(key, subject, fs)
+    except Exception as exc:
+        RESPDIFF_PLACEMENT.append({**info, "Note": f"not used: {type(exc).__name__}: {exc}"})
+        print(f"  RespDiff {dataset} {subject}: not used ({exc})")
+        return {}
+    placed = place_windows(stored, candidates)
+    rs = np.array([r for k, r in placed if k is not None])
+    n_win = outputs.shape[1] if outputs.ndim == 2 else 0
+    weight = 0.05 + 0.95 * (1.0 - np.abs(np.linspace(-1.0, 1.0, n_win)))
+    sums = {name: np.zeros(n) for name, n in lengths.items()}
+    weights = {name: np.zeros(n) for name, n in lengths.items()}
+    for (k, _), output in zip(placed, outputs):
+        if k is None:
+            continue
+        c = candidates[k]
+        z = (output - np.mean(output)) / (np.std(output) + 1e-8)
+        end = min(c["start"] + len(z), lengths[c["source"]])
+        sums[c["source"]][c["start"]:end] += (weight * z)[: end - c["start"]]
+        weights[c["source"]][c["start"]:end] += weight[: end - c["start"]]
+    sessions = {}
+    for name in lengths:
+        if weights[name].any():
+            with np.errstate(invalid="ignore", divide="ignore"):
+                sessions[name] = np.where(weights[name] > 0, sums[name] / weights[name], np.nan)
+    tracks = {}
+    if key == "steam2":
+        # read_recordings cuts every STEAM2 session at its EEGLAB boundary events: {session}_piece{k}
+        cfg = DATASET_CONFIGS[key]
+        for name, values in sessions.items():
+            try:
+                ppg = read_eeglab_channel(Path(cfg["ppg_dir"]) / subject / f"{name}.mat", "PPG", cfg["default_fs"])
+                rsp = read_eeglab_channel(Path(cfg["rsp_dir"]) / subject / f"{name}.mat", "RSP", cfg["default_fs"])
+            except Exception as exc:
+                print(f"  RespDiff {dataset} {subject} {name}: pieces not read ({exc})")
+                continue
+            ppg_sec, rsp_sec = ppg["signal"].size / ppg["fs"], rsp["signal"].size / rsp["fs"]
+            cuts = sorted({b / ppg["fs"] for b in ppg["boundaries"]} | {b / rsp["fs"] for b in rsp["boundaries"]})
+            edges = [0.0] + [c for c in cuts if 0.0 < c < min(ppg_sec, rsp_sec)] + [min(ppg_sec, rsp_sec)]
+            piece = 0
+            for start, end in zip(edges[:-1], edges[1:]):
+                n_ppg = int(round(end * ppg["fs"])) - int(round(start * ppg["fs"]))
+                n_rsp = int(round(end * rsp["fs"])) - int(round(start * rsp["fs"]))
+                if n_ppg > 0 and n_rsp > 0:
+                    piece += 1
+                    tracks[f"{name}_piece{piece}"] = Track(values, fs, -start)
+    else:
+        tracks = {name: Track(values, fs) for name, values in sessions.items()}
+    RESPDIFF_PLACEMENT.append({
+        **info, "FS": fs, "Stored_Windows": len(placed), "Placed_Windows": int(len(rs)),
+        "Recording_Windows": len(candidates), "Min_Match_r": float(rs.min()) if rs.size else math.nan,
+        "Median_Match_r": float(np.median(rs)) if rs.size else math.nan,
+        "Sources": ", ".join(sessions), "Recordings": ", ".join(tracks),
+        "Note": "" if len(rs) == len(placed) else f"{len(placed) - len(rs)} stored windows not placed (left out)"})
+    if len(rs) < len(placed):
+        print(f"  RespDiff {dataset} {subject}: {len(placed) - len(rs)} of {len(placed)} windows not placed")
+    return tracks
 
 
 def rrwavenet_alignment_table(root: Path, label: str) -> Dict[Tuple[str, int], dict]:
@@ -1033,7 +1325,7 @@ def dataset_windows(args: argparse.Namespace, dataset: str, run: str, root: Path
     band = RATE_BAND_BPM[key]
     modality = MODALITIES[key]
     corr = load_correncoder(Path(args.correncoder_root), dataset)
-    respdiff = load_respdiff(Path(args.respdiff_root), dataset, args.respdiff_sampling)
+    respdiff = respdiff_files(args, dataset)
     files = {f["Tag"]: f["Outputs_File"] for f in fold_files(root, dataset, RUNS[run]["selected"])
              if f["Outputs_File"].exists()}
     subjects = sorted(set(files) & (set(corr) | set(respdiff)))
@@ -1054,6 +1346,7 @@ def dataset_windows(args: argparse.Namespace, dataset: str, run: str, root: Path
             print(f"  {dataset} {subject}: no data file read (skipped)")
             continue
         segments = load_rrwavenet(files[subject])
+        respdiff_by_name = respdiff_tracks(dataset, subject, respdiff[subject]) if subject in respdiff else {}
         corr_by_name = {r["name"]: r for r in corr.get(subject, [])}
         n_recordings[subject] = len(recordings[subject])
         count = 0
@@ -1062,8 +1355,8 @@ def dataset_windows(args: argparse.Namespace, dataset: str, run: str, root: Path
             times = np.arange(len(gt)) / FS30
             index = corr_by_name[name]["index"] if name in corr_by_name else k
             raw = {}
-            if name in respdiff.get(subject, {}):
-                raw["RespDiff"] = Track(respdiff[subject][name], FS30).at(times)
+            if name in respdiff_by_name:
+                raw["RespDiff"] = respdiff_by_name[name].at(times)
             if name in corr_by_name:
                 raw["Deep corr-encoder"] = Track(corr_by_name[name]["output"], FS30).at(times)
             if index in segments:
@@ -1236,8 +1529,14 @@ def notes(args: argparse.Namespace) -> pd.DataFrame:
                   f"Meets_Candidate_Rule = all three models, RRWaveNet AE <= {RATE_OK_BPM} and Advantage > 0")
     return pd.DataFrame([
         ("Models", f"RRWaveNet: CapnoBase 261007, BIDMC / STEAM2 261013 (stored ensemble output); Deep Corr-Encoder: "
-                   f"{args.correncoder_root} (261107 paper version); RespDiff: {args.respdiff_root} "
-                   f"({args.respdiff_sampling})"),
+                   f"{args.correncoder_root} (261107 paper version); RespDiff: Baseline outputs of "
+                   f"260519_RespDiff_AllDatasets_v3 ({args.respdiff_root}; CapnoBase first from "
+                   f"{args.respdiff_capnobase_root}), run {args.respdiff_run_tag}"),
+        ("RespDiff on the time axis", "v3's 32 s windows (16 s apart) placed where v3 cut them: v3's preprocessing "
+                                      "of the same data redone and every stored window matched through its stored "
+                                      f"reference (|r| >= {RESPDIFF_MATCH_MIN_R}); overlaps joined by a weighted mean "
+                                      "of the z-scored windows (triangular weights); windows v3 left out stay gaps "
+                                      "(RespDiff_Placement)"),
         ("GT", "the reference as recorded at 30 Hz; GT rate from the breaths in the window (CapnoBase expert labels, "
                "BIDMC ann1, STEAM2 the GT cycles); a window needs >= 3 breaths and every waveform without a gap"),
         ("Alignment", "no model shifted in time; a model inverted once per recording when its r with the GT is "
@@ -1268,8 +1567,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--step", type=float, default=STEP_SEC, help="a window starts every this many s")
     parser.add_argument("--subjects", nargs="+", default=None, help="only these subjects")
     parser.add_argument("--correncoder-root", type=Path, default=CORRENCODER_ROOT)
-    parser.add_argument("--respdiff-root", type=Path, default=RESPDIFF_ROOT)
-    parser.add_argument("--respdiff-sampling", default=RESPDIFF_SAMPLING)
+    parser.add_argument("--respdiff-root", type=Path, default=RESPDIFF_ROOT,
+                        help="results of 260519_RespDiff_AllDatasets_v3 (Baseline outputs used)")
+    parser.add_argument("--respdiff-capnobase-root", type=Path, default=RESPDIFF_CAPNOBASE_ROOT,
+                        help="results of 261108_RespDiff_CapnoBase_Baseline_v3 (CapnoBase, used first)")
+    parser.add_argument("--respdiff-run-tag", default=RESPDIFF_RUN_TAG, help="run folder of the RespDiff results")
     parser.add_argument("--rrwavenet-lowpass-hz", type=float, default=RRWAVENET_LOWPASS_HZ)
     parser.add_argument("--scripts-dir", type=Path, default=None,
                         help="folder of 261007_RRWaveNet_Ensemble_NoEvent.py (CapnoBase breath labels)")
@@ -1308,7 +1610,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     fig_root = out_root / ALL_FOLDER if every else out_root
     fig_root.mkdir(parents=True, exist_ok=True)
     print(f"Output: {fig_root} ({'every subject' if every else f'{args.top} candidates per dataset and size'})\n"
-          f"Deep Corr-Encoder: {args.correncoder_root}\nRespDiff: {args.respdiff_root}")
+          f"Deep Corr-Encoder: {args.correncoder_root}\nRespDiff (Baseline): {args.respdiff_root}; CapnoBase "
+          f"first {args.respdiff_capnobase_root} ({args.respdiff_run_tag})")
     set_data_paths(args)
     datasets = list(args.datasets)
     if "CapnoBase" in datasets and not load_capnobase_reader(args):
@@ -1359,7 +1662,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     else:
         sheets = {"Candidates": ordered(drawn), "Best_Windows": ordered(best_all)}
         path = out_root / "261108_Waveform_Candidates.xlsx"
-    sheets.update({"Subject_Summary": pd.DataFrame(subject_rows), "Notes": notes(args)})
+    sheets.update({"Subject_Summary": pd.DataFrame(subject_rows), "RespDiff_Placement": pd.DataFrame(RESPDIFF_PLACEMENT),
+                   "Notes": notes(args)})
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         for name, frame in sheets.items():
             (frame.round(4) if name != "Notes" else frame).to_excel(writer, sheet_name=name, index=False)
