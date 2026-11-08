@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 r"""261108_Wavefom_Comparison: the respiratory waveforms of RRWaveNet, the
 deep corr-encoder (paper version) and RespDiff against the ground truth (GT),
-for the windows that show RRWaveNet's advantage: 4 subjects per dataset and
-window size, chosen from every subject's windows, with the subjects that had
-an MAE issue left out. Nothing is trained: the stored outputs are read.
+for every subject of every dataset (the subjects that had an MAE issue left
+out): no subject is chosen, every one is drawn. (--top 4 draws only 4
+candidates per dataset and window size instead, as the first version.)
+Nothing is trained: the stored outputs are read.
 
 Models (stored outputs)
 -----------------------
@@ -22,20 +23,25 @@ in time; a model is inverted once per recording when its r with the GT is
 negative (the same rule for all); RRWaveNet with its training sign / lag
 undone and low-pass 1 Hz.
 
-Windows and the choice of the subjects
---------------------------------------
+Windows (one figure per subject and window size)
+------------------------------------------------
 Windows of 30 s and 60 s (--sizes), one starting every 5 s (--step). In every
 window, per model: AE = |FFT rate of the waveform - GT rate from the breaths|
 (breaths/min), r = Pearson r with the GT, score = r - 0.1 x min(AE, 5);
 Advantage = RRWaveNet's score - the better score of the two others.
-Per subject and size the window with the largest Advantage; the subjects with
-all three models are ranked by that Advantage and the first 4 (--top) whose
-window has RRWaveNet AE <= 1 breath/min and Advantage > 0 are drawn (when fewer
-qualify, the next ones by Advantage fill up, marked in the table).
+Per subject and size the window with the largest Advantage (among the windows
+with the most models of the subject) is drawn, for EVERY subject; the subjects
+are numbered by that Advantage (Rank 1 = largest). A subject without a stored
+output of a model (e.g. no RespDiff file) is drawn too: that model's panel
+says so. The table marks the windows that would have been candidates
+(Meets_Candidate_Rule: all three models, RRWaveNet AE <= 1 breath/min and
+Advantage > 0) and what the other models do there (Why).
+--top N (N > 0): only the first N subjects with all three models that meet the
+rule are drawn (filled up by Advantage when fewer qualify), as the first version.
 Subjects left out (MAE issue): STEAM2 22_LMS, 26_CKK, 12_YJJ; BIDMC 27;
 CapnoBase 0115 (--exclude-*).
 
-Figures (every chosen window, all panels the same seconds of the recording,
+Figures (every drawn window, all panels the same seconds of the recording,
 every waveform min-max scaled in the window)
   overlap   (a) GT vs RRWaveNet, (b) GT vs Deep Corr-Encoder, (c) GT vs RespDiff:
             each model drawn over the GT
@@ -44,16 +50,22 @@ GT black solid; RRWaveNet coral, Deep Corr-Encoder blue, RespDiff teal (solid).
 Beside every model panel: its AE and r in the window and its subject means.
 
 Outputs (default D:\PPG2RSP_RRWaveNet_Inspired\261108_Wavefom_Comparison)
-  {Dataset}\{30s,60s}\{rank}_{subject}_{t0}-{t1}s_overlap.png / _separate.png
-     (STEAM2, several recordings per subject: {rank}_{recording}_{t0}-{t1}s_...)
-  {Dataset}\{30s,60s}\{Dataset}_{size}s_overlap.pdf / _separate.pdf (every page)
-  261108_Waveform_Candidates.xlsx
-     Candidates       the drawn windows (rank, AE, r, rate of every model, Advantage)
-     Best_Windows     every subject's best window per size (the ranking)
+  every subject (default):
+  All_Subjects\{Dataset}\{30s,60s}\{rank}_{subject}_{t0}-{t1}s_overlap.png / _separate.png
+     (STEAM2, several recordings per subject: {rank}_{recording}_{t0}-{t1}s_...;
+     rank zero-padded so the folder lists them by Advantage)
+  All_Subjects\{Dataset}\{30s,60s}\{Dataset}_{size}s_overlap.pdf / _separate.pdf
+     (every subject, one page each, by Advantage)
+  261108_Waveform_All_Subjects.xlsx
+     All_Subjects     every drawn window (rank, AE, r, rate of every model,
+                      Advantage, GT clipped cycles, Meets_Candidate_Rule, Why, figure files)
      Subject_Summary  every subject's mean MAE / PCC per model and size
      Notes
+  --top N: {Dataset}\{30s,60s}\... and 261108_Waveform_Candidates.xlsx (Candidates,
+     Best_Windows, Subject_Summary, Notes) directly in the output folder, as before
 Run:
-  python 261108_Wavefom_Comparison.py
+  python 261108_Wavefom_Comparison.py            (every subject)
+  python 261108_Wavefom_Comparison.py --top 4    (4 candidates per dataset and size)
 Options: --top, --sizes, --step, --datasets, --subjects, --root-261007,
   --root-261013, --correncoder-root, --respdiff-root, --respdiff-sampling,
   --scripts-dir (CapnoBase breath labels: 261007_RRWaveNet_Ensemble_NoEvent.py),
@@ -111,7 +123,8 @@ RUNS = {
 }
 RUN_DATASETS = {"261007": ("CapnoBase",), "261013": ("BIDMC", "STEAM2")}
 EXCLUDED = {"STEAM2": ("22_LMS", "26_CKK", "12_YJJ"), "BIDMC": ("27",), "CapnoBase": ("0115",)}
-TOP = 4
+TOP = 0  # 0: every subject drawn (in All_Subjects); N > 0: only N candidates per dataset and size (--top)
+ALL_FOLDER = "All_Subjects"
 
 # Figures: the GT black; the models in the colours of the user's legend (RRWaveNet coral, Deep Corr-Encoder blue,
 # RespDiff teal), all solid lines
@@ -996,12 +1009,8 @@ def subject_means(rows: List[dict], size: int) -> Tuple[dict, str]:
     return out, basis
 
 
-# Panels of a waveform page, top to bottom: the run's RRWaveNet, RespDiff, the
-# deep corr-encoder.
-
-
 # ===========================================================================
-# Windows of every subject, the chosen subjects and the figures (261108)
+# Windows of every subject, the drawn windows and the figures (261108)
 # ===========================================================================
 
 ID_DIGITS = {"CapnoBase": 4, "BIDMC": 2}
@@ -1086,32 +1095,42 @@ def dataset_windows(args: argparse.Namespace, dataset: str, run: str, root: Path
     return rows, store, n_recordings
 
 
+def n_models(row: dict) -> int:
+    return sum(np.isfinite(row.get(f"{SHORT[m]}_AE", math.nan)) for m in THREE)
+
+
 def has_three(row: dict) -> bool:
-    return all(np.isfinite(row.get(f"{SHORT[m]}_AE", math.nan)) for m in THREE)
+    return n_models(row) == len(THREE)
 
 
-def choose(rows: List[dict], size: int, top: int) -> Tuple[List[dict], List[dict]]:
-    """Every subject's best window of a size (largest Advantage, all three models present), ranked; the first `top`
-    with RRWaveNet AE <= RATE_OK_BPM and Advantage > 0 (filled up by Advantage when fewer qualify)."""
+def best_windows(rows: List[dict], size: int) -> List[dict]:
+    """Every subject's window of a size with the largest Advantage (among the windows with the most models of the
+    subject), ranked by that Advantage."""
     best = {}
     for r in rows:
-        if r["Size_Sec"] != size or not has_three(r) or not np.isfinite(r.get("Advantage", math.nan)):
+        if r["Size_Sec"] != size or not np.isfinite(r.get("Advantage", math.nan)):
             continue
-        if r["Subject"] not in best or (r["Advantage"], r["RRWaveNet_PCC"]) > (best[r["Subject"]]["Advantage"],
-                                                                                best[r["Subject"]]["RRWaveNet_PCC"]):
+        key = (n_models(r), r["Advantage"], r["RRWaveNet_PCC"])
+        old = best.get(r["Subject"])
+        if old is None or key > (n_models(old), old["Advantage"], old["RRWaveNet_PCC"]):
             best[r["Subject"]] = r
     ranked = sorted(best.values(), key=lambda r: r["Advantage"], reverse=True)
-    qualified = [r for r in ranked if r["RRWaveNet_AE"] <= RATE_OK_BPM and r["Advantage"] > 0]
-    chosen = [dict(r, Filled=False) for r in qualified[:top]]
-    for r in ranked:
+    return [dict(r, Order=i + 1, Meets_Candidate_Rule=bool(has_three(r) and r["RRWaveNet_AE"] <= RATE_OK_BPM
+                                                            and r["Advantage"] > 0), Why=why_text(r))
+            for i, r in enumerate(ranked)]
+
+
+def choose(ranked: List[dict], top: int) -> List[dict]:
+    """The first `top` subjects (all three models) with RRWaveNet AE <= RATE_OK_BPM and Advantage > 0; filled up by
+    Advantage when fewer qualify."""
+    three = [r for r in ranked if has_three(r)]
+    chosen = [dict(r, Filled=False) for r in three if r["Meets_Candidate_Rule"]][:top]
+    for r in three:
         if len(chosen) >= top:
             break
         if all(r["Subject"] != c["Subject"] for c in chosen):
             chosen.append(dict(r, Filled=True))
-    for rank, r in enumerate(chosen, start=1):
-        r["Rank"] = rank
-    best_rows = [dict(r, Qualifies=r in qualified, Order=i + 1) for i, r in enumerate(ranked)]
-    return best_rows, chosen
+    return [dict(r, Rank=k) for k, r in enumerate(chosen, start=1)]
 
 
 def page(path: Path, pdf, header: str, notes_text: str, t: np.ndarray, panels: List[dict]) -> None:
@@ -1132,6 +1151,8 @@ def page(path: Path, pdf, header: str, notes_text: str, t: np.ndarray, panels: L
             ax.plot(t, values, color=color, lw=lw, solid_capstyle="round")
             handles.append(Line2D([], [], color=color, lw=lw))
             labels.append(label)
+        if p.get("empty"):
+            ax.text(0.5, 0.5, p["empty"], transform=ax.transAxes, ha="center", va="center", fontsize=9, color=MUTED)
         ax.set_xlim(t[0], t[-1])
         ax.set_ylim(-1.18, 1.18)
         ax.set_ylabel("Min-max scaled", fontsize=8)
@@ -1144,10 +1165,11 @@ def page(path: Path, pdf, header: str, notes_text: str, t: np.ndarray, panels: L
             ax.tick_params(labelbottom=False)
         x = (width - side_in + 0.12) / width
         top = (bottom + panel_in) / height
-        fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(x, top), frameon=False, fontsize=7.6,
-                   borderaxespad=0.0)
+        if handles:
+            fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(x, top), frameon=False, fontsize=7.6,
+                       borderaxespad=0.0)
         if p.get("text"):
-            fig.text(x + 0.004, top - (0.24 + 0.2 * len(labels)) / height, p["text"], family="monospace",
+            fig.text(x + 0.004, top - (0.24 + 0.2 * max(len(labels), 1)) / height, p["text"], family="monospace",
                      fontsize=7.2, color=INK, va="top")
     axes[-1].set_xlabel("Time in the recording (s)")
     fig.text(left_in / width, 1.0 - 0.22 / height, header, fontsize=10.5, color=INK, va="top")
@@ -1160,15 +1182,16 @@ def page(path: Path, pdf, header: str, notes_text: str, t: np.ndarray, panels: L
 
 def model_text(model: str, row: dict, means: dict, size: int) -> str:
     s = SHORT[model]
-    lines = [f"This window  AE {row[f'{s}_AE']:5.2f}  r {row[f'{s}_PCC']:5.2f}"]
+    lines = [f"This window  AE {row.get(f'{s}_AE', math.nan):5.2f}  r {row.get(f'{s}_PCC', math.nan):5.2f}"]
     if f"{s}_MAE" in means:
         lines.append(f"Subject mean ({means['N_Windows']} x {size} s)")
         lines.append(f"             MAE {means[f'{s}_MAE']:4.2f}  PCC {means[f'{s}_PCC']:4.2f}")
     return "\n".join(lines)
 
 
-def draw_candidate(out_root: Path, pdfs: dict, dataset: str, run: str, row: dict, values: Dict[str, np.ndarray],
-                   means: dict, basis: str, single: bool) -> Dict[str, str]:
+def draw_window(fig_root: Path, pdfs: dict, dataset: str, run: str, row: dict, values: Dict[str, np.ndarray],
+                means: dict, basis: str, single: bool, place: str, digits: int) -> Dict[str, str]:
+    """The overlap and the separate figure of one window (a model without a stored output: its panel says so)."""
     size = int(row["Size_Sec"])
     t0, t1 = row["Start_Sec"], row["End_Sec"]
     a, b = int(round(t0 * FS30)), int(round(t1 * FS30))
@@ -1177,19 +1200,25 @@ def draw_candidate(out_root: Path, pdfs: dict, dataset: str, run: str, row: dict
     gt_label = f"GT ({MODALITIES[DATASET_KEYS[dataset]]}), {row['GT_RR']:.1f} breaths/min"
     name = {m: f"RRWaveNet ({run})" if m == "RRWaveNet" else FIG_NAME[m] for m in FIG_MODELS}
     who = row["Subject"] + ("" if single else f" ({row['Recording']})")
-    header = (f"{dataset} {who} · {size} s window {t0:.0f}-{t1:.0f} s · candidate {row['Rank']}"
-              + (" (filled up)" if row.get("Filled") else "") + f" · Advantage {row['Advantage']:.2f}")
+    header = f"{dataset} {who} · {size} s window {t0:.0f}-{t1:.0f} s · {place} · Advantage {row['Advantage']:.2f}"
     notes_text = ("all panels the same seconds of the recording (no model shifted in time; a model inverted when r < 0 "
                   "over the recording); GT black\neach waveform min-max scaled in the window; RRWaveNet low-pass 1 Hz\n"
                   f"AE = |FFT rate - GT rate| (breaths/min); r = Pearson r with the GT; subject mean over {basis}")
-    stem = f"{row['Rank']}_{safe_name(row['Subject'] if single else row['Recording'])}_{t0:.0f}-{t1:.0f}s"
-    folder = out_root / dataset / f"{size}s"
-    overlap = [{"title": f"({'abc'[k]}) GT vs {name[m]}",
-                "lines": [(gt, GT_LINE, gt_label, 1.5), (minmax(values[m][a:b]), FIG_COLOR[m], name[m], 1.7)],
-                "text": model_text(m, row, means, size)} for k, m in enumerate(FIG_MODELS)]
-    separate = [{"title": f"(a) GT ({MODALITIES[DATASET_KEYS[dataset]]})", "lines": [(gt, GT_LINE, gt_label, 1.5)]}]
-    separate += [{"title": f"({'bcd'[k]}) {name[m]}", "lines": [(minmax(values[m][a:b]), FIG_COLOR[m], name[m], 1.7)],
-                  "text": model_text(m, row, means, size)} for k, m in enumerate(FIG_MODELS)]
+    stem = f"{row['Rank']:0{digits}d}_{safe_name(row['Subject'] if single else row['Recording'])}_{t0:.0f}-{t1:.0f}s"
+    folder = fig_root / dataset / f"{size}s"
+    missing = "no stored output for this recording"
+    overlap, separate = [], [{"title": f"(a) GT ({MODALITIES[DATASET_KEYS[dataset]]})",
+                              "lines": [(gt, GT_LINE, gt_label, 1.5)]}]
+    for k, m in enumerate(FIG_MODELS):
+        if m in values:
+            line = (minmax(values[m][a:b]), FIG_COLOR[m], name[m], 1.7)
+            overlap.append({"title": f"({'abc'[k]}) GT vs {name[m]}", "lines": [(gt, GT_LINE, gt_label, 1.5), line],
+                            "text": model_text(m, row, means, size)})
+            separate.append({"title": f"({'bcd'[k]}) {name[m]}", "lines": [line], "text": model_text(m, row, means, size)})
+        else:
+            overlap.append({"title": f"({'abc'[k]}) GT vs {name[m]}", "lines": [(gt, GT_LINE, gt_label, 1.5)],
+                            "empty": f"{name[m]}: {missing}"})
+            separate.append({"title": f"({'bcd'[k]}) {name[m]}", "lines": [], "empty": f"{name[m]}: {missing}"})
     paths = {}
     for kind, panels in (("overlap", overlap), ("separate", separate)):
         if (size, kind) not in pdfs:
@@ -1198,11 +1227,19 @@ def draw_candidate(out_root: Path, pdfs: dict, dataset: str, run: str, row: dict
             pdfs[(size, kind)] = PdfPages(pdf_path)
         path = folder / f"{stem}_{kind}.png"
         page(path, pdfs[(size, kind)], header, notes_text, t, panels)
-        paths[kind] = str(path.relative_to(out_root))
+        paths[kind] = str(path.relative_to(fig_root))
     return paths
 
 
 def notes(args: argparse.Namespace) -> pd.DataFrame:
+    if args.top > 0:
+        choice = (f"per subject and size the window with the largest Advantage (all three models present); the first "
+                  f"{args.top} subjects by Advantage with RRWaveNet AE <= {RATE_OK_BPM} and Advantage > 0 (Filled = "
+                  "taken by Advantage because fewer qualified)")
+    else:
+        choice = ("every subject drawn (no choice): per subject and size its window with the largest Advantage (among "
+                  "the windows with the most models of the subject); Rank = place by that Advantage; "
+                  f"Meets_Candidate_Rule = all three models, RRWaveNet AE <= {RATE_OK_BPM} and Advantage > 0")
     return pd.DataFrame([
         ("Models", f"RRWaveNet: CapnoBase 261007, BIDMC / STEAM2 261013 (stored ensemble output); Deep Corr-Encoder: "
                    f"{args.correncoder_root} (261107 paper version); RespDiff: {args.respdiff_root} "
@@ -1213,9 +1250,9 @@ def notes(args: argparse.Namespace) -> pd.DataFrame:
                       "negative; RRWaveNet training sign / lag undone, low-pass 1 Hz"),
         ("AE / r / score", f"AE = |FFT rate - GT rate| (breaths/min); r = Pearson r with the GT; score = r - "
                            f"{AE_WEIGHT} x min(AE, {AE_CAP}); Advantage = RRWaveNet's score - the better of the others"),
-        ("Choice", f"per subject and size the window with the largest Advantage (all three models present); the first "
-                   f"{args.top} subjects by Advantage with RRWaveNet AE <= {RATE_OK_BPM} and Advantage > 0 (Filled = "
-                   "taken by Advantage because fewer qualified)"),
+        ("Windows drawn", choice),
+        ("GT_Clipped_Cycles", "GT breaths in the window with saturated (flat-topped) reference samples"),
+        ("Why", "what the other models do in the window (2x / half rate, rate off, missed cycles, lower PCC)"),
         ("Left out", "; ".join(f"{d} {', '.join(s)}" for d, s in args.excluded.items() if s)),
         ("Figures", "overlap: each model over the GT; separate: GT and every model in its own panel; GT black, "
                     "RRWaveNet coral, Deep Corr-Encoder blue, RespDiff teal; every waveform min-max scaled in the window"),
@@ -1230,7 +1267,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                             help=f"results folder of {run} (default {config['root']})")
     parser.add_argument("--output-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument("--datasets", nargs="+", choices=list(FIGURE_ORDER), default=list(FIGURE_ORDER))
-    parser.add_argument("--top", type=int, default=TOP, help="subjects drawn per dataset and size")
+    parser.add_argument("--top", type=int, default=TOP,
+                        help="0 (default): every subject drawn; N > 0: only N candidates per dataset and size")
     parser.add_argument("--sizes", nargs="+", type=int, default=list(WINDOW_SIZES), help="window sizes (s)")
     parser.add_argument("--step", type=float, default=STEP_SEC, help="a window starts every this many s")
     parser.add_argument("--subjects", nargs="+", default=None, help="only these subjects")
@@ -1255,16 +1293,32 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return args
 
 
+FIRST_COLUMNS = ["Dataset", "Run", "Size_Sec", "Rank", "Filled", "Meets_Candidate_Rule", "Subject", "Recording",
+                 "Start_Sec", "End_Sec", "GT_RR", "GT_Clipped_Cycles", "Advantage", "RRWaveNet_AE", "RRWaveNet_PCC",
+                 "RRWaveNet_Rate", "CorrEncoder_AE", "CorrEncoder_PCC", "CorrEncoder_Rate", "RespDiff_AE",
+                 "RespDiff_PCC", "RespDiff_Rate", "Why", "Overlap_Figure", "Separate_Figure"]
+
+
+def ordered(rows: List[dict]) -> pd.DataFrame:
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    return frame[[c for c in FIRST_COLUMNS if c in frame] + [c for c in frame if c not in FIRST_COLUMNS]]
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
+    every = args.top <= 0
     out_root = Path(args.output_root)
-    out_root.mkdir(parents=True, exist_ok=True)
-    print(f"Output: {out_root}\nDeep Corr-Encoder: {args.correncoder_root}\nRespDiff: {args.respdiff_root}")
+    fig_root = out_root / ALL_FOLDER if every else out_root
+    fig_root.mkdir(parents=True, exist_ok=True)
+    print(f"Output: {fig_root} ({'every subject' if every else f'{args.top} candidates per dataset and size'})\n"
+          f"Deep Corr-Encoder: {args.correncoder_root}\nRespDiff: {args.respdiff_root}")
     set_data_paths(args)
     datasets = list(args.datasets)
     if "CapnoBase" in datasets and not load_capnobase_reader(args):
         datasets.remove("CapnoBase")
-    candidates, best_all, subject_rows = [], [], []
+    drawn, best_all, subject_rows = [], [], []
     for dataset in datasets:
         run = next(r for r, ds in RUN_DATASETS.items() if dataset in ds)
         root = Path(getattr(args, f"root_{run}"))
@@ -1281,33 +1335,40 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                                      "Subject_Means_Over": basis, **means})
         pdfs = {}
         for size in args.sizes:
-            best, chosen = choose(rows, size, args.top)
-            best_all += best
-            print(f"  {dataset} {size} s: " + ("; ".join(
-                f"{c['Rank']}. {c['Subject']} {c['Start_Sec']:.0f}-{c['End_Sec']:.0f}s (Advantage {c['Advantage']:.2f}, "
-                f"RRWaveNet AE {c['RRWaveNet_AE']:.2f} r {c['RRWaveNet_PCC']:.2f}{', filled' if c['Filled'] else ''})"
-                for c in chosen) or "no window with all three models"))
-            for c in chosen:
+            ranked = best_windows(rows, size)
+            best_all += ranked
+            if every:
+                pick = [dict(r, Rank=r["Order"]) for r in ranked]
+                print(f"  {dataset} {size} s: every subject, {len(pick)} figures of each kind", flush=True)
+            else:
+                pick = choose(ranked, args.top)
+                print(f"  {dataset} {size} s: " + ("; ".join(
+                    f"{c['Rank']}. {c['Subject']} {c['Start_Sec']:.0f}-{c['End_Sec']:.0f}s (Advantage "
+                    f"{c['Advantage']:.2f}, RRWaveNet AE {c['RRWaveNet_AE']:.2f} r {c['RRWaveNet_PCC']:.2f}"
+                    f"{', filled' if c['Filled'] else ''})" for c in pick) or "no window with all three models"))
+            digits = len(str(len(pick))) if every else 1
+            for c in pick:
+                if every:
+                    place = f"{c['Rank']} of {len(pick)} by Advantage"
+                else:
+                    place = f"candidate {c['Rank']}" + (" (filled up)" if c["Filled"] else "")
                 means, basis = subject_means([r for r in rows if r["Subject"] == c["Subject"]], size)
-                paths = draw_candidate(out_root, pdfs, dataset, run, c, store[(c["Subject"], c["Recording"])], means,
-                                       basis, n_recordings.get(c["Subject"], 1) == 1)
-                candidates.append({**c, "Overlap_Figure": paths["overlap"], "Separate_Figure": paths["separate"]})
+                paths = draw_window(fig_root, pdfs, dataset, run, c, store[(c["Subject"], c["Recording"])], means,
+                                    basis, n_recordings.get(c["Subject"], 1) == 1, place, digits)
+                drawn.append({**c, "Overlap_Figure": paths["overlap"], "Separate_Figure": paths["separate"]})
         for pdf in pdfs.values():
             pdf.close()
-    first = ["Dataset", "Run", "Size_Sec", "Rank", "Filled", "Subject", "Recording", "Start_Sec", "End_Sec", "GT_RR",
-             "Advantage", "RRWaveNet_AE", "RRWaveNet_PCC", "RRWaveNet_Rate", "CorrEncoder_AE", "CorrEncoder_PCC",
-             "CorrEncoder_Rate", "RespDiff_AE", "RespDiff_PCC", "RespDiff_Rate", "Overlap_Figure", "Separate_Figure"]
-    cand = pd.DataFrame(candidates)
-    if not cand.empty:
-        cand = cand[[c for c in first if c in cand] + [c for c in cand if c not in first]]
-    best_frame = pd.DataFrame(best_all)
-    sheets = {"Candidates": cand, "Best_Windows": best_frame, "Subject_Summary": pd.DataFrame(subject_rows),
-              "Notes": notes(args)}
-    path = out_root / "261108_Waveform_Candidates.xlsx"
+    if every:
+        sheets = {"All_Subjects": ordered(drawn)}
+        path = out_root / "261108_Waveform_All_Subjects.xlsx"
+    else:
+        sheets = {"Candidates": ordered(drawn), "Best_Windows": ordered(best_all)}
+        path = out_root / "261108_Waveform_Candidates.xlsx"
+    sheets.update({"Subject_Summary": pd.DataFrame(subject_rows), "Notes": notes(args)})
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         for name, frame in sheets.items():
             (frame.round(4) if name != "Notes" else frame).to_excel(writer, sheet_name=name, index=False)
-    print(f"\nFigures under {out_root}\\<Dataset>\\<size>s; table: {path}")
+    print(f"\nFigures under {fig_root}\\<Dataset>\\<size>s; table: {path}")
 
 
 if __name__ == "__main__":
