@@ -59,6 +59,17 @@ Labels
   Undetermined         either criterion Undetermined
 Subjects with an MAE issue (STEAM2 22_LMS, 26_CKK, 12_YJJ; BIDMC 27; CapnoBase 0115)
 are computed and marked (Issue_Subject) but left out of the label counts.
+
+Comparison with the earlier coherence result (261108_Subjects_Signal_Coherence; unfiltered
+signals at 30 Hz, breathing frequency 0.05-1.0 Hz, Low when the median window MSC < 0.451):
+its Subjects sheet (or Subjects.csv; the newest file in
+D:\PPG2RSP_RRWaveNet_Inspired\261108_Subjects_Signal_Coherence, or --previous-coherence) is
+read and every subject's earlier decision (Low / Related / Undetermined = Weak / Strong /
+Undetermined) is set against the coherence decision here. A difference is attributed to
+  "decision rule"     when the earlier rule (median window MSC < 0.451) on the windows here
+                      gives the earlier decision (only the half-of-the-windows rule differs)
+  "filtered signals"  otherwise (filters, 0.1-1.0 Hz breathing band, 64 Hz)
+When no subject differs, the output says so.
 Note: the CapnoBase reference is a capnogram; its breath amplitude follows the CO2
 level, not the tidal volume, so the BBA criterion is weaker evidence there.
 
@@ -74,12 +85,16 @@ Outputs (default D:\PPG2RSP_RRWaveNet_Inspired\261109_Subjects_BreathAmplitude_C
     Windows          every 120 s window: MSC, breathing frequency, BBA rho / p / breaths,
                      lag, amplitude variation, reasons left out
     Breaths          every breath used: times, respiration and RIIV amplitude, lag
-  and Subjects.csv, Windows.csv, Breaths.csv, Recordings.csv in the same folder.
+    Vs_261108_Summary  per dataset: subjects compared, Low in 261108, Weak here, how many
+                     differ and who (Low -> Strong, Related -> Weak, ...), or "No difference"
+    Vs_261108          every subject: earlier decision and MSC, coherence decision here (and
+                     with the earlier median rule), changed or not, cause, BBA decision, label
+  and Subjects.csv, Windows.csv, Breaths.csv, Recordings.csv, Vs_261108.csv in the same folder.
 
 Run:
   python 261109_Subjects_BreathAmplitude_Coherence.py
-Options: --datasets, --subjects, --output-root, --ppg-band, --resp-band, --window-sec,
-  --segment-sec, --alpha, --min-breaths, --max-clipped-fraction, --capnobase-path,
+Options: --datasets, --subjects, --output-root, --previous-coherence, --ppg-band, --resp-band,
+  --window-sec, --segment-sec, --alpha, --min-breaths, --max-clipped-fraction, --capnobase-path,
   --bidmc-path, --steam2-ppg-dir, --steam2-rsp-dir, --exclude-steam2, --exclude-bidmc,
   --exclude-capnobase
 """
@@ -127,6 +142,9 @@ BEAT_SEC = (60.0 / 220.0, 1.5)  # cardiac cycles kept
 MAX_BEAT_GAP_SEC = 2.0  # the RIIV is not interpolated across larger gaps
 MAX_RIIV_MISSING = 0.10  # a window needs the RIIV on at least 90 % of its samples
 LABELS = ("Both weak", "BBA only weak", "Coherence only weak", "Strong", "Undetermined")
+PREVIOUS_NAME = "261108_Subjects_Signal_Coherence"
+PREVIOUS_ROOT = WORKSPACE / PREVIOUS_NAME
+PREVIOUS_AS = {"Low": "Weak", "Related": "Strong", "Undetermined": "Undetermined"}  # earlier decision -> here
 
 # Data files (as 261104 / 261108_Wavefom_Comparison / 261108_Subjects_Signal_Coherence)
 DATASET_CONFIGS = {
@@ -722,11 +740,12 @@ def label_of(coh: str, bba: str) -> str:
     return "Strong"
 
 
-def summarize(rows: List[dict], breaths: List[dict]) -> dict:
+def summarize(rows: List[dict], breaths: List[dict], threshold: float) -> dict:
     frame = pd.DataFrame(rows)
     out = {"Windows_Total": int(len(frame))}
     if frame.empty:
-        out.update({"Coherence_Decision": "Undetermined", "BBA_Decision": "Undetermined", "Label": "Undetermined"})
+        out.update({"Coherence_Decision": "Undetermined", "BBA_Decision": "Undetermined", "Label": "Undetermined",
+                    "Coherence_Decision_Median_Rule": "Undetermined"})
         return out
     valid = frame[frame["Left_Out"] == ""]
     reasons = frame["Left_Out"].value_counts()
@@ -762,7 +781,136 @@ def summarize(rows: List[dict], breaths: List[dict]) -> dict:
     out["Coherence_Decision"] = decision(msc_sig)
     out["BBA_Decision"] = decision(bba_sig)
     out["Label"] = label_of(out["Coherence_Decision"], out["BBA_Decision"])
+    # the rule of 261108_Subjects_Signal_Coherence (median window MSC < threshold), for the comparison with it
+    out["Coherence_Decision_Median_Rule"] = ("Undetermined" if msc_sig.size < 2 else
+                                             ("Weak" if out["MSC_Median"] < threshold else "Strong"))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Comparison with the earlier coherence result (261108_Subjects_Signal_Coherence)
+# ---------------------------------------------------------------------------
+
+def find_previous(path: Optional[Path]) -> Optional[Path]:
+    """The earlier Subjects table: a given file, or the newest Subjects*.csv / 261108_...*.xlsx in a folder."""
+    base = Path(path) if path else PREVIOUS_ROOT
+    if base.is_file():
+        return base
+    if not base.is_dir():
+        return None
+    candidates = [p for p in list(base.glob("Subjects*.csv")) + list(base.glob(f"{PREVIOUS_NAME}*.xlsx"))
+                  if not p.name.startswith("~$")]
+    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+
+
+def read_previous(path: Path) -> pd.DataFrame:
+    if path.suffix.lower() == ".csv":
+        frame = pd.read_csv(path, dtype={"Subject": str}, encoding="utf-8-sig")
+    else:
+        frame = pd.read_excel(path, sheet_name="Subjects", dtype={"Subject": str})
+    missing = {"Dataset", "Subject", "Decision"} - set(frame.columns)
+    if missing:
+        raise ValueError(f"{path.name}: no column {sorted(missing)}")
+    frame = frame.copy()
+    frame["Subject"] = [norm_id(d, s) for d, s in zip(frame["Dataset"], frame["Subject"])]
+    return frame
+
+
+def compare_with_previous(subjects: pd.DataFrame, args: argparse.Namespace,
+                          threshold: float) -> Tuple[pd.DataFrame, pd.DataFrame, str]:
+    """Every subject's earlier coherence decision against the one here; a per-dataset summary; a message."""
+    path = find_previous(args.previous_coherence)
+    where = args.previous_coherence or PREVIOUS_ROOT
+    if path is None:
+        message = f"Earlier coherence result not found ({where}); no comparison"
+        return pd.DataFrame(), pd.DataFrame([{"Dataset": "All", "Result": message}]), message
+    try:
+        old = read_previous(path)
+    except Exception as exc:
+        message = f"Earlier coherence result not read ({path}: {exc}); no comparison"
+        return pd.DataFrame(), pd.DataFrame([{"Dataset": "All", "Result": message}]), message
+    keep = {"Decision": "Old_Decision", "MSC_Median": "Old_MSC_Median", "Significant_Share": "Old_MSC_Significant_Share",
+            "Windows_Valid": "Old_Windows_Valid", "Issue_Subject": "Old_Issue_Subject"}
+    old = old[["Dataset", "Subject"] + [c for c in keep if c in old.columns]].rename(columns=keep)
+    old = old[old["Dataset"].isin(subjects["Dataset"].unique())]
+    new_cols = ["Dataset", "Subject", "Issue_Subject", "Coherence_Decision", "Coherence_Decision_Median_Rule",
+                "MSC_Median", "MSC_Significant_Share", "Windows_Valid", "BBA_Decision", "Label"]
+    new = subjects[[c for c in new_cols if c in subjects.columns]].copy()
+    new["Subject"] = [norm_id(d, s) for d, s in zip(new["Dataset"], new["Subject"])]
+    new = new.rename(columns={"Coherence_Decision": "New_Coherence_Decision", "MSC_Median": "New_MSC_Median",
+                              "MSC_Significant_Share": "New_MSC_Significant_Share",
+                              "Windows_Valid": "New_Windows_Valid", "BBA_Decision": "New_BBA_Decision",
+                              "Label": "New_Label",
+                              "Coherence_Decision_Median_Rule": "New_Coherence_Decision_Median_Rule"})
+    if args.subjects:  # a partial run: only the subjects run here
+        old = old[[any(same_subject(s, x) for x in args.subjects) for s in old["Subject"]]]
+    table = new.merge(old, on=["Dataset", "Subject"], how="outer", indicator=True)
+    if "Old_Issue_Subject" in table:
+        table["Issue_Subject"] = table["Issue_Subject"].fillna(table["Old_Issue_Subject"])
+        table = table.drop(columns="Old_Issue_Subject")
+    table["Issue_Subject"] = table["Issue_Subject"].fillna(False).astype(bool)
+    table["Old_As"] = table["Old_Decision"].map(PREVIOUS_AS)
+    table["Was_Low_In_261108"] = table["Old_Decision"] == "Low"
+    changes, causes, changed = [], [], []
+    for _, r in table.iterrows():
+        if r["_merge"] == "left_only":
+            changes.append("only in this run"), causes.append(""), changed.append(False)
+            continue
+        if r["_merge"] == "right_only":
+            changes.append("only in 261108"), causes.append(""), changed.append(False)
+            continue
+        differs = r["Old_As"] != r["New_Coherence_Decision"]
+        changed.append(bool(differs))
+        changes.append(f"{r['Old_Decision']} -> {r['New_Coherence_Decision']}" if differs else "same")
+        if not differs:
+            causes.append("")
+        elif r.get("New_Coherence_Decision_Median_Rule") == r["Old_As"]:
+            causes.append("decision rule (median MSC -> half of the windows)")
+        else:
+            causes.append("filtered signals (PPG 0.1-8 Hz, respiration 0.1-1 Hz, breathing band 0.1-1 Hz, 64 Hz)")
+    table["Changed"], table["Change"], table["Change_Cause"] = changed, changes, causes
+    table = table.drop(columns="_merge")
+    table["_d"] = table["Dataset"].map({d: i for i, d in enumerate(FIGURE_ORDER)})
+    table["_s"] = [subject_order(s) for s in table["Subject"]]
+    table = table.sort_values(["_d", "Changed", "_s"], ascending=[True, False, True]).drop(columns=["_d", "_s"])
+    first = ["Dataset", "Subject", "Issue_Subject", "Changed", "Change", "Change_Cause", "Was_Low_In_261108",
+             "Old_Decision", "Old_As", "New_Coherence_Decision", "New_Coherence_Decision_Median_Rule",
+             "Old_MSC_Median", "New_MSC_Median", "Old_MSC_Significant_Share", "New_MSC_Significant_Share",
+             "Old_Windows_Valid", "New_Windows_Valid", "New_BBA_Decision", "New_Label"]
+    table = table[[c for c in first if c in table] + [c for c in table if c not in first]].reset_index(drop=True)
+    usable = table[~table["Issue_Subject"]]
+    rows = []
+    for dataset in [d for d in FIGURE_ORDER if d in set(table["Dataset"])] + ["All"]:
+        part = usable if dataset == "All" else usable[usable["Dataset"] == dataset]
+        both = part[part["Change"].isin(["same"]) | part["Changed"]]
+        diff = both[both["Changed"]]
+
+        def names(mask) -> str:
+            sel = diff[mask]
+            return ", ".join(sel["Subject"] if dataset != "All" else sel["Dataset"] + " " + sel["Subject"])
+
+        rows.append({
+            "Dataset": dataset, "Subjects_Compared": int(len(both)),
+            "Low_In_261108": int((both["Old_Decision"] == "Low").sum()),
+            "Weak_Here": int((both["New_Coherence_Decision"] == "Weak").sum()),
+            "Same": int((both["Change"] == "same").sum()), "Changed": int(len(diff)),
+            "Result": "No difference" if both.size and diff.empty else (f"{len(diff)} subject(s) differ"
+                                                                         if both.size else "no subject to compare"),
+            "Low -> Strong": names(diff["Old_Decision"].eq("Low") & diff["New_Coherence_Decision"].eq("Strong")),
+            "Related -> Weak": names(diff["Old_Decision"].eq("Related") & diff["New_Coherence_Decision"].eq("Weak")),
+            "Other changes": names(~((diff["Old_Decision"].eq("Low") & diff["New_Coherence_Decision"].eq("Strong"))
+                                     | (diff["Old_Decision"].eq("Related") & diff["New_Coherence_Decision"].eq("Weak")))),
+            "Changed by the decision rule only": names(diff["Change_Cause"].str.startswith("decision rule")),
+            "Only_In_This_Run": ", ".join(part.loc[part["Change"] == "only in this run", "Subject"]),
+            "Only_In_261108": ", ".join(part.loc[part["Change"] == "only in 261108", "Subject"]),
+            "Earlier_File": str(path)})
+    summary = pd.DataFrame(rows)
+    total = summary[summary["Dataset"] == "All"].iloc[0]
+    message = (f"Compared with {path}: no difference - every subject has the same coherence decision as 261108 "
+               "(issue subjects left out)" if total["Changed"] == 0 and total["Subjects_Compared"] > 0 else
+               f"Compared with {path}: {int(total['Changed'])} of {int(total['Subjects_Compared'])} subjects differ "
+               "(issue subjects left out)")
+    return table, summary, message
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +964,12 @@ def criterion_table(args: argparse.Namespace, k_segments: int, threshold: float)
         ("CapnoBase", "capnogram reference", "the breath amplitude of a capnogram follows the CO2 level, not the tidal "
                                              "volume: the BBA criterion is weaker evidence there"),
         ("Issue subjects", "; ".join(f"{d} {', '.join(s)}" for d, s in args.excluded.items() if s),
-         "computed and marked (Issue_Subject); left out of Labels and Not_Strong"),
+         "computed and marked (Issue_Subject); left out of Labels, Not_Strong and Vs_261108_Summary"),
+        ("Vs 261108", PREVIOUS_NAME,
+         "the earlier coherence decision (unfiltered, 30 Hz, breathing band 0.05-1.0 Hz; Low = Weak, Related = Strong, "
+         "when the median window MSC < 0.451) against the coherence decision here; cause of a difference: "
+         "'decision rule' when the earlier median rule on the windows here gives the earlier decision, otherwise "
+         "'filtered signals'"),
     ], columns=["Item", "Value", "Description"])
 
 
@@ -840,8 +993,9 @@ def write_tables(out_dir: Path, sheets: Dict[str, pd.DataFrame]) -> Path:
             for name, frame in sheets.items():
                 frame.to_excel(w, sheet_name=name[:31], index=False)
 
-    for name in ("Subjects", "Recordings", "Windows", "Breaths"):
-        write(out_dir / f"{name}.csv", lambda p, f=sheets[name]: f.to_csv(p, index=False, encoding="utf-8-sig"))
+    for name in ("Subjects", "Recordings", "Windows", "Breaths", "Vs_261108"):
+        if name in sheets:
+            write(out_dir / f"{name}.csv", lambda p, f=sheets[name]: f.to_csv(p, index=False, encoding="utf-8-sig"))
     return write(out_dir / f"{NAME}.xlsx", xlsx)
 
 
@@ -851,6 +1005,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--datasets", nargs="+", choices=list(FIGURE_ORDER), default=list(FIGURE_ORDER))
     parser.add_argument("--subjects", nargs="+", default=None, help="only these subjects")
     parser.add_argument("--output-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument("--previous-coherence", type=Path, default=None,
+                        help=f"earlier Subjects table or its folder (default {PREVIOUS_ROOT})")
     parser.add_argument("--ppg-band", nargs=2, type=float, default=list(PPG_BAND_HZ))
     parser.add_argument("--resp-band", nargs=2, type=float, default=list(RESP_BAND_HZ))
     parser.add_argument("--window-sec", type=float, default=WINDOW_SEC)
@@ -910,13 +1066,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 subject_breaths += breath_rows
                 recordings.append({"Dataset": dataset, "Subject": subject, "Recording": name, "Issue_Subject": issue,
                                    "Seconds": len(rec["ppg"]) / FS, "PPG_FS": rec["ppg_fs"],
-                                   "Reference_FS": rec["rsp_fs"], **summarize(rows, breath_rows)})
+                                   "Reference_FS": rec["rsp_fs"], **summarize(rows, breath_rows, threshold)})
             windows += subject_windows
             breaths += subject_breaths
             subjects.append({"Dataset": dataset, "Subject": subject, "Issue_Subject": issue,
                              "Reference": MODALITIES[DATASET_KEYS[dataset]], "Recordings": len(data[subject]),
                              "Seconds": sum(len(r["ppg"]) for r in data[subject].values()) / FS,
-                             **summarize(subject_windows, subject_breaths)})
+                             **summarize(subject_windows, subject_breaths, threshold)})
             s = subjects[-1]
             print(f"  {subject}{' (issue subject)' if issue else ''}: coherence {s['Coherence_Decision']} "
                   f"({s.get('MSC_Significant_Windows', 0)}/{s.get('Windows_Valid', 0)} windows, median MSC "
@@ -955,8 +1111,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             row[f"{label}: subjects"] = ", ".join(part.loc[part["Label"] == label, "Subject"])
         row["Undetermined: subjects"] = ", ".join(part.loc[part["Label"] == "Undetermined", "Subject"])
         summary.append(row)
+    versus, versus_summary, versus_message = compare_with_previous(subject_frame, args, threshold)
     sheets = {"Criterion": criterion_table(args, k_segments, threshold), "Subjects": subject_frame,
-              "Labels": pd.DataFrame(summary), "Not_Strong": not_strong, "Recordings": pd.DataFrame(recordings),
+              "Labels": pd.DataFrame(summary), "Not_Strong": not_strong,
+              "Vs_261108_Summary": versus_summary, "Vs_261108": versus, "Recordings": pd.DataFrame(recordings),
               "Windows": pd.DataFrame(windows), "Breaths": pd.DataFrame(breaths)}
     path = write_tables(out_dir, sheets)
     pd.set_option("display.width", 220)
@@ -966,6 +1124,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         cols = [c for c in ("Dataset", "Subject", "Label", "BBA_Significant_Share", "BBA_rho_Median",
                             "MSC_Significant_Share", "MSC_Median") if c in not_strong]
         print(not_strong[cols].round(3).to_string(index=False))
+    print(f"\nCoherence vs {PREVIOUS_NAME}: {versus_message}")
+    changed = versus[versus["Changed"] & ~versus["Issue_Subject"]] if not versus.empty else versus
+    if not changed.empty:
+        cols = [c for c in ("Dataset", "Subject", "Change", "Change_Cause", "Old_MSC_Median", "New_MSC_Median",
+                            "New_Label") if c in changed]
+        print(changed[cols].round(3).to_string(index=False))
     print(f"\nSaved: {path}")
 
 
