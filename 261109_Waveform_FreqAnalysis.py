@@ -179,7 +179,9 @@ def patched_text(text: str, base_name: str, band: Tuple[float, float], root: Pat
         "    else:\n"
         '        model_input = (ppg_raw if PPG_INPUT == "raw" else ppg_low).astype(np.float32)\n')
     text = text.replace(INPUT_LINE, input_new).replace(MODEL_INPUT_LINE, model_input_new)
-    text = ROOT_PATTERN.sub(f'PROJECT_ROOT = Path(r"{root}")', text)
+    root_line = f'PROJECT_ROOT = Path(r"{root}")'
+    # a function as replacement: the backslashes of a Windows path are kept as they are (no regex escapes)
+    text = ROOT_PATTERN.sub(lambda _: root_line, text)
     head = (f"# {NAME}: generated from {base_name}; the only changes: the model input is the PPG band-passed "
             f"{band[0]:g}-{band[1]:g} Hz (PPG_INPUT, model_input) and PROJECT_ROOT = {root}\n")
     if text.startswith("# -*- coding"):

@@ -142,7 +142,9 @@ def patched_text(text: str, base_name: str, results_root: Path) -> str:
     if len(ROOT_PATTERN.findall(text)) != 1:
         raise SystemExit(f"{base_name}: PROJECT_ROOT line not found once; nothing is run")
     text = text.replace(INPUT_LINE, INPUT_NEW).replace(MODEL_INPUT_LINE, MODEL_INPUT_NEW)
-    text = ROOT_PATTERN.sub(f'PROJECT_ROOT = Path(r"{results_root}")', text)
+    root_line = f'PROJECT_ROOT = Path(r"{results_root}")'
+    # a function as replacement: the backslashes of a Windows path are kept as they are (no regex escapes)
+    text = ROOT_PATTERN.sub(lambda _: root_line, text)
     head = (f"# {NAME}: generated from {base_name}; the only changes: the model input is the PPG band-passed "
             f"{PPG_INPUT_BAND_HZ[0]:g}-{PPG_INPUT_BAND_HZ[1]:g} Hz (PPG_INPUT, model_input) and PROJECT_ROOT = "
             f"{results_root}\n")
