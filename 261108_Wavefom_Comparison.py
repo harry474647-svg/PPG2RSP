@@ -145,12 +145,14 @@ GT_BAND_ORDER = 3
 TOP = 0  # 0: every subject drawn (in All_Subjects); N > 0: only N candidates per dataset and size (--top)
 ALL_FOLDER = "All_Subjects"
 
-# Figures: the GT black; the models in the colours of the user's legend (RRWaveNet coral, Deep Corr-Encoder blue,
-# RespDiff teal), all solid lines
+# Figures: the GT black; the models in the hues of the user's legend (RRWaveNet coral, Deep Corr-Encoder blue,
+# RespDiff teal), slightly darker and more vivid than before (#ef7f75, #70addb, #7cb5b0): same hue, lower lightness,
+# higher saturation; the three pass the categorical palette checks (chroma, colour-blind and normal-vision
+# separation, contrast >= 3:1 on white); all solid lines
 GT_LINE = "#000000"
 FIG_MODELS = ("RRWaveNet", "Deep corr-encoder", "RespDiff")
 FIG_NAME = {"RRWaveNet": "RRWaveNet", "Deep corr-encoder": "Deep Corr-Encoder", "RespDiff": "RespDiff"}
-FIG_COLOR = {"RRWaveNet": "#ef7f75", "Deep corr-encoder": "#70addb", "RespDiff": "#7cb5b0"}
+FIG_COLOR = {"RRWaveNet": "#f64636", "Deep corr-encoder": "#2d93e1", "RespDiff": "#24a085"}
 
 
 # ===========================================================================
