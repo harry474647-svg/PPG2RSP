@@ -217,7 +217,9 @@ def write_scripts(args: argparse.Namespace, runs: Sequence[tuple]) -> Dict[str, 
         base, text = bases[version]
         root = run_folder(Path(args.output_root), run_id, band_label, version)
         path = code_dir / f"{NAME}_{run_id}_PPG_{band_label}_{version}.py"
-        path.write_text(patched_text(text, base.name, band, root), encoding="utf-8", newline="\n")
+        # open(..., newline="\n"): Path.write_text has no newline argument before Python 3.10
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(patched_text(text, base.name, band, root))
         scripts[run_id] = path
         report.append(f"[{run_id}] input band {band[0]:g}-{band[1]:g} Hz, {version}: {path.name} -> {root}")
     (code_dir / "changes.txt").write_text("\n".join(report) + "\n", encoding="utf-8")
@@ -427,7 +429,7 @@ def compare(output_root: Path) -> Optional[Path]:
     summary = pd.DataFrame(summary_rows)
     summary = summary.sort_values(["Subject_Set", "Dataset", "Version", "Window_Config", "Input_Band"],
                                   key=lambda s: s.map(order[s.name]).fillna(99) if s.name in order else s,
-                                  kind="stable").reset_index(drop=True)
+                                  kind="mergesort").reset_index(drop=True)
     tests = []
     pairs = (("0.1-0.8 Hz", "0.1-8.0 Hz"), ("0.1-0.8 Hz", "raw (no filter)"), ("0.1-8.0 Hz", "raw (no filter)"))
     for subject_set, part in (("All subjects", per_subject), ("Issue subjects left out", per_subject[~per_subject["Issue_Subject"]])):
@@ -457,7 +459,7 @@ def compare(output_root: Path) -> Optional[Path]:
             tests.loc[idx, "BH_p"] = bh(tests.loc[idx, "Wilcoxon_p"].tolist())
         tests = tests.sort_values(["Subject_Set", "Metric", "Dataset", "Version", "Window_Config"],
                                   key=lambda s: s.map(order[s.name]).fillna(99) if s.name in order else s,
-                                  kind="stable").reset_index(drop=True)
+                                  kind="mergesort").reset_index(drop=True)
     overall = []
     for r in runs:
         if not r["overall"].empty:

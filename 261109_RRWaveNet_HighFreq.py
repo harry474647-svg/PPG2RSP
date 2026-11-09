@@ -165,7 +165,9 @@ def write_part(part: str, args: argparse.Namespace, code_dir: Path) -> Tuple[Pat
         "DIFFERENT from the version this code was checked against (still used; the three changes matched)")
     results_root = Path(args.output_root) / info["results"]
     out = code_dir / f"{NAME}_from_{part}.py"
-    out.write_text(patched_text(text, info["script"], results_root), encoding="utf-8", newline="\n")
+    # open(..., newline="\n"): Path.write_text has no newline argument before Python 3.10
+    with open(out, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(patched_text(text, info["script"], results_root))
     lines = [f"[{part}] base script: {base}", f"[{part}] SHA-256 (results-folder line left out): {digest} - {note}",
              f"[{part}] written: {out}", f"[{part}] results: {results_root}"]
     print("\n".join(lines))
