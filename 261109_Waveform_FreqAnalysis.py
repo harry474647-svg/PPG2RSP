@@ -51,6 +51,7 @@ Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261109_Waveform_FreqAnalysis)
                                           results of every run, in the layout of the base
                                           run (Summary\..._results.xlsx, per_subject_fft.csv, ...)
   run_log.csv                             every call: run, dataset, start, end, minutes, exit code
+  Logs\<run>_<step>.log                   the console output of every call (also shown in the console)
   Comparison\261109_Waveform_FreqAnalysis_Comparison.xlsx (+ csv)
     Summary        dataset x version x input band x window: subjects, FFT MAE and
                    waveform PCC (mean +- SD, median [IQR]); all subjects and
@@ -70,6 +71,7 @@ Run (needs CUDA as the base scripts; long: four LOSOCV runs on three datasets):
   python 261109_Waveform_FreqAnalysis.py --compare-only    only the comparison of what is finished
   python 261109_Waveform_FreqAnalysis.py --runs 03 04      only these runs
   python 261109_Waveform_FreqAnalysis.py --args-261007 "--windows w10s_nonoverlap"
+Spyder: runfile(r'D:\PPG2RSP_RRWaveNet_Inspired\...\261109_Waveform_FreqAnalysis.py', args='--plan')
 Other options go to every script call unchanged (e.g. --gpu 1, --no-require-cuda).
 Options of this file: --runs, --scripts-dir, --output-root, --args-261007,
   --args-261013, --no-resume, --write-only, --plan, --compare-only
@@ -78,6 +80,7 @@ Options of this file: --runs, --scripts-dir, --output-root, --args-261007,
 import argparse
 import hashlib
 import math
+import os
 import re
 import shlex
 import shutil
@@ -234,33 +237,62 @@ def log_call(output_root: Path, row: dict) -> None:
         frame.to_csv(path.with_name(f"run_log_{datetime.now():%Y%m%d_%H%M%S}.csv"), index=False, encoding="utf-8-sig")
 
 
-def keep_call_files(root: Path, dataset: str) -> None:
-    """failed_members.csv / run_manifest.json of a one-dataset call, kept per dataset."""
+def keep_call_files(root: Path, dataset: str, since: float) -> None:
+    """failed_members.csv / run_manifest.json written by a one-dataset call, kept per dataset."""
     for name in ("failed_members.csv", "run_manifest.json"):
         source = root / name
-        if source.exists():
+        if source.exists() and source.stat().st_mtime >= since - 1:
             shutil.copy2(source, root / f"{source.stem}_{DATASET_LABELS[dataset]}{source.suffix}")
 
 
+def command_text(command: Sequence[str]) -> str:
+    return subprocess.list2cmdline(list(command)) if os.name == "nt" else " ".join(shlex.quote(c) for c in command)
+
+
+def split_options(text: str) -> List[str]:
+    """--args-261007 / --args-261013 into tokens; on Windows the backslashes of paths are kept."""
+    if os.name != "nt":
+        return shlex.split(text)
+    tokens = shlex.split(text, posix=False)
+    return [tok[1:-1] if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "\"'" else tok for tok in tokens]
+
+
 def call(command: List[str], output_root: Path, run_id: str, step: str, plan: bool) -> int:
-    print(f"\n{'=' * 78}\n[{run_id} {step}] {' '.join(shlex.quote(c) for c in command)}\n{'=' * 78}", flush=True)
+    """Run one script call; its output goes to this console (also in Spyder) and to Logs\\<run>_<step>.log."""
+    print(f"\n{'=' * 78}\n[{run_id} {step}] {command_text(command)}\n{'=' * 78}", flush=True)
     if plan:
         return 0
+    log_dir = output_root / "Logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"{run_id}_{step.replace(' ', '_')}.log"
+    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
     start = datetime.now()
-    result = subprocess.run(command)
+    with open(log_path, "a", encoding="utf-8") as log, subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+            text=True, encoding="utf-8", errors="replace", bufsize=1) as process:
+        log.write(f"\n# {start:%Y-%m-%d %H:%M:%S} {command_text(command)}\n")
+        try:
+            for line in process.stdout:
+                print(line, end="", flush=True)
+                log.write(line)
+                log.flush()
+            returncode = process.wait()
+        except BaseException:  # interrupted (Ctrl+C / Spyder stop): the script call stops too
+            process.kill()
+            raise
     end = datetime.now()
     log_call(output_root, {"Run": run_id, "Step": step, "Start": f"{start:%Y-%m-%d %H:%M:%S}",
                            "End": f"{end:%Y-%m-%d %H:%M:%S}", "Minutes": round((end - start).total_seconds() / 60, 2),
-                           "Exit_Code": result.returncode, "Command": " ".join(command)})
-    print(f"[{run_id} {step}] exit code {result.returncode} after {(end - start).total_seconds() / 60:.1f} min", flush=True)
-    return result.returncode
+                           "Exit_Code": returncode, "Log": str(log_path), "Command": command_text(command)})
+    print(f"[{run_id} {step}] exit code {returncode} after {(end - start).total_seconds() / 60:.1f} min", flush=True)
+    return returncode
 
 
 def run_commands(run: tuple, script: Path, args: argparse.Namespace, others: List[str]) -> Tuple[List[str], List[str]]:
     run_id, band_label, band, version = run
     base = [sys.executable, str(script)]
     extra = list(VERSIONS[version]["options"]) + others
-    extra += shlex.split(args.args_261007 if version == "261007" else args.args_261013)
+    extra += split_options(args.args_261007 if version == "261007" else args.args_261013)
     if version == "261013" and "--reference-root" not in extra:
         partner = next(r for r in RUNS if r[1] == band_label and r[3] == "261007")
         extra += ["--reference-root", str(run_folder(Path(args.output_root), partner[0], partner[1], partner[3]))]
@@ -277,10 +309,11 @@ def execute(args: argparse.Namespace, others: List[str], runs: Sequence[tuple], 
         root = run_folder(output_root, run_id, band_label, version)
         print(f"\n### Run {run_id}: PPG {band_label.replace('Hz', ' Hz')} + {version} -> {root}", flush=True)
         for dataset in DATASET_RUN_ORDER:
+            since = datetime.now().timestamp()
             code = call(train + ["--datasets", dataset], output_root, run_id, DATASET_LABELS[dataset], args.plan)
             status = status or code
             if not args.plan:
-                keep_call_files(root, dataset)
+                keep_call_files(root, dataset, since)
         status = status or call(summary + ["--datasets", *DATASET_RUN_ORDER], output_root, run_id, "summary", args.plan)
         if version == "261007":
             # the 261013 run of the same band compares with this run: its summary again, now that this run exists
@@ -307,7 +340,7 @@ def is_issue(dataset: str, subject) -> bool:
 
 def read_csv(path: Path) -> pd.DataFrame:
     try:
-        return pd.read_csv(path, dtype={"Subject": str}) if path.exists() else pd.DataFrame()
+        return pd.read_csv(path, dtype={"Subject": str}, encoding="utf-8-sig") if path.exists() else pd.DataFrame()
     except Exception as exc:
         print(f"  {path} not read ({exc})")
         return pd.DataFrame()
