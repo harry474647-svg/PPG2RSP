@@ -4,6 +4,23 @@ learning - pretrained on one dataset (default CapnoBase), then fine-tuned by LOS
 the others (default STEAM2, BIDMC) - and the comparison with the same runs trained
 from scratch. Every result is saved under one folder.
 
+Rerun = continue: the same results folder is continued; what is finished is skipped and only
+what has no training yet is trained (nothing else changes):
+  * pretraining: skipped when every pretrained member (every window, m0..) is stored; otherwise it
+    continues (finished members kept, a member in training resumed from its last epoch);
+  * a fine-tuning dataset call that ended without error and without failed members is marked
+    finished (<run>\Progress\<dataset>.done.json, with the code signature of its script); a rerun
+    skips it without loading the data (--recheck calls it again);
+  * every other dataset is called with --resume: the base script skips every finished member and
+    continues a member in training from its last epoch; the launcher prints how many members are
+    finished / in training before the call;
+  * runs started before this skipping was added have no markers yet: their datasets are called once
+    more (finished members skipped by --resume) and marked then;
+  * the generated script is compared with the one already in Code\ (comments and the results folder
+    left out): if the code changed, nothing is run, so that results of different code are never
+    mixed (--allow-code-change runs anyway);
+  * Progress.csv lists every dataset: skipped / finished / not finished, members before and after.
+
 Runs, in this order
   01  261013: pretraining on CapnoBase -> fine-tuning on STEAM2 -> BIDMC
   02  261007: pretraining on CapnoBase -> fine-tuning on STEAM2 -> BIDMC
@@ -43,6 +60,7 @@ Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261109_RRWaveNet_FineTune)
   01_261013_CapnoBase-to-STEAM2-BIDMC\   Pretrained_CapnoBase\ and the LOSOCV results in the
   02_261007_CapnoBase-to-STEAM2-BIDMC\   layout of the base run (Summary\..._results.xlsx, ...)
   run_log.csv, Logs\<run>_<step>.log     every call and its console output
+  Progress.csv, <run>\Progress\          finished datasets (skipped on a rerun)
   Comparison\261109_RRWaveNet_FineTune_Comparison.xlsx (+ csv)
     Summary, Paired_Tests, Pretraining (per member: best epoch, validation loss, weight
     decay), Per_Subject, Run_Status, Notes
@@ -56,7 +74,8 @@ Run (needs CUDA as the base scripts):
 Spyder: runfile(r'D:\PPG2RSP_RRWaveNet_Inspired\...\261109_RRWaveNet_FineTune.py', args='--plan')
 Other options go to every call unchanged (e.g. --gpu 1, --no-require-cuda, --epoch-cap 5 for a
 quick test). Options of this file: --runs, --source, --targets, --scripts-dir, --output-root,
---args-261007, --args-261013, --no-resume, --write-only, --plan, --compare-only
+--args-261007, --args-261013, --no-resume, --recheck, --allow-code-change, --write-only, --plan,
+--compare-only
 """
 
 import argparse
@@ -208,8 +227,10 @@ def write_scripts(args: argparse.Namespace, runs: Sequence[tuple]) -> Dict[str, 
         pretrained = pretrained_folder(root, args.source)
         path = code_dir / f"{NAME}_{run_id}_{version}.py"
         # open(..., newline="\n"): Path.write_text has no newline argument before Python 3.10
+        new_text = patched_text(text, base.name, root, pretrained, args.source)
+        check_code(path, new_text, args.allow_code_change)  # the results here were trained with this code
         with open(path, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(patched_text(text, base.name, root, pretrained, args.source))
+            handle.write(new_text)
         scripts[run_id] = path
         report.append(f"[{run_id}] {version}: {path.name} -> {root} (pretrained: {pretrained})")
     (code_dir / "changes.txt").write_text("\n".join(report) + "\n", encoding="utf-8")
@@ -455,6 +476,131 @@ def run_commands(run: tuple, script: Path, args: argparse.Namespace, others: Lis
     return base + resume + extra, base + ["--summary-only"] + extra
 
 
+# ---------------------------------------------------------------------------
+# Rerun = continue: skipping what is finished
+# ---------------------------------------------------------------------------
+
+# options of a partial or test call: such a call never marks a dataset finished
+PARTIAL_OPTIONS = ("--subjects", "--epoch-cap", "--dry-run", "--shard", "--summary-only", "--members")
+
+
+def code_signature(text: str) -> str:
+    """The code without comments, blank lines and the results folder: the same signature is the same training."""
+    lines = []
+    for line in ROOT_PATTERN.sub("PROJECT_ROOT = <root>", text.replace("\r\n", "\n")).split("\n"):
+        if line.strip() and not line.strip().startswith("#"):
+            lines.append(line.rstrip())
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def check_code(path: Path, new_text: str, allow: bool) -> None:
+    """The results in the folder were trained with the script already in Code\\; a different code is not mixed in."""
+    if path.exists() and code_signature(path.read_text(encoding="utf-8")) != code_signature(new_text):
+        message = (f"{path.name}: the code differs from the one the results in this folder were trained with "
+                   "(base script or settings changed)")
+        if not allow:
+            raise SystemExit(message + "; nothing is run (--allow-code-change runs it anyway)")
+        print(f"  [warning] {message}; run anyway (--allow-code-change)", flush=True)
+
+
+def marker_path(root: Path, dataset: str) -> Path:
+    return root / "Progress" / f"{DATASET_LABELS[dataset]}.done.json"
+
+
+def member_counts(root: Path, dataset: str) -> Tuple[int, int]:
+    """Members of a dataset already in the folder: finished (summary written) and still in training (state)."""
+    label = DATASET_LABELS[dataset]
+    finished = len(list(root.glob(f"*/*/{label}/Fold_Summaries/*_m*_summary.json")))
+    in_training = len(list(root.glob(f"*/*/{label}/Members/m*/Models/*_training_state.pt")))
+    return finished, in_training
+
+
+def dataset_done(root: Path, dataset: str, signature: str) -> bool:
+    try:
+        marker = json.loads(marker_path(root, dataset).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return marker.get("Code_Signature") == signature
+
+
+def failed_rows(path: Path, since: float) -> Optional[int]:
+    """Rows of failed_members.csv written by the call (None: not written by it)."""
+    if not path.exists() or path.stat().st_mtime < since - 1:
+        return None
+    try:
+        return int(len(pd.read_csv(path)))
+    except pd.errors.EmptyDataError:
+        return 0
+
+
+def finish_call(root: Path, dataset: str, signature: str, command: List[str], code: int, since: float) -> str:
+    """After a dataset call: marked finished when it ended without error and without failed members."""
+    failed = failed_rows(root / "failed_members.csv", since)
+    partial = any(token.split("=", 1)[0] in PARTIAL_OPTIONS for token in command)
+    if code == 0 and failed == 0 and not partial:
+        path = marker_path(root, dataset)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"Dataset": DATASET_LABELS[dataset], "Code_Signature": signature,
+                                    "Finished": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "Finished_Members": member_counts(root, dataset)[0],
+                                    "Command": command_text(command)}, indent=2), encoding="utf-8")
+        return "finished"
+    if partial:
+        return "partial call (not marked finished)"
+    return f"not finished (exit code {code}, failed members {failed if failed is not None else 'unknown'})"
+
+
+def log_progress(output_root: Path, row: dict) -> None:
+    path = output_root / "Progress.csv"
+    columns = ["Time", "Run", "Dataset", "Status", "Finished_Members_Before", "In_Training_Before",
+               "Finished_Members_After"]
+    frame = pd.DataFrame([{"Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), **row}]).reindex(columns=columns)
+    try:
+        frame.to_csv(path, mode="a", header=not path.exists(), index=False, encoding="utf-8-sig")
+    except PermissionError:
+        pass
+
+
+def run_dataset(args: argparse.Namespace, output_root: Path, root: Path, run_id: str, dataset: str, signature: str,
+                command: List[str], step: str) -> int:
+    """One dataset of a run: skipped when finished earlier with the same code, otherwise the call (with --resume,
+    so the base script skips every finished member and continues the ones in training)."""
+    label = DATASET_LABELS[dataset]
+    finished, in_training = member_counts(root, dataset)
+    if not args.recheck and dataset_done(root, dataset, signature):
+        print(f"\n[{run_id} {step}] finished earlier ({finished} members) - skipped", flush=True)
+        if not args.plan:
+            log_progress(output_root, {"Run": run_id, "Dataset": label, "Status": "skipped (finished earlier)",
+                                       "Finished_Members_Before": finished, "In_Training_Before": in_training,
+                                       "Finished_Members_After": finished})
+        return 0
+    print(f"\n[{run_id} {step}] found {finished} finished members and {in_training} in training: those are kept "
+          "and only the rest is trained", flush=True)
+    since = datetime.now().timestamp()
+    code = call(command, output_root, run_id, step, args.plan)
+    if not args.plan:
+        keep_call_files(root, dataset, since)
+        status = finish_call(root, dataset, signature, command, code, since)
+        log_progress(output_root, {"Run": run_id, "Dataset": label, "Status": status,
+                                   "Finished_Members_Before": finished, "In_Training_Before": in_training,
+                                   "Finished_Members_After": member_counts(root, dataset)[0]})
+        print(f"[{run_id} {step}] {status}", flush=True)
+    return code
+
+
+WINDOW_ORDER = {"w10s_nonoverlap": 1, "w20s_nonoverlap": 2, "w60s_nonoverlap": 3}
+DEFAULT_PRETRAIN_WINDOWS = {"261013": ["w10s_nonoverlap"], "261007": ["w10s_nonoverlap", "w20s_nonoverlap"]}
+
+
+def pretraining_done(pretrained: Path, version: str, options: List[str]) -> bool:
+    """Every pretrained member (m0.. of every window of the version) stored with its summary."""
+    opt = pretrain_options(options)
+    windows = opt.windows or DEFAULT_PRETRAIN_WINDOWS[version]
+    members = opt.members or 3
+    return all((pretrained / f"{WINDOW_ORDER.get(w, 0):02d}_{w}" / f"m{k}{suffix}").exists()
+               for w in windows for k in range(members) for suffix in ("_best.pth", "_summary.json"))
+
+
 def execute(args: argparse.Namespace, others: List[str], runs: Sequence[tuple], scripts: Dict[str, Path]) -> int:
     status = 0
     output_root = Path(args.output_root)
@@ -466,19 +612,23 @@ def execute(args: argparse.Namespace, others: List[str], runs: Sequence[tuple], 
         worker = [sys.executable, str(Path(__file__).resolve()), "--pretrain-worker", "--version", version,
                   "--script", str(scripts[run_id]), "--source", args.source,
                   "--out", str(pretrained_folder(root, args.source))] + version_options(version, args, others)
-        code = call(worker, output_root, run_id, f"pretraining {DATASET_LABELS[args.source]}", args.plan)
+        if not args.recheck and pretraining_done(pretrained_folder(root, args.source), version,
+                                                 version_options(version, args, others)):
+            print(f"\n[{run_id} pretraining {DATASET_LABELS[args.source]}] every pretrained member is stored - skipped",
+                  flush=True)
+            code = 0
+        else:
+            code = call(worker, output_root, run_id, f"pretraining {DATASET_LABELS[args.source]}", args.plan)
         if code != 0:
             print(f"[{run_id}] pretraining failed (exit code {code}); its fine-tuning is skipped", flush=True)
             status = status or code
             continue
         train, summary = run_commands(run, scripts[run_id], args, others)
+        signature = code_signature(scripts[run_id].read_text(encoding="utf-8"))
         for dataset in args.targets:
-            since = datetime.now().timestamp()
-            code = call(train + ["--datasets", dataset], output_root, run_id, f"fine-tuning {DATASET_LABELS[dataset]}",
-                        args.plan)
+            code = run_dataset(args, output_root, root, run_id, dataset, signature, train + ["--datasets", dataset],
+                               f"fine-tuning {DATASET_LABELS[dataset]}")
             status = status or code
-            if not args.plan:
-                keep_call_files(root, dataset, since)
         status = status or call(summary + ["--datasets", *args.targets], output_root, run_id, "summary", args.plan)
         if version == "261007":
             partner = next((r for r in RUNS if r[1] == "261013"), None)
@@ -695,6 +845,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> Tuple[argparse.Namespace
     parser.add_argument("--args-261007", default="", help='options only for 261007, e.g. "--windows w10s_nonoverlap"')
     parser.add_argument("--args-261013", default="", help='options only for 261013, e.g. "--members 3"')
     parser.add_argument("--no-resume", action="store_true", help="do not pass --resume to the fine-tuning calls")
+    parser.add_argument("--recheck", action="store_true",
+                        help="call every dataset again (finished members are still skipped by --resume)")
+    parser.add_argument("--allow-code-change", action="store_true",
+                        help="run although the generated code differs from the one in Code\\")
     parser.add_argument("--write-only", action="store_true", help="write the scripts, do not run")
     parser.add_argument("--plan", action="store_true", help="print every call, do not run")
     parser.add_argument("--compare-only", action="store_true", help="only the comparison of the finished runs")
