@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
-r"""261110_StemFusion_TrainLoss_BoxPlot: box plots of the last-epoch training loss with and
+r"""261110_StemFusion_TrainLoss_BoxPlot: box plots of the training and validation loss with and
 without the 1x1 stem fusion (261007 CapnoBase / BIDMC / STEAM2, 261013 BIDMC / STEAM2), in
 the layout of the earlier StemFusion_Training_Loss figure (one panel per dataset, without /
 with stem fusion, bracket and stars when significant). Nothing is trained or re-run.
 
-Values
-  Curve_Final_Train_Loss of Summary\fold_measures.csv of 261106_StemFusion_Generalization_FeatureLevel:
-  the training loss of the last epoch of the learning curve (training mode: dropout and jitter),
-  single model m0 per fold; O = with stem fusion, X = without (261007: full vs no_stem_fusion;
+Values (Summary\fold_measures.csv of 261106_StemFusion_Generalization_FeatureLevel), one figure set each:
+  Curve_Final_Train_Loss  training loss of the last epoch of the learning curve (training mode:
+                          dropout and jitter)
+  Curve_Best_Val_Loss     validation loss at the best epoch (the lowest; the restored model)
+  Curve_Final_Val_Loss    validation loss of the last epoch
+  Validation: 261007 the last 20% of each training subject's windows; 261013 held-out training
+  subjects (subject-wise). Single model m0 per fold; O = with stem fusion, X = without (261007: full vs no_stem_fusion;
   261013: full of the selected weight decay vs 261028_Stem_ablation_noise_v1 with that weight decay).
 Statistics
   paired by fold: mean +- SD, difference O - X, relative difference (O - X) / X x 100 (mean +- SD
@@ -17,15 +20,16 @@ Statistics
   Stars: * < 0.05, ** < 0.01, *** < 0.001, **** < 1e-4.
 
 Outputs (default D:\PPG2RSP_RRWaveNet_Inspired\261110_StemFusion_TrainLoss_BoxPlot)
-  StemFusion_LastEpoch_TrainLoss_all.png / .pdf      five panels (261007, then 261013)
-  StemFusion_LastEpoch_TrainLoss_261007.png / .pdf   three panels
-  StemFusion_LastEpoch_TrainLoss_261013.png / .pdf   two panels
-  StemFusion_LastEpoch_TrainLoss.xlsx (Summary, Per_Fold, Notes), _summary.csv
+  per value <name> = StemFusion_LastEpoch_TrainLoss, StemFusion_BestEpoch_ValLoss, StemFusion_LastEpoch_ValLoss:
+  <name>_all.png / .pdf      five panels (261007, then 261013)
+  <name>_261007.png / .pdf   three panels
+  <name>_261013.png / .pdf   two panels
+  <name>.xlsx (Summary, Per_Fold, Notes), <name>_summary.csv
 
 Run:  python 261110_StemFusion_TrainLoss_BoxPlot.py
       --summary-dir <261106_StemFusion_Generalization_FeatureLevel\Summary>   (fold_measures.csv and
       tests.csv or the _results.xlsx there), or --fold-measures <csv> --tests <csv or xlsx>
-      --output-root <folder>
+      --output-root <folder>   --measures Curve_Best_Val_Loss (only some of the values)
 """
 
 import argparse
@@ -43,8 +47,15 @@ from scipy import stats
 WORKSPACE = Path(r"D:\PPG2RSP_RRWaveNet_Inspired")
 SUMMARY_DIR = WORKSPACE / "261106_StemFusion_Generalization_FeatureLevel" / "Summary"
 OUTPUT_ROOT = WORKSPACE / "261110_StemFusion_TrainLoss_BoxPlot"
-MEASURE = "Curve_Final_Train_Loss"
-NAME = "StemFusion_LastEpoch_TrainLoss"
+# value: (file name, y-axis label, description)
+MEASURES = {
+    "Curve_Final_Train_Loss": ("StemFusion_LastEpoch_TrainLoss", "Training loss (last epoch)",
+                               "training loss of the last epoch of the learning curve (training mode: dropout, jitter)"),
+    "Curve_Best_Val_Loss": ("StemFusion_BestEpoch_ValLoss", "Validation loss (best epoch)",
+                            "validation loss at the best epoch (lowest of the curve = the restored model)"),
+    "Curve_Final_Val_Loss": ("StemFusion_LastEpoch_ValLoss", "Validation loss (last epoch)",
+                             "validation loss of the last epoch of the learning curve"),
+}
 PANELS = (("261007", "CapnoBase"), ("261007", "BIDMC"), ("261007", "STEAM2"), ("261013", "BIDMC"), ("261013", "STEAM2"))
 COLORS = {"X": "#ed665a", "O": "#559ed5"}  # without / with stem fusion, as in the earlier figure
 LABELS = {"X": "without\nstem fusion", "O": "with\nstem fusion"}
@@ -80,10 +91,10 @@ def read_tests(path: Optional[Path]) -> pd.DataFrame:
     return pd.read_csv(path, encoding="utf-8-sig", dtype={"Run": str})
 
 
-def per_fold_values(frame: pd.DataFrame) -> pd.DataFrame:
+def per_fold_values(frame: pd.DataFrame, measure: str) -> pd.DataFrame:
     frame = frame.copy()
     frame["Run"] = frame["Run"].astype(str)
-    wide = frame.pivot_table(index=["Run", "Dataset", "Subject"], columns="Model", values=MEASURE).reset_index()
+    wide = frame.pivot_table(index=["Run", "Dataset", "Subject"], columns="Model", values=measure).reset_index()
     wide = wide.dropna(subset=["O", "X"]).rename(columns={"X": "Without_Stem_Fusion", "O": "With_Stem_Fusion"})
     wide["Difference_With_minus_Without"] = wide["With_Stem_Fusion"] - wide["Without_Stem_Fusion"]
     wide["Relative_Difference_Pct"] = 100.0 * wide["Difference_With_minus_Without"] / wide["Without_Stem_Fusion"]
@@ -94,7 +105,7 @@ def per_fold_values(frame: pd.DataFrame) -> pd.DataFrame:
     return wide
 
 
-def summarize(per_fold: pd.DataFrame, tests: pd.DataFrame) -> pd.DataFrame:
+def summarize(per_fold: pd.DataFrame, tests: pd.DataFrame, measure: str) -> pd.DataFrame:
     rows = []
     for run, dataset in PANELS:
         d = per_fold[(per_fold["Run"] == run) & (per_fold["Dataset"] == dataset)]
@@ -112,7 +123,7 @@ def summarize(per_fold: pd.DataFrame, tests: pd.DataFrame) -> pd.DataFrame:
                "Wilcoxon_p": p, "FDR_p": np.nan, "FDR_Source": ""}
         if not tests.empty:
             found = tests[(tests["Run"].astype(str) == run) & (tests["Dataset"] == dataset)
-                          & (tests["Measure"] == MEASURE)]
+                          & (tests["Measure"] == measure)]
             if not found.empty:
                 row["FDR_p"] = float(found.iloc[0]["FDR"])
                 row["FDR_Source"] = "analysis tests (BH over all stages and measures of the run and dataset)"
@@ -131,7 +142,7 @@ def summarize(per_fold: pd.DataFrame, tests: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
-def figure(per_fold: pd.DataFrame, summary: pd.DataFrame, panels: List[tuple], path: Path) -> None:
+def figure(per_fold: pd.DataFrame, summary: pd.DataFrame, panels: List[tuple], path: Path, ylabel: str) -> None:
     fig, axes = plt.subplots(1, len(panels), figsize=(4.8 * len(panels), 4.6), squeeze=False)
     for ax, (run, dataset) in zip(axes[0], panels):
         d = per_fold[(per_fold["Run"] == run) & (per_fold["Dataset"] == dataset)]
@@ -160,7 +171,7 @@ def figure(per_fold: pd.DataFrame, summary: pd.DataFrame, panels: List[tuple], p
         ax.tick_params(labelsize=9)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
-    axes[0, 0].set_ylabel("Training loss (last epoch)", fontsize=10)
+    axes[0, 0].set_ylabel(ylabel, fontsize=10)
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path.with_suffix(".png"), dpi=300)
@@ -175,6 +186,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser.add_argument("--tests", type=Path, default=None,
                         help="tests.csv or the _results.xlsx (Tests sheet) of the analysis (default: in --summary-dir)")
     parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
+    parser.add_argument("--measures", nargs="+", choices=list(MEASURES), default=list(MEASURES))
     args = parser.parse_args(argv)
     fold_path = args.fold_measures or args.summary_dir / "fold_measures.csv"
     tests_path = args.tests
@@ -184,32 +196,38 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             if candidate.is_file():
                 tests_path = candidate
                 break
-    per_fold = per_fold_values(pd.read_csv(fold_path, encoding="utf-8-sig", dtype={"Subject": str, "Run": str}))
-    summary = summarize(per_fold, read_tests(tests_path))
+    frame = pd.read_csv(fold_path, encoding="utf-8-sig", dtype={"Subject": str, "Run": str})
+    tests = read_tests(tests_path)
     out = Path(args.output_root)
     out.mkdir(parents=True, exist_ok=True)
-    present = [p for p in PANELS if ((summary["Run"] == p[0]) & (summary["Dataset"] == p[1])).any()]
-    figure(per_fold, summary, present, out / f"{NAME}_all")
-    for run in ("261007", "261013"):
-        panels = [p for p in present if p[0] == run]
-        if panels:
-            figure(per_fold, summary, panels, out / f"{NAME}_{run}")
-    notes = pd.DataFrame({"Item": ["Value", "Models", "Statistics", "Inputs"], "Meaning": [
-        f"{MEASURE}: training loss of the last epoch of the learning curve (training mode: dropout and jitter)",
-        "single model m0 per fold; O = with stem fusion, X = without; 261007 full vs no_stem_fusion; 261013 full "
-        "(selected weight decay) vs 261028_Stem_ablation_noise_v1 (same weight decay)",
-        "paired by fold; mean +- SD; relative difference (O - X) / X x 100 per fold; two-sided Wilcoxon signed-rank; "
-        "FDR as in FDR_Source; stars from the FDR p",
-        f"{fold_path}; tests {tests_path}"]})
-    with pd.ExcelWriter(out / f"{NAME}.xlsx", engine="openpyxl") as writer:
-        summary.to_excel(writer, sheet_name="Summary", index=False)
-        per_fold.to_excel(writer, sheet_name="Per_Fold", index=False)
-        notes.to_excel(writer, sheet_name="Notes", index=False)
-    summary.to_csv(out / f"{NAME}_summary.csv", index=False, encoding="utf-8-sig")
-    for r in summary.to_dict("records"):
-        print(f"{r['Run']} {r['Dataset']:<10s} n={r['N_Folds']}: without {r['Without_Text']} vs with {r['With_Text']}; "
-              f"lower with stem fusion {r['N_Lower_With_Stem_Fusion']}/{r['N_Folds']}, {r['Relative_Text']}, "
-              f"p={r['Wilcoxon_p']:.2g}, FDR={r['FDR_p']:.2g} {r['Significance']}")
+    for measure in args.measures:
+        name, ylabel, description = MEASURES[measure]
+        per_fold = per_fold_values(frame, measure)
+        summary = summarize(per_fold, tests, measure)
+        present = [p for p in PANELS if ((summary["Run"] == p[0]) & (summary["Dataset"] == p[1])).any()]
+        figure(per_fold, summary, present, out / f"{name}_all", ylabel)
+        for run in ("261007", "261013"):
+            panels = [p for p in present if p[0] == run]
+            if panels:
+                figure(per_fold, summary, panels, out / f"{name}_{run}", ylabel)
+        notes = pd.DataFrame({"Item": ["Value", "Validation", "Models", "Statistics", "Inputs"], "Meaning": [
+            f"{measure}: {description}",
+            "261007: the last 20% of each training subject's windows; 261013: held-out training subjects",
+            "single model m0 per fold; O = with stem fusion, X = without; 261007 full vs no_stem_fusion; 261013 full "
+            "(selected weight decay) vs 261028_Stem_ablation_noise_v1 (same weight decay)",
+            "paired by fold; mean +- SD; relative difference (O - X) / X x 100 per fold; two-sided Wilcoxon signed-rank; "
+            "FDR as in FDR_Source; stars from the FDR p",
+            f"{fold_path}; tests {tests_path}"]})
+        with pd.ExcelWriter(out / f"{name}.xlsx", engine="openpyxl") as writer:
+            summary.to_excel(writer, sheet_name="Summary", index=False)
+            per_fold.to_excel(writer, sheet_name="Per_Fold", index=False)
+            notes.to_excel(writer, sheet_name="Notes", index=False)
+        summary.to_csv(out / f"{name}_summary.csv", index=False, encoding="utf-8-sig")
+        print(f"\n{ylabel} ({measure}):")
+        for r in summary.to_dict("records"):
+            print(f"{r['Run']} {r['Dataset']:<10s} n={r['N_Folds']}: without {r['Without_Text']} vs with "
+                  f"{r['With_Text']}; lower with stem fusion {r['N_Lower_With_Stem_Fusion']}/{r['N_Folds']}, "
+                  f"{r['Relative_Text']}, p={r['Wilcoxon_p']:.2g}, FDR={r['FDR_p']:.2g} {r['Significance']}")
     print(f"saved under {out}")
 
 
