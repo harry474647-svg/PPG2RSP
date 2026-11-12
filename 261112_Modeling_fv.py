@@ -1,6 +1,7 @@
-r"""261112_Modeling_fv: RRWaveNet trained the 261013 way (subject-wise validation,
-weight decay selected per fold, ensemble of 3, LOSOCV) on every dataset (STEAM2, BIDMC,
-CapnoBase) with one and the same cross-validation, the PPG input and the respiratory
+r"""261112_Modeling_fv: RRWaveNet trained by LOSOCV (one subject as test; training and
+validation windows split 8:2 by window within the other subjects; weight decay selected per
+fold; results of the ensemble of 3 and of the single models) on every dataset (STEAM2,
+BIDMC, CapnoBase) with one and the same cross-validation, the PPG input and the respiratory
 reference both band-passed to 0.05-0.8 Hz, and the data selection of
 Ho MN, Nguyen KT. A late fusion multi-task learning for respiratory waveform and rate
 estimation from photoplethysmography. PLoS One 2026;21(7):e0353203.
@@ -51,12 +52,19 @@ search of at least 3 s or half a breath period).
 
 Cross-validation (the same for every dataset)
 ---------------------------------------------
-LOSOCV: every subject is the test subject once (all sessions of a STEAM2 subject together).
-In every fold 20% of the other subjects (rounded, at least one) are held out whole as
-validation subjects (seeded by dataset and test subject); member m0 is trained with each
-weight decay candidate and the candidate with the lowest validation loss is selected;
-members m1 and m2 are trained with it; the ensemble is the mean of the outputs of m0-m2.
-Early stopping on the validation loss (at least 20 epochs, patience 25, best checkpoint).
+LOSOCV: every subject is the test subject once (all sessions of a STEAM2 subject together);
+its windows are used for the test only. Training and validation: the kept windows of all
+other subjects, split 8:2 by window inside every subject (the 261007 rule): the first 80% of
+a subject's windows in time order for training, the last 20% for validation. Every other
+subject is thus in training and in validation, never with the same window. The split is
+contiguous rather than random: neighbouring 10 s windows carry nearly the same breathing,
+so a random split would put almost the same data on both sides. Member m0 is trained with
+each weight decay candidate and the candidate with the lowest validation loss is selected;
+members m1 and m2 are trained with it. Early stopping on the validation loss (at least 20
+epochs, patience 25, best checkpoint).
+Results are written for both: the ensemble (mean of the outputs of m0-m2) and the models
+without ensemble (every member scored on its own; "single model m0" is the one model of a
+fold without ensembling, "single models" the mean over m0-m2 scored one by one).
 
 Parameters and where they come from
 -----------------------------------
@@ -65,9 +73,10 @@ dropout 0.10), 64 Hz, 10 s windows, AdamW, learning rate 2e-4 with cosine decay 
 up to 240 epochs, at least 20, patience 25, batch 48, loss 0.45 SmoothL1 + 0.45 (1 - Pearson
 r) + 0.10 SmoothL1 of the first difference, gradient clipping 1.0, training jitter (shift up
 to 0.094 s, gain 0.95-1.05, noise 0.002-0.01), ensemble of 3 with the 261006 member seeds.
-From 261013: subject-wise validation (20%), weight decay candidates 0.01 / 0.1 / 1 on the
-convolution weights selected by m0 (261007: temporal split, 5e-5 on every parameter), the
-STEAM2 reading and the belt polarity. From 261007: all three datasets, the CapnoBase reading
+From 261013: weight decay candidates 0.01 / 0.1 / 1 on the convolution weights selected
+by m0 (261007: 5e-5 on every parameter), the STEAM2 reading and the belt polarity. From
+261007: the window-level validation split (last 20% of every training subject's windows;
+261013: 20% of the training subjects held out whole), all three datasets, the CapnoBase reading
 (expert breath labels as ground truth breaths, transport-delay alignment, PPG heart rates
 40-220 bpm, polyphase resampling). From the paper: the data selection above and the rate
 range 6-36 bpm. Set here: the 0.05-0.8 Hz band.
@@ -132,8 +141,12 @@ mean +- SD), Davies & Mandic mAE and mMAE with IQR, waveform PCC mean +- SD.
 Summary
 -------
 * fft_davies_overall.csv / fft_davies_overall_mean_sd.csv: the final model (ensemble of 3),
-  its single models, and member m0 of every weight decay candidate (single models);
-* ablation_comparison.csv: final ensemble vs its single models (paired Wilcoxon);
+  its single models (mean over m0-m2 scored one by one), its single model m0, and member m0
+  of every weight decay candidate;
+* per_subject_fft.csv (ensemble) and per_subject_fft_single_models.csv (every member m0,
+  m1, m2 on its own), minutes_ensemble.csv and minutes_single_models.csv;
+* ablation_comparison.csv: final ensemble vs its single models and vs its single model m0
+  (paired Wilcoxon);
 * weight_decay_selection.csv: per fold the validation loss of every candidate and the
   selected one; selection counts per dataset;
 * learning curves (mean +- SD over folds) and the train / validation gap at the best epoch;
@@ -300,12 +313,13 @@ WEIGHT_DECAY_261007 = 5e-5
 # Candidates of this script, applied to the convolution weights only (AdamW,
 # decoupled): per-step decay 2e-6, 2e-5 and 2e-4 at the starting learning
 # rate. In every LOSOCV fold member m0 is trained with each candidate and the
-# one with the lowest subject-wise validation loss is used for m1 and m2.
+# one with the lowest validation loss is used for m1 and m2.
 WEIGHT_DECAY_CANDIDATES = (1e-2, 1e-1, 1.0)
 SELECTION_MEMBER = 0
 LOSS_WEIGHTS = (0.45, 0.45, 0.10)
-# Share of the training subjects held out whole as validation subjects.
-VAL_SUBJECT_RATIO = 0.20
+# Validation: the last VAL_WINDOW_RATIO of the kept windows of every training
+# subject (time order; the 261007 rule); training: the rest of its windows.
+VAL_WINDOW_RATIO = 0.20
 # Inference on the held-out subject: its 10 s windows without overlap (0%),
 # as in 261007. Recorded in every summary; results of an earlier version that
 # combined overlapping test windows ("sliding_50pct_hann") are not reused.
@@ -483,7 +497,7 @@ class ModelOptions:
 
     @property
     def key(self) -> str:
-        return "rrwavenet_fs{}_{}_dec{}_p{:.2f}_wd{:g}_subjval".format(
+        return "rrwavenet_fs{}_{}_dec{}_p{:.2f}_wd{:g}_winval82".format(
             TARGET_FS,
             "stemfusion" if self.stem_fusion == "conv1x1" else "nostemfusion",
             "-".join(str(value) for value in self.decoder_dilations),
@@ -502,7 +516,7 @@ class ModelOptions:
         return (
             f"3 stem branches x 8 filters, {fusion}, residual encoder, "
             f"decoder dilations {dilations}, dropout {self.dropout:.2f}, "
-            f"weight decay {self.weight_decay:g} (conv weights), subject-wise validation"
+            f"weight decay {self.weight_decay:g} (conv weights), window-level validation 8:2"
         )
 
     def build(self) -> "DeepOnlyV16Decoder":
@@ -2804,19 +2818,25 @@ def write_selection_report(selection_root: Path, dataset_key: str) -> None:
 # LOSOCV window datasets
 # ---------------------------------------------------------------------------
 
-def validation_subjects(dataset_key: str, test_subject: str, train_subjects: Sequence[str]) -> List[str]:
-    """Training subjects held out whole as validation subjects in one fold.
+def select_subject_indices(n_windows: int, split: str) -> np.ndarray:
+    """Window indices of one subject for a split (the 261007 rule): "train" = the
+    first (1 - VAL_WINDOW_RATIO) of its windows in time order, "val" = the last
+    VAL_WINDOW_RATIO (rounded, at least one when the subject has two or more
+    windows), "test" = every window."""
+    if split == "test":
+        return np.arange(n_windows, dtype=int)
+    val_count = max(1, int(round(n_windows * VAL_WINDOW_RATIO))) if n_windows > 1 else 0
+    val_count = min(val_count, max(0, n_windows - 1))
+    if split == "train":
+        return np.arange(0, n_windows - val_count, dtype=int)
+    if split == "val":
+        return np.arange(n_windows - val_count, n_windows, dtype=int)
+    raise ValueError(split)
 
-    VAL_SUBJECT_RATIO of the training subjects (rounded, at least one, at
-    most all but one), drawn once per fold with a seed of the dataset and the
-    held-out subject: every member and weight decay candidate of the fold
-    uses the same validation subjects, and the test subject is never one.
-    """
-    candidates = sorted(str(subject) for subject in train_subjects if str(subject) != str(test_subject))
-    count = int(round(VAL_SUBJECT_RATIO * len(candidates)))
-    count = min(max(1, count), max(1, len(candidates) - 1))
-    rng = np.random.default_rng(stable_seed("261013-validation-subjects", dataset_key, test_subject))
-    return sorted(rng.choice(candidates, size=count, replace=False).tolist())
+
+def validation_text() -> str:
+    return (f"window-level {1 - VAL_WINDOW_RATIO:.0%}:{VAL_WINDOW_RATIO:.0%} inside every training "
+            f"subject: the last {VAL_WINDOW_RATIO:.0%} of its kept windows (time order) for validation")
 
 
 def test_metadata(
@@ -2846,9 +2866,9 @@ def release_memory(device: Optional[torch.device] = None) -> None:
 class SubjectWindowDataset(Dataset):
     """Lazy window view that avoids train/validation/test array duplication.
 
-    Splits: "train" and "val" are every Train_OK window of the given
-    subjects (training subjects or validation subjects of the fold; the split
-    is by subject, not in time); "test" is every kept window (inference never
+    Splits (261112, window-level): "train" = the first 80% and "val" = the
+    last 20% of the Train_OK windows of every given (training) subject, in
+    time order (select_subject_indices); "test" is every kept window (inference never
     depends on the reference). Training windows get the v16 jitter (random
     shift up to SHIFT_AUG_SEC, gain 0.95-1.05, small noise).
     """
@@ -2864,7 +2884,7 @@ class SubjectWindowDataset(Dataset):
         self.samples = []
         for subject in subjects:
             record = subject_data[subject]
-            indices = np.arange(len(record["low"]), dtype=int)
+            indices = select_subject_indices(len(record["low"]), split)
             if split in ("train", "val"):
                 indices = indices[record["train_ok"][indices]]
             self.samples.extend((subject, int(index)) for index in indices)
@@ -3551,7 +3571,6 @@ def train_one(
     test_subject: str,
     subject_data: Dict[str, dict],
     train_subjects: Sequence[str],
-    val_subjects: Sequence[str],
     member_root: Path,
     device: torch.device,
     epochs: int,
@@ -3565,9 +3584,9 @@ def train_one(
 ) -> Tuple[Dict[str, np.ndarray], List[dict], dict, Path, dict]:
     """Train one ensemble member of one LOSOCV fold and predict the held-out subject.
 
-    Validation: every window of the fold's validation subjects (subject-wise,
-    see validation_subjects); the training windows are every window of the
-    other training subjects. The best validation state is restored before
+    Validation: the last 20% of the windows of every training subject; training:
+    the first 80% (window-level, see select_subject_indices). The test subject
+    is never used. The best validation state is restored before
     testing. The training state is
     saved after every epoch; with `resume` an interrupted member continues
     from it, otherwise it starts over.
@@ -3589,12 +3608,11 @@ def train_one(
     if not resume and state_path.exists():
         state_path.unlink()
 
-    held_out = {str(subject) for subject in val_subjects}
-    fit_subjects = [subject for subject in train_subjects if str(subject) not in held_out]
-    if str(test_subject) in held_out or not fit_subjects:
-        raise RuntimeError(f"{test_subject}: invalid validation subjects {sorted(held_out)}")
+    fit_subjects = [subject for subject in train_subjects if str(subject) != str(test_subject)]
+    if len(fit_subjects) != len(train_subjects) or not fit_subjects:
+        raise RuntimeError(f"{test_subject}: the test subject is among the training subjects")
     train_dataset = SubjectWindowDataset(subject_data, fit_subjects, "train", True)
-    val_dataset = SubjectWindowDataset(subject_data, list(val_subjects), "val", False)
+    val_dataset = SubjectWindowDataset(subject_data, fit_subjects, "val", False)
     test_dataset = SubjectWindowDataset(subject_data, [test_subject], "test", False)
     train_loader = make_train_loader(train_dataset, batch_size, device)
     val_loader = make_eval_loader(val_dataset, batch_size, device)
@@ -3620,9 +3638,7 @@ def train_one(
     audit["Convergence_Epoch_95pct"] = convergence_epoch_95pct(history)
     if audit["Audit_Status"] != "PASS_BEST_VALIDATION_CHECKPOINT":
         raise RuntimeError(f"No valid checkpoint: {checkpoint}")
-    audit["Validation_Mode"] = (
-        f"subject-wise ({len(held_out)} validation subjects, {len(fit_subjects)} training subjects)"
-    )
+    audit["Validation_Mode"] = f"{validation_text()} ({len(fit_subjects)} training subjects)"
     pd.DataFrame([audit]).to_csv(audit_path, index=False, encoding="utf-8-sig")
 
     model.load_state_dict(torch.load(checkpoint, map_location=device))
@@ -3633,8 +3649,8 @@ def train_one(
         "N_Params": count_parameters(model),
         "Weight_Decay": float(model_options.weight_decay),
         "N_Train_Subjects": len(fit_subjects),
-        "N_Val_Subjects": len(held_out),
-        "Validation_Subjects": " ".join(sorted(held_out)),
+        "N_Val_Subjects": len(fit_subjects),
+        "Validation": validation_text(),
         "Train_Windows": len(train_loader.dataset),
         "Val_Windows": len(val_loader.dataset),
         "Val_Wave_Loss_At_Best": float(best_row["Val_Wave_Loss"]),
@@ -4352,10 +4368,7 @@ def build_manifest(
             "weight_decay": "selected per fold from the candidates (see weight_decay_selection)",
             "loss": "v16 hybrid waveform loss (SmoothL1, Pearson, derivative)",
             "loss_weights": list(LOSS_WEIGHTS),
-            "validation": (
-                f"subject-wise: {VAL_SUBJECT_RATIO:.0%} of the training subjects held out whole "
-                "(seeded per fold), best checkpoint"
-            ),
+            "validation": f"{validation_text()}; best checkpoint",
             "window_jitter": f"shift up to {SHIFT_AUG_SEC} s, gain 0.95-1.05, noise 0.002-0.01",
             "speed_augmentation": False,
             "rate_balanced_sampling": False,
@@ -4388,9 +4401,9 @@ def build_manifest(
         "window_conditions": [spec.name for spec in window_specs],
         "datasets": [DATASET_CONFIGS[key]["label"] for key in dataset_keys],
         "cross_validation": (
-            "Leave-One-Subject-Out, the same for every dataset: each subject is held out once; "
-            f"{VAL_SUBJECT_RATIO:.0%} of the other subjects as validation subjects, weight decay "
-            f"selected by m{SELECTION_MEMBER}, ensemble of the selected candidate's members"
+            "Leave-One-Subject-Out, the same for every dataset: each subject is held out once (test "
+            f"only); training / validation: {validation_text()}; weight decay selected by "
+            f"m{SELECTION_MEMBER}; results of the ensemble and of the single models"
         ),
     }
 
@@ -4480,7 +4493,6 @@ def run_member(
     dataset_label = DATASET_CONFIGS[dataset_key]["label"]
     seed = member_seed(spec, dataset_key, test_subject, member)
     train_subjects = [subject for subject in subjects if subject != test_subject]
-    val_subjects = validation_subjects(dataset_key, test_subject, train_subjects)
     start_time = time.time()
     outputs, metadata, audit, prediction_path, diagnostics = train_one(
         dataset_key,
@@ -4488,7 +4500,6 @@ def run_member(
         test_subject,
         subject_data,
         train_subjects,
-        val_subjects,
         root / "Members" / f"m{member}",
         device,
         epochs,
@@ -4673,13 +4684,12 @@ def select_weight_decay(
         )
     # Lowest validation loss; on a tie the smaller weight decay.
     best = min(rows, key=lambda row: (row["Best_Val_Loss"], row["Weight_Decay"]))
-    train_subjects = [subject for subject in subjects if subject != test_subject]
     record = {
         "Dataset": DATASET_CONFIGS[dataset_key]["label"],
         "Subject": str(test_subject),
         "Window_Config": spec.name,
         "Selection_Member": SELECTION_MEMBER,
-        "Validation_Subjects": validation_subjects(dataset_key, test_subject, train_subjects),
+        "Validation": validation_text(),
         "Candidates": rows,
         "Selected_Weight_Decay": best["Weight_Decay"],
         "Selected_Variant": best["Variant"],
@@ -4857,7 +4867,8 @@ def learning_curve_figure(path: Path, title: str, curves: Dict[int, List[pd.Data
     axes[0][0].set_ylabel("Loss")
     fig.suptitle(title, fontsize=11)
     fig.text(0.5, 0.005, "Lines: mean over the LOSOCV folds; bands: +-1 SD; dashed: fewer than half of the "
-             "folds still training. Validation = subject-wise validation subjects.", ha="center", fontsize=7)
+             "folds still training. Validation = the last 20% of every training subject's windows.",
+             ha="center", fontsize=7)
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -4877,7 +4888,7 @@ def summarize_results(
     figure_root = summary_root / "Figures"
     figure_root.mkdir(parents=True, exist_ok=True)
     reference_root = Path(args.reference_root) if args.reference_root else None
-    overall_rows, comparison_rows, reference_rows, subject_tables = [], [], [], []
+    overall_rows, comparison_rows, reference_rows, subject_tables, single_tables = [], [], [], [], []
     ensemble_frames, member_frames, missing_rows, selection_rows, gap_rows = [], [], [], [], []
     for spec in window_specs:
         for dataset_key in dataset_keys:
@@ -4907,7 +4918,7 @@ def summarize_results(
                     "Window_Config": spec.name,
                     "Subject": subject,
                     "Selected_Weight_Decay": record["Selected_Weight_Decay"],
-                    "Validation_Subjects": " ".join(record["Validation_Subjects"]),
+                    "Validation": record.get("Validation", ""),
                 }
                 for row in record["Candidates"]:
                     selection_row[f"Val_Loss_wd{row['Weight_Decay']:g}"] = row["Best_Val_Loss"]
@@ -4944,12 +4955,16 @@ def summarize_results(
             if not final.empty:
                 final["Window_Config"] = spec.name
                 ensemble_frames.append(final)
-                rows.append((f"Final: subject-wise validation, selected weight decay (ensemble of {args.members})",
-                             "final", final))
+                rows.append((f"Final: window-level validation 8:2, selected weight decay (ensemble of "
+                             f"{args.members})", "final", final))
             if not members.empty:
                 members["Window_Config"] = spec.name
                 member_frames.append(members)
                 rows.append(("w/o ensemble (single models of the final model)", "no_ensemble", members))
+                single = members[members["Member"] == SELECTION_MEMBER]
+                if not single.empty:
+                    rows.append((f"w/o ensemble: single model m{SELECTION_MEMBER} of the final model "
+                                 "(one model per fold)", f"single_m{SELECTION_MEMBER}", single))
             for variant in variants:
                 root = condition_root(results_root, variant.name, spec, dataset_key)
                 paths = [
@@ -4984,6 +4999,20 @@ def summarize_results(
                     result.update({"Dataset": dataset_label, "Window_Config": spec.name,
                                    "Comparison": "Final ensemble vs its single models"})
                     comparison_rows.append(result)
+                    single = members[members["Member"] == SELECTION_MEMBER]
+                    if not single.empty:
+                        result = paired_comparison(final, single)
+                        result.update({"Dataset": dataset_label, "Window_Config": spec.name,
+                                       "Comparison": f"Final ensemble vs its single model m{SELECTION_MEMBER}"})
+                        comparison_rows.append(result)
+                    for member, frame in members.groupby("Member", sort=True):
+                        table = per_subject_table(frame)
+                        if not table.empty:
+                            table.insert(0, "Member", int(member))
+                            table.insert(0, "Model", f"Single model m{int(member)} (no ensemble)")
+                            table.insert(0, "Window_Config", spec.name)
+                            table.insert(0, "Dataset", dataset_label)
+                            single_tables.append(table)
                 if not reference.empty:
                     result = paired_comparison(final, reference)
                     result.update({"Dataset": dataset_label, "Window_Config": spec.name,
@@ -4995,7 +5024,7 @@ def summarize_results(
                 learning_curve_figure(
                     figure_root / f"{dataset_label}_{spec.name}_learning_curves.png",
                     f"{dataset_label}, {spec.label}: learning curves of the final model "
-                    "(selected weight decay, subject-wise validation)",
+                    "(selected weight decay, window-level validation 8:2)",
                     curves,
                     max(int(frame["Epoch"].max()) for frames in curves.values() for frame in frames),
                 )
@@ -5018,6 +5047,7 @@ def summarize_results(
     )
     gaps = pd.DataFrame(gap_rows)
     per_subject = pd.concat(subject_tables, ignore_index=True) if subject_tables else pd.DataFrame()
+    per_subject_single = pd.concat(single_tables, ignore_index=True) if single_tables else pd.DataFrame()
     ensemble_all = pd.concat(ensemble_frames, ignore_index=True) if ensemble_frames else pd.DataFrame()
     member_all = pd.concat(member_frames, ignore_index=True) if member_frames else pd.DataFrame()
     missing = pd.DataFrame(missing_rows)
@@ -5030,6 +5060,7 @@ def summarize_results(
         "weight_decay_selection_counts": selection_counts,
         "training_gap": gaps,
         "per_subject_fft": per_subject,
+        "per_subject_fft_single_models": per_subject_single,
         "minutes_ensemble": ensemble_all,
         "minutes_single_models": member_all,
         "incomplete_folds": missing,
@@ -5047,7 +5078,9 @@ def summarize_results(
             "WD_selection_counts": selection_counts,
             "Training_gap": gaps,
             "Per_subject": per_subject,
+            "Per_subject_single_models": per_subject_single,
             "Minutes_ensemble": ensemble_all,
+            "Minutes_single_models": member_all,
             "Incomplete_folds": missing,
         },
     )
@@ -5065,13 +5098,14 @@ def summarize_results(
         for dataset, frame in selection_counts.groupby("Dataset", sort=False):
             print("  " + dataset + ": " + ", ".join(
                 f"{row['Selected_Weight_Decay']:g} in {row['N_Folds']} folds" for _, row in frame.iterrows()))
-    for title, table in (("Final ensemble vs its single models", comparison),
+    for title, table in (("Final ensemble vs its single models / single model m0", comparison),
                          ("Final ensemble vs 261007 full ensemble", reference_table)):
         if table.empty:
             continue
         print(f"\n{title} (per-subject MAE, mean ± SD; Wilcoxon):")
         for _, row in table.iterrows():
-            print(f"  {row['Dataset']:<8s} final {mean_sd_text(row['Subject_MAE_Final'], row['Subject_MAE_Final_SD'])}"
+            print(f"  {row['Dataset']:<8s} {row['Comparison'][len('Final ensemble vs '):]:<26s} "
+                  f"final {mean_sd_text(row['Subject_MAE_Final'], row['Subject_MAE_Final_SD'])}"
                   f" vs {mean_sd_text(row['Subject_MAE_Other'], row['Subject_MAE_Other_SD'])}, diff (other - final) "
                   f"{mean_sd_text(row['Subject_MAE_Diff_Other_minus_Final'], row['Subject_MAE_Diff_SD'])}; final "
                   f"better in {row['N_Subjects_Final_Better']}/{row['N_Subjects_Paired']}, "
@@ -5100,9 +5134,9 @@ def parse_shard(value: Optional[str]) -> Tuple[int, int]:
 
 
 def run_experiment(args: argparse.Namespace) -> None:
-    global VARIANTS, VAL_SUBJECT_RATIO
+    global VARIANTS, VAL_WINDOW_RATIO
     VARIANTS = build_variants(args.weight_decays)
-    VAL_SUBJECT_RATIO = float(args.val_subject_ratio)
+    VAL_WINDOW_RATIO = float(args.val_window_ratio)
     if not 0 <= SELECTION_MEMBER < args.members:
         raise ValueError("--members must include the selection member m0")
     results_root = Path(args.results_root).resolve()
@@ -5147,7 +5181,7 @@ def run_experiment(args: argparse.Namespace) -> None:
             f"{count_parameters(variant.options.build())} parameters"
         )
     print(
-        f"Subject-wise validation ({VAL_SUBJECT_RATIO:.0%} of the training subjects); weight decay "
+        f"Validation: {validation_text()}; weight decay "
         f"candidates {', '.join(f'{v.options.weight_decay:g}' for v in variants)} (selected per fold "
         f"by the validation loss of m{SELECTION_MEMBER}); ensemble of {args.members}; device={device}"
     )
@@ -5267,10 +5301,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Weight decay candidates (default %(default)s); one value = no selection.",
     )
     parser.add_argument(
-        "--val-subject-ratio",
+        "--val-window-ratio",
         type=float,
-        default=VAL_SUBJECT_RATIO,
-        help="Share of the training subjects held out as validation subjects (default %(default)s).",
+        default=VAL_WINDOW_RATIO,
+        help="Share of every training subject's windows (the last ones) used for validation "
+             "(default %(default)s).",
     )
     parser.add_argument(
         "--reference-root",
