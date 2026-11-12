@@ -44,8 +44,13 @@ Feature analysis (in this file; inference only, nothing is trained)
       than at Stem;
     - PC1 respiratory-band ratio: PC1 of the standardized channels (all test windows of the
       subject), periodogram (Hann), power 0.1-0.5 Hz / power above 0 Hz;
-    - PC1 ACF r: autocorrelation of PC1 over contiguous windows (runs >= 24 s, lags up to
-      12 s), Pearson r with the target autocorrelation over lags 2-10 s;
+    - PC1 ACF r: autocorrelation of PC1 and of the target over contiguous windows (runs
+      >= 24 s, mean removed per run, lag 0 = 1), Pearson r of the two over a band of lags.
+      Two settings in one run (the ACF is computed once, up to 12 s), each written as a
+      complete set to its own subfolder of Feature_Analysis\:
+        ACF_1-5s_lag0-10s    r over lags 1-5 s, ACF drawn 0-10 s
+        ACF_2-10s_lag0-12s   r over lags 2-10 s, ACF drawn 0-12 s (as in 261106)
+      Channel |r|, PSD and PC1 variance share are the same in both;
     - PC1 variance share.
   Values are averaged over the subject's models. Statistics: two-sided paired Wilcoxon
   signed-rank over subjects, per dataset and for all datasets: each block vs Stem and vs the
@@ -62,7 +67,8 @@ the analysis uses the GPU when there is one, --force-cpu runs it on the CPU).
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261110_RRWaveNet_DeepEncoder_B6)
   Code\                         the generated training scripts, changes.txt
   01_261013_B6\, 02_261007_B6\  LOSOCV results in the layout of each version
-  Feature_Analysis\             261110_RRWaveNet_DeepEncoder_B6_Feature_Analysis.xlsx, RESULTS.md,
+  Feature_Analysis\ACF_1-5s_lag0-10s\, Feature_Analysis\ACF_2-10s_lag0-12s\   one complete set each:
+                                261110_RRWaveNet_DeepEncoder_B6_Feature_Analysis.xlsx, RESULTS.md,
                                 key_results.csv, block_tests.csv, six_vs_four_tests.csv,
                                 subjects.csv, channels.csv, models.csv, coverage.csv,
                                 skipped_subjects.csv, curves.npz,
@@ -135,8 +141,11 @@ WINDOW = "w10s_nonoverlap"
 WINDOW_SEC = 10.0
 MEMBERS = 3
 RESP_BAND_HZ = (0.1, 0.5)
-ACF_MAX_LAG_SEC = 12.0
-ACF_BAND_SEC = (2.0, 10.0)
+# ACF analyses, each written to its own subfolder of Feature_Analysis:
+# (subfolder, lags of the ACF r in s, largest lag drawn in s)
+ACF_SETTINGS = (("ACF_1-5s_lag0-10s", (1.0, 5.0), 10.0),
+                ("ACF_2-10s_lag0-12s", (2.0, 10.0), 12.0))
+ACF_MAX_LAG_SEC = max(setting[2] for setting in ACF_SETTINGS)  # the ACF is computed once, up to this lag
 ACF_MIN_RUN_SEC = 24.0
 PSD_PLOT_MAX_HZ = 1.0
 ALL_DATASETS = "All datasets"
@@ -146,7 +155,7 @@ ENCODER_TAGS = {SIX: "six", FOUR: "four"}
 MEASURES = {
     "Channel_AbsR_Mean": "Mean |channel r| with the target",
     "RespBand_Ratio": "PC1 resp-band power ratio (0.1-0.5 Hz)",
-    "ACF_r": "PC1 ACF similarity to the target (r, lags 2-10 s)",
+    "ACF_r": "PC1 ACF similarity to the target (r, lags {band})",  # {band}: the lags of the ACF setting
     "PC1_Variance_Share": "PC1 variance share",
 }
 FIGURE_MEASURES = ("Channel_AbsR_Mean", "RespBand_Ratio", "ACF_r")
@@ -584,9 +593,10 @@ def mean_acf(signals: np.ndarray, runs: List[List[int]], max_lag: int, min_lengt
     return total / weight if weight > 0 else np.full(max_lag + 1, np.nan)
 
 
-def acf_similarity(acf: np.ndarray, target_acf: np.ndarray, fs: float) -> float:
+def acf_similarity(acf: np.ndarray, target_acf: np.ndarray, fs: float, lag_band: Tuple[float, float]) -> float:
+    """Pearson r of the two autocorrelations over the lags of lag_band (s)."""
     lags = np.arange(acf.size) / fs
-    band = (lags >= ACF_BAND_SEC[0]) & (lags <= ACF_BAND_SEC[1])
+    band = (lags >= lag_band[0]) & (lags <= lag_band[1])
     a, b = acf[band], target_acf[band]
     if not (np.isfinite(a).all() and np.isfinite(b).all()) or np.std(a) == 0 or np.std(b) == 0:
         return np.nan
@@ -713,7 +723,8 @@ def analyse_encoder(version: str, encoder: str, module, root: Path, dataset_key:
                     row[f"{stage}_Channel_AbsR_Mean"] = float(np.nanmean(abs_r))
                     row[f"{stage}_PC1_Variance_Share"] = share
                     row[f"{stage}_RespBand_Ratio"] = band_ratio(frequencies, psd)
-                    row[f"{stage}_ACF_r"] = acf_similarity(acf, target_acf, fs)
+                    for setting, lag_band, _ in ACF_SETTINGS:  # the ACF r of every setting
+                        row[acf_column(stage, setting)] = acf_similarity(acf, target_acf, fs, lag_band)
                 rows.append(row)
                 store["frequencies"] = frequencies
                 store["fs"] = fs
@@ -831,7 +842,25 @@ def dataset_groups(frame: pd.DataFrame, datasets: List[str]) -> List[Tuple[str, 
     return groups + [(ALL_DATASETS, frame)] if len(groups) > 1 else groups
 
 
-def block_tests(subjects: pd.DataFrame, channels: pd.DataFrame, datasets: List[str]) -> pd.DataFrame:
+def acf_column(stage: str, setting: str) -> str:
+    return f"{stage}_ACF_r|{setting}"
+
+
+def setting_columns(frame: pd.DataFrame, setting: str) -> pd.DataFrame:
+    """The ACF r of one setting as <stage>_ACF_r; the columns of the other settings dropped."""
+    suffix = f"|{setting}"
+    keep = {c: c[:-len(suffix)] for c in frame.columns if c.endswith(suffix)}
+    other = [c for c in frame.columns if "|" in c and c not in keep]
+    return frame.drop(columns=other).rename(columns=keep)
+
+
+def measure_labels(lag_band: Tuple[float, float]) -> Dict[str, str]:
+    lag_text = f"{lag_band[0]:g}-{lag_band[1]:g} s"
+    return {measure: label.replace("{band}", lag_text) for measure, label in MEASURES.items()}
+
+
+def block_tests(subjects: pd.DataFrame, channels: pd.DataFrame, datasets: List[str],
+                labels: Dict[str, str]) -> pd.DataFrame:
     """Per version, encoder, dataset, measure and stage: mean, vs Stem and vs the block before it."""
     rows = []
     for (version, encoder), part in subjects.groupby(["Version", "Encoder"], sort=False):
@@ -842,7 +871,7 @@ def block_tests(subjects: pd.DataFrame, channels: pd.DataFrame, datasets: List[s
         for dataset, frame in dataset_groups(part, datasets):
             n = len(frame)
             index = pd.MultiIndex.from_arrays([frame["Dataset"], frame["Subject"]])
-            for measure, description in MEASURES.items():
+            for measure, description in labels.items():
                 stem = frame[f"Stem_{measure}"].to_numpy(float)
                 for position, stage in enumerate(stages):
                     values = frame[f"{stage}_{measure}"].to_numpy(float)
@@ -935,7 +964,7 @@ def key_results(subjects: pd.DataFrame, tests: pd.DataFrame, versus: pd.DataFram
 
 
 def figure_block_summary(path: Path, version: str, dataset: str, frames: Dict[str, pd.DataFrame],
-                         tests: pd.DataFrame) -> None:
+                         tests: pd.DataFrame, labels: Dict[str, str]) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -968,7 +997,7 @@ def figure_block_summary(path: Path, version: str, dataset: str, frames: Dict[st
         axis.set_xticks(range(len(six_stages)))
         axis.set_xticklabels([stage_label(s) for s in six_stages], fontsize=8)
         axis.set_xlim(-0.5, len(six_stages) - 0.5)
-        axis.set_title(MEASURES[measure], fontsize=10)
+        axis.set_title(labels[measure], fontsize=10)
         axis.grid(axis="y", color=GRID_COLOR)
         axis.set_axisbelow(True)
         for side in ("top", "right"):
@@ -990,14 +1019,14 @@ def figure_block_summary(path: Path, version: str, dataset: str, frames: Dict[st
 
 def figure_pc1_curves(path: Path, title: str, frequencies: np.ndarray, lags: np.ndarray,
                       psd: Dict[str, np.ndarray], acf: Dict[str, np.ndarray], stages: List[str],
-                      frame: pd.DataFrame) -> None:
+                      frame: pd.DataFrame, lag_band: Tuple[float, float], max_lag_sec: float) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     shown = frequencies <= PSD_PLOT_MAX_HZ
     fig, axes = plt.subplots(1, 2, figsize=(14.0, 4.8))
     axes[0].axvspan(*RESP_BAND_HZ, color="#f0efec", zorder=0)
-    axes[1].axvspan(*ACF_BAND_SEC, color="#f0efec", zorder=0)
+    axes[1].axvspan(*lag_band, color="#f0efec", zorder=0)
     names = ["Target"] + stages
     for name in names:
         color = TARGET_COLOR if name == "Target" else STAGE_RAMP[stages.index(name)]
@@ -1019,8 +1048,9 @@ def figure_pc1_curves(path: Path, title: str, frequencies: np.ndarray, lags: np.
     axes[0].set_title("PC1 power spectrum (shaded: 0.1-0.5 Hz)", fontsize=10)
     axes[1].set_xlabel("Lag (s)")
     axes[1].set_ylabel("Normalized autocorrelation")
-    axes[1].set_xlim(0, ACF_MAX_LAG_SEC)
-    axes[1].set_title("PC1 autocorrelation (shaded: lags 2-10 s used for r)", fontsize=10)
+    axes[1].set_xlim(0, max_lag_sec)
+    axes[1].set_title(f"PC1 autocorrelation (shaded: lags {lag_band[0]:g}-{lag_band[1]:g} s used for r)",
+                      fontsize=10)
     for axis in axes:
         axis.grid(True, color=GRID_COLOR)
         axis.set_axisbelow(True)
@@ -1048,10 +1078,20 @@ def save_table(frame: pd.DataFrame, path: Path) -> None:
 
 
 def write_analysis(out_root: Path, store: dict, datasets: List[str]) -> None:
+    """One complete set of tables and figures per ACF setting, each in its own subfolder."""
+    for setting, lag_band, max_lag_sec in ACF_SETTINGS:
+        print(f"\n=== {setting}: ACF r over lags {lag_band[0]:g}-{lag_band[1]:g} s, ACF drawn 0-{max_lag_sec:g} s "
+              f"-> {out_root / setting}", flush=True)
+        write_setting(out_root / setting, store, datasets, setting, lag_band, max_lag_sec)
+
+
+def write_setting(out_root: Path, store: dict, datasets: List[str], setting: str, lag_band: Tuple[float, float],
+                  max_lag_sec: float) -> None:
     out_root.mkdir(parents=True, exist_ok=True)
+    labels = measure_labels(lag_band)
     figure_root = out_root / "Figures"
     figure_root.mkdir(parents=True, exist_ok=True)
-    members = pd.DataFrame(store["rows"])
+    members = setting_columns(pd.DataFrame(store["rows"]), setting)
     channels = pd.DataFrame(store["channels"])
     models = pd.DataFrame(store["models"])
     coverage = pd.DataFrame(store["coverage"])
@@ -1070,11 +1110,14 @@ def write_analysis(out_root: Path, store: dict, datasets: List[str]) -> None:
     subjects = members.groupby(keys, sort=False)[values].mean().reset_index()
     subjects.insert(4, "N_Models", members.groupby(keys, sort=False).size().to_numpy())
     channel_subject = channels.groupby(keys + ["Stage", "Channel"], sort=False)["Abs_r"].mean().reset_index()
-    tests = block_tests(subjects, channel_subject, datasets)
+    tests = block_tests(subjects, channel_subject, datasets, labels)
     versus = six_vs_four(subjects, datasets)
     key = key_results(subjects, tests, versus)
     fs = float(store["fs"])
-    lags = np.arange(int(round(ACF_MAX_LAG_SEC * fs)) + 1) / fs
+    lags = np.arange(int(round(max_lag_sec * fs)) + 1) / fs
+    # the ACF curves (computed up to ACF_MAX_LAG_SEC) cut at the largest lag of this setting
+    curves = {key: {name: (values[:len(lags)] if name.endswith("_ACF") else values) for name, values in item.items()}
+              for key, item in store["curves"].items()}
     frequencies = store["frequencies"]
     curve_arrays = {"frequencies_hz": frequencies, "acf_lags_sec": lags}
     for version, part in subjects.groupby("Version", sort=False):
@@ -1082,14 +1125,14 @@ def write_analysis(out_root: Path, store: dict, datasets: List[str]) -> None:
         for dataset, _ in dataset_groups(part, datasets):
             chosen = {e: (f if dataset == ALL_DATASETS else f[f["Dataset"] == dataset]) for e, f in frames.items()}
             tag = f"{version}_{dataset.replace(' ', '_')}"
-            figure_block_summary(figure_root / f"{tag}_block_summary.png", version, dataset, chosen, tests)
+            figure_block_summary(figure_root / f"{tag}_block_summary.png", version, dataset, chosen, tests, labels)
             for encoder, frame in chosen.items():
                 if frame.empty:
                     continue
                 stages = stage_names(len(ENCODERS[encoder]))
                 names = ["Target"] + stages
-                psd = mean_curves(frame, store["curves"], [f"{n}_PSD" for n in names])
-                acf = mean_curves(frame, store["curves"], [f"{n}_ACF" for n in names])
+                psd = mean_curves(frame, curves, [f"{n}_PSD" for n in names])
+                acf = mean_curves(frame, curves, [f"{n}_ACF" for n in names])
                 psd = {n: psd[f"{n}_PSD"] for n in names}
                 acf = {n: acf[f"{n}_ACF"] for n in names}
                 for n in names:
@@ -1097,7 +1140,7 @@ def write_analysis(out_root: Path, store: dict, datasets: List[str]) -> None:
                     curve_arrays[f"{tag}_{ENCODER_TAGS[encoder]}_ACF_{n}"] = acf[n]
                 figure_pc1_curves(figure_root / f"{tag}_{ENCODER_TAGS[encoder]}_blocks_pc1_curves.png",
                                   f"{version} | {dataset} | {encoder} (n = {len(frame)}) | mean over subjects",
-                                  frequencies, lags, psd, acf, stages, frame)
+                                  frequencies, lags, psd, acf, stages, frame, lag_band, max_lag_sec)
     np.savez_compressed(out_root / "curves.npz", **curve_arrays)
     tables = {"Key_Results": key, "Block_Tests": tests, "Six_vs_Four": versus, "Subjects": subjects,
               "Models": models, "Coverage": coverage, "Skipped": skipped,
@@ -1108,7 +1151,10 @@ def write_analysis(out_root: Path, store: dict, datasets: List[str]) -> None:
                   ("Windows", "10 s test windows of the held-out subject (LOSOCV), read by the version's own code"),
                   ("Stages", "Stem = stem fusion output (encoder input); B1-B6 d = 1, 2, 4, 8, 16, 32; encoder "
                              "receptive field B4 6.58 s, B5 13.58 s, B6 27.58 s (10 s window = 640 samples)"),
-                  ("Measures", "; ".join(f"{k}: {v}" for k, v in MEASURES.items())),
+                  ("Measures", "; ".join(f"{k}: {v}" for k, v in labels.items())),
+                  ("ACF", f"{setting}: r over lags {lag_band[0]:g}-{lag_band[1]:g} s, ACF drawn up to {max_lag_sec:g} s; "
+                          "PC1 and target of contiguous 10 s test windows joined into runs >= 24 s, mean removed per "
+                          "run, lag 0 = 1, runs averaged by length"),
                   ("Statistics", "values averaged over windows, then over the subject's 3 models; paired two-sided "
                                  "Wilcoxon over subjects; p not adjusted"),
               ], columns=["Item", "Description"])}
@@ -1127,20 +1173,21 @@ def write_analysis(out_root: Path, store: dict, datasets: List[str]) -> None:
             for name, frame in tables.items():
                 frame.to_excel(writer, sheet_name=name[:31], index=False)
         print(f"  [Locked] {path.name} is held by another program; saved as {writer_path.name}")
-    write_results_md(out_root, key)
+    write_results_md(out_root, key, lag_band)
     print(f"\nFeature analysis: {writer_path}")
 
 
-def write_results_md(out_root: Path, key: pd.DataFrame) -> None:
+def write_results_md(out_root: Path, key: pd.DataFrame, lag_band: Tuple[float, float]) -> None:
     def cell(row, columns, p_column) -> str:
         if any(c not in row or pd.isna(row[c]) for c in columns):
             return "-"
         return "→".join(f"{row[c]:.3f}" for c in columns) + f" ({p_text(row[p_column])})"
 
-    lines = [f"# {NAME}: encoder block 별 feature 분석 (10 s window)", "",
+    lag_text = f"{lag_band[0]:g}-{lag_band[1]:g} s"
+    lines = [f"# {NAME}: encoder block 별 feature 분석 (10 s window, ACF r: lag {lag_text})", "",
              "6-block: Stem → B4 → B6 (괄호: B6 vs Stem의 p). B5/B6 추가 효과: 같은 6-block 모델의 B6 vs B4. "
              "4-block (이전 학습 모델): Stem → B4 (괄호: B4 vs Stem의 p). 피험자 단위 양측 paired Wilcoxon, p는 보정 전 값.", ""]
-    for name, title in (("ChannelAbsR", "channel |r|"), ("RespBandRatio", "PC1 호흡대역 비율"), ("ACF_r", "PC1 ACF r")):
+    for name, title in (("ChannelAbsR", "channel |r|"), ("RespBandRatio", "PC1 호흡대역 비율"), ("ACF_r", f"PC1 ACF r (lag {lag_text})")):
         lines += [f"## {title}", "",
                   "| Version | 데이터셋 | N (6/4) | 6-block Stem→B4→B6 (p B6 vs Stem) | 6-block B6−B4 (p) | "
                   "4-block Stem→B4 (p) | 6-block B6 vs 4-block B4 (p) |",
@@ -1162,7 +1209,7 @@ def write_results_md(out_root: Path, key: pd.DataFrame) -> None:
     shown = [c for c in key.columns if c in ("Version", "Dataset", "N_Six", "N_Four") or c.startswith("Six_ACF_r")
              or c.startswith("Four_ACF_r")]
     pd.set_option("display.width", 220)
-    print("\nKey results (PC1 ACF r; all measures in key_results.csv / RESULTS.md):")
+    print(f"\nKey results (PC1 ACF r, lags {lag_text}; all measures in key_results.csv / RESULTS.md):")
     print(key[shown].to_string(index=False, float_format=lambda v: f"{v:.3g}"))
 
 
@@ -1300,8 +1347,8 @@ def compare(args: argparse.Namespace, runs: Sequence[tuple]) -> Optional[Path]:
         ("Paired_Tests", "same subjects; Wilcoxon signed-rank; BH over all tests of a subject set and metric; "
                          "A_Better = subjects with lower FFT_MAE / higher PCC with six blocks; Same_Minutes_And_GT: "
                          "subjects scored on the same minutes against the same ground truth"),
-        ("Feature analysis", f"{ANALYSIS_FOLDER}\\ (six blocks Stem-B6 and four blocks Stem-B4: channel |r|, "
-                             "PC1 respiratory-band power, PC1 ACF)"),
+        ("Feature analysis", f"{ANALYSIS_FOLDER}\\<ACF setting>\\ (six blocks Stem-B6 and four blocks Stem-B4: "
+                             "channel |r|, PC1 respiratory-band power, PC1 ACF; ACF r over lags 1-5 s and 2-10 s)"),
         ("Issue subjects", "; ".join(f"{d} {', '.join(s)}" for d, s in EXCLUDED.items())),
     ], columns=["Item", "Description"])
     sheets = {"Summary": summary, "Paired_Tests": tests, "Per_Subject": per_subject,
