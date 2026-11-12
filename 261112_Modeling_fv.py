@@ -54,11 +54,14 @@ Cross-validation (the same for every dataset)
 ---------------------------------------------
 LOSOCV: every subject is the test subject once (all sessions of a STEAM2 subject together);
 its windows are used for the test only. Training and validation: the kept windows of all
-other subjects, split 8:2 by window inside every subject (the 261007 rule): the first 80% of
-a subject's windows in time order for training, the last 20% for validation. Every other
-subject is thus in training and in validation, never with the same window. The split is
-contiguous rather than random: neighbouring 10 s windows carry nearly the same breathing,
-so a random split would put almost the same data on both sides. Member m0 is trained with
+other subjects, split 8:2 by window at random inside every subject (a random 20% of every
+subject's windows for validation, the other 80% for training). The draw is seeded by the
+dataset, the test subject and the subject, so the split is the same for every member and
+weight decay candidate of a fold and is reproduced on a rerun. Every other subject is thus
+in training and in validation, never with the same window. (Neighbouring 10 s windows carry
+nearly the same breathing, so validation windows have close neighbours in training: the
+validation loss is closer to the training loss than with a subject-wise or contiguous
+split.) Member m0 is trained with
 each weight decay candidate and the candidate with the lowest validation loss is selected;
 members m1 and m2 are trained with it. Early stopping on the validation loss (at least 20
 epochs, patience 25, best checkpoint).
@@ -75,8 +78,9 @@ r) + 0.10 SmoothL1 of the first difference, gradient clipping 1.0, training jitt
 to 0.094 s, gain 0.95-1.05, noise 0.002-0.01), ensemble of 3 with the 261006 member seeds.
 From 261013: weight decay candidates 0.01 / 0.1 / 1 on the convolution weights selected
 by m0 (261007: 5e-5 on every parameter), the STEAM2 reading and the belt polarity. From
-261007: the window-level validation split (last 20% of every training subject's windows;
-261013: 20% of the training subjects held out whole), all three datasets, the CapnoBase reading
+261007: validation inside the training subjects, 8:2 by window (261007: the last 20% in time
+order; here a random 20%; 261013: 20% of the training subjects held out whole), all three
+datasets, the CapnoBase reading
 (expert breath labels as ground truth breaths, transport-delay alignment, PPG heart rates
 40-220 bpm, polyphase resampling). From the paper: the data selection above and the rate
 range 6-36 bpm. Set here: the 0.05-0.8 Hz band.
@@ -317,8 +321,8 @@ WEIGHT_DECAY_261007 = 5e-5
 WEIGHT_DECAY_CANDIDATES = (1e-2, 1e-1, 1.0)
 SELECTION_MEMBER = 0
 LOSS_WEIGHTS = (0.45, 0.45, 0.10)
-# Validation: the last VAL_WINDOW_RATIO of the kept windows of every training
-# subject (time order; the 261007 rule); training: the rest of its windows.
+# Validation: a random VAL_WINDOW_RATIO of the kept windows of every training
+# subject (seeded per fold and subject); training: the rest of its windows.
 VAL_WINDOW_RATIO = 0.20
 # Inference on the held-out subject: its 10 s windows without overlap (0%),
 # as in 261007. Recorded in every summary; results of an earlier version that
@@ -497,7 +501,7 @@ class ModelOptions:
 
     @property
     def key(self) -> str:
-        return "rrwavenet_fs{}_{}_dec{}_p{:.2f}_wd{:g}_winval82".format(
+        return "rrwavenet_fs{}_{}_dec{}_p{:.2f}_wd{:g}_winrand82".format(
             TARGET_FS,
             "stemfusion" if self.stem_fusion == "conv1x1" else "nostemfusion",
             "-".join(str(value) for value in self.decoder_dilations),
@@ -516,7 +520,7 @@ class ModelOptions:
         return (
             f"3 stem branches x 8 filters, {fusion}, residual encoder, "
             f"decoder dilations {dilations}, dropout {self.dropout:.2f}, "
-            f"weight decay {self.weight_decay:g} (conv weights), window-level validation 8:2"
+            f"weight decay {self.weight_decay:g} (conv weights), random window-level validation 8:2"
         )
 
     def build(self) -> "DeepOnlyV16Decoder":
@@ -2818,25 +2822,33 @@ def write_selection_report(selection_root: Path, dataset_key: str) -> None:
 # LOSOCV window datasets
 # ---------------------------------------------------------------------------
 
-def select_subject_indices(n_windows: int, split: str) -> np.ndarray:
-    """Window indices of one subject for a split (the 261007 rule): "train" = the
-    first (1 - VAL_WINDOW_RATIO) of its windows in time order, "val" = the last
-    VAL_WINDOW_RATIO (rounded, at least one when the subject has two or more
-    windows), "test" = every window."""
+def select_subject_indices(n_windows: int, split: str, seed: Optional[int] = None) -> np.ndarray:
+    """Window indices of one subject for a split: "val" = a random VAL_WINDOW_RATIO
+    of its windows (rounded, at least one when the subject has two or more
+    windows), "train" = the others, both drawn from one permutation seeded by
+    `seed` (the same seed gives the same split); "test" = every window."""
     if split == "test":
         return np.arange(n_windows, dtype=int)
+    if seed is None:
+        raise ValueError("the training / validation split needs a seed")
     val_count = max(1, int(round(n_windows * VAL_WINDOW_RATIO))) if n_windows > 1 else 0
     val_count = min(val_count, max(0, n_windows - 1))
+    order = np.random.default_rng(seed).permutation(n_windows)
     if split == "train":
-        return np.arange(0, n_windows - val_count, dtype=int)
+        return np.sort(order[val_count:]).astype(int)
     if split == "val":
-        return np.arange(n_windows - val_count, n_windows, dtype=int)
+        return np.sort(order[:val_count]).astype(int)
     raise ValueError(split)
+
+
+def split_seed(dataset_key: str, test_subject: str, subject: str) -> int:
+    """Seed of the random training / validation split of one subject in one fold."""
+    return stable_seed("261112-random-window-split", dataset_key, test_subject, subject)
 
 
 def validation_text() -> str:
     return (f"window-level {1 - VAL_WINDOW_RATIO:.0%}:{VAL_WINDOW_RATIO:.0%} inside every training "
-            f"subject: the last {VAL_WINDOW_RATIO:.0%} of its kept windows (time order) for validation")
+            f"subject: a random {VAL_WINDOW_RATIO:.0%} of its kept windows (seeded per fold) for validation")
 
 
 def test_metadata(
@@ -2866,9 +2878,10 @@ def release_memory(device: Optional[torch.device] = None) -> None:
 class SubjectWindowDataset(Dataset):
     """Lazy window view that avoids train/validation/test array duplication.
 
-    Splits (261112, window-level): "train" = the first 80% and "val" = the
-    last 20% of the Train_OK windows of every given (training) subject, in
-    time order (select_subject_indices); "test" is every kept window (inference never
+    Splits (261112, window-level, random): "val" = a random 20% and "train" =
+    the other 80% of the Train_OK windows of every given (training) subject,
+    seeded by split_key (dataset, test subject) and the subject
+    (select_subject_indices); "test" is every kept window (inference never
     depends on the reference). Training windows get the v16 jitter (random
     shift up to SHIFT_AUG_SEC, gain 0.95-1.05, small noise).
     """
@@ -2879,12 +2892,14 @@ class SubjectWindowDataset(Dataset):
         subjects: Sequence[str],
         split: str,
         augment: bool,
+        split_key: Optional[Tuple[str, str]] = None,
     ):
         self.subject_data = subject_data
         self.samples = []
         for subject in subjects:
             record = subject_data[subject]
-            indices = select_subject_indices(len(record["low"]), split)
+            seed = split_seed(split_key[0], split_key[1], subject) if split_key is not None else None
+            indices = select_subject_indices(len(record["low"]), split, seed)
             if split in ("train", "val"):
                 indices = indices[record["train_ok"][indices]]
             self.samples.extend((subject, int(index)) for index in indices)
@@ -3584,9 +3599,10 @@ def train_one(
 ) -> Tuple[Dict[str, np.ndarray], List[dict], dict, Path, dict]:
     """Train one ensemble member of one LOSOCV fold and predict the held-out subject.
 
-    Validation: the last 20% of the windows of every training subject; training:
-    the first 80% (window-level, see select_subject_indices). The test subject
-    is never used. The best validation state is restored before
+    Validation: a random 20% of the windows of every training subject; training:
+    the other 80% (window-level, seeded per fold and subject, see
+    select_subject_indices). The test subject is never used. The best
+    validation state is restored before
     testing. The training state is
     saved after every epoch; with `resume` an interrupted member continues
     from it, otherwise it starts over.
@@ -3611,8 +3627,9 @@ def train_one(
     fit_subjects = [subject for subject in train_subjects if str(subject) != str(test_subject)]
     if len(fit_subjects) != len(train_subjects) or not fit_subjects:
         raise RuntimeError(f"{test_subject}: the test subject is among the training subjects")
-    train_dataset = SubjectWindowDataset(subject_data, fit_subjects, "train", True)
-    val_dataset = SubjectWindowDataset(subject_data, fit_subjects, "val", False)
+    split_key = (dataset_key, str(test_subject))  # the same split for every member and candidate
+    train_dataset = SubjectWindowDataset(subject_data, fit_subjects, "train", True, split_key)
+    val_dataset = SubjectWindowDataset(subject_data, fit_subjects, "val", False, split_key)
     test_dataset = SubjectWindowDataset(subject_data, [test_subject], "test", False)
     train_loader = make_train_loader(train_dataset, batch_size, device)
     val_loader = make_eval_loader(val_dataset, batch_size, device)
@@ -4867,7 +4884,7 @@ def learning_curve_figure(path: Path, title: str, curves: Dict[int, List[pd.Data
     axes[0][0].set_ylabel("Loss")
     fig.suptitle(title, fontsize=11)
     fig.text(0.5, 0.005, "Lines: mean over the LOSOCV folds; bands: +-1 SD; dashed: fewer than half of the "
-             "folds still training. Validation = the last 20% of every training subject's windows.",
+             "folds still training. Validation = a random 20% of every training subject's windows.",
              ha="center", fontsize=7)
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
     fig.savefig(path, dpi=150)
@@ -4955,7 +4972,7 @@ def summarize_results(
             if not final.empty:
                 final["Window_Config"] = spec.name
                 ensemble_frames.append(final)
-                rows.append((f"Final: window-level validation 8:2, selected weight decay (ensemble of "
+                rows.append((f"Final: random window-level validation 8:2, selected weight decay (ensemble of "
                              f"{args.members})", "final", final))
             if not members.empty:
                 members["Window_Config"] = spec.name
@@ -5024,7 +5041,7 @@ def summarize_results(
                 learning_curve_figure(
                     figure_root / f"{dataset_label}_{spec.name}_learning_curves.png",
                     f"{dataset_label}, {spec.label}: learning curves of the final model "
-                    "(selected weight decay, window-level validation 8:2)",
+                    "(selected weight decay, random window-level validation 8:2)",
                     curves,
                     max(int(frame["Epoch"].max()) for frames in curves.values() for frame in frames),
                 )
@@ -5304,7 +5321,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--val-window-ratio",
         type=float,
         default=VAL_WINDOW_RATIO,
-        help="Share of every training subject's windows (the last ones) used for validation "
+        help="Share of every training subject's windows (drawn at random) used for validation "
              "(default %(default)s).",
     )
     parser.add_argument(
