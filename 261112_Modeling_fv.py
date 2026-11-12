@@ -1,8 +1,8 @@
 r"""261112_Modeling_fv: RRWaveNet trained by LOSOCV (one subject as test; training and
 validation windows split 8:2 by window within the other subjects; weight decay selected per
-fold; results of the ensemble of 3 and of the single models) on every dataset (STEAM2,
-BIDMC, CapnoBase) with one and the same cross-validation, the PPG input and the respiratory
-reference both band-passed to 0.05-0.8 Hz, and the data selection of
+fold; results of the ensemble of 3 and of the single models) on every dataset (CapnoBase,
+BIDMC, STEAM2) with one and the same cross-validation, the PPG input and the respiratory
+reference both band-passed to 0.1-0.5 Hz, and the data selection of
 Ho MN, Nguyen KT. A late fusion multi-task learning for respiratory waveform and rate
 estimation from photoplethysmography. PLoS One 2026;21(7):e0353203.
 
@@ -30,7 +30,7 @@ Applied here:
   i.e. missing, flat or saturated samples). Mean reference rate of a window: the
   instantaneous rate 60 / interval of
   consecutive reference breaths (CapnoBase: the expert breath labels; BIDMC, STEAM2:
-  breaths detected by count-orig on the 0.05-0.8 Hz reference), held over each interval
+  breaths detected by count-orig on the 0.1-0.5 Hz reference), held over each interval
   and averaged over the part of the window that lies inside an interval (at least half
   of the window must).
 * scored minutes (60 s): the same rule only (60 / mean breath interval of the minute within
@@ -40,7 +40,7 @@ Applied here:
 
 Frequency band
 --------------
-PPG model input and respiratory reference: band-pass 0.05-0.8 Hz (Butterworth, 3rd order,
+PPG model input and respiratory reference: band-pass 0.1-0.5 Hz (Butterworth, 3rd order,
 zero phase, second-order sections) for every dataset. Model input = the band-passed PPG
 (min-max per window, [0, 1]); target = the band-passed reference (min-max per window,
 [-1, 1]); for CapnoBase the band-passed capnogram (the paper's ground truth is the filtered
@@ -83,8 +83,8 @@ order; here a random 20%; 261013: 20% of the training subjects held out whole), 
 datasets, the CapnoBase reading
 (expert breath labels as ground truth breaths, transport-delay alignment, PPG heart rates
 40-220 bpm, polyphase resampling). From the paper: the data selection above and the rate
-range 6-36 bpm. Set here: the 0.05-0.8 Hz band.
-Order of the datasets: STEAM2 -> BIDMC -> CapnoBase.
+range 6-36 bpm. Set here: the 0.1-0.5 Hz band.
+Order of the datasets: CapnoBase -> BIDMC -> STEAM2.
 
 STEAM2 data
 -----------
@@ -122,7 +122,7 @@ recorded profile) are not reused by --resume.
 
 Model (the 260928 layout; no identity channel, no gating, no added module)
 ---------------------------------------------------------------------------
-0.05-0.8 Hz band-passed PPG (min-max per 10 s window) at 64 Hz
+0.1-0.5 Hz band-passed PPG (min-max per 10 s window) at 64 Hz
 -> three stem branches: Conv1d with kernels 32 / 64 / 128 samples
    (0.5 / 1 / 2 s), 8 filters each, GroupNorm, GELU  -> 24 channels
 -> 1x1 stem fusion (24 -> 24) + GroupNorm
@@ -277,10 +277,10 @@ DATASET_CONFIGS = {
     },
 }
 
-DATASET_ORDER = ("steam2", "bidmc", "capnobase")  # 261112: STEAM2 -> BIDMC -> CapnoBase
+DATASET_ORDER = ("capnobase", "bidmc", "steam2")  # 261112: CapnoBase -> BIDMC -> STEAM2
 # Datasets and window conditions run when none are given on the command line.
 # 261112: every dataset with the same cross-validation.
-DEFAULT_DATASETS = ("steam2", "bidmc", "capnobase")  # every dataset, one cross-validation
+DEFAULT_DATASETS = ("capnobase", "bidmc", "steam2")  # every dataset, one cross-validation
 DEFAULT_WINDOWS = ("w10s_nonoverlap",)
 
 
@@ -297,7 +297,7 @@ WINDOW_SPECS = (
     WindowSpec(1, 10.0, 10.0, "w10s_nonoverlap", "10 s / 0% overlap"),
 )
 
-# Model input: the 0.05-0.8 Hz band-passed PPG (the profile band), min-max
+# Model input: the 0.1-0.5 Hz band-passed PPG (the profile band), min-max
 # [0, 1] per window.
 PPG_INPUT = "resp_band"
 
@@ -333,7 +333,7 @@ INFERENCE_PROTOCOL = "stored_windows"
 # Breath detection and reference quality (RRest / Charlton et al. 2016).
 # 261112: one band for the PPG input and the respiratory reference of every
 # dataset, and the paper's physiological rate range.
-RESP_BAND_HZ = (0.05, 0.8)
+RESP_BAND_HZ = (0.1, 0.5)
 RR_SELECTION_BPM = (6.0, 36.0)  # Ho & Nguyen 2026: segments outside 6-36 bpm excluded
 RR_BAND_BPM = RR_SELECTION_BPM  # FFT rate search band (predicted waveform and reference)
 # Paper's subject exclusion and the missing-reference rule applied to every dataset.
@@ -390,7 +390,7 @@ TECHNICAL_MAX_SATURATION_FRACTION = 0.80
 # infant heart rates can exceed 180 bpm.
 ANALYSIS_PROFILES = {
     "adult_fixed_band": {
-        "description": "0.05-0.8 Hz, 6-36 bpm, zero-lag sign alignment (BIDMC)",
+        "description": "0.1-0.5 Hz, 6-36 bpm, zero-lag sign alignment (BIDMC)",
         "band_hz": RESP_BAND_HZ,
         "adaptive_upper": False,
         "rr_band_bpm": RR_BAND_BPM,
@@ -410,7 +410,7 @@ ANALYSIS_PROFILES = {
     # PPG respiratory modulation is a variable fraction of a cycle off the
     # chest movement), so it flips the target at random between sessions.
     "adult_belt_as_recorded": {
-        "description": "0.05-0.8 Hz, 6-36 bpm, reference polarity as recorded (STEAM2)",
+        "description": "0.1-0.5 Hz, 6-36 bpm, reference polarity as recorded (STEAM2)",
         "band_hz": RESP_BAND_HZ,
         "adaptive_upper": False,
         "rr_band_bpm": RR_BAND_BPM,
@@ -425,13 +425,13 @@ ANALYSIS_PROFILES = {
     },
     "capnography_wide_rr": {
         "description": (
-            "0.05-0.8 Hz, 6-36 bpm, capnogram delay alignment with fixed "
+            "0.1-0.5 Hz, 6-36 bpm, capnogram delay alignment with fixed "
             "polarity, 40-220 bpm PPG beats (CapnoBase)"
         ),
         # Lower edge 0.05 Hz keeps 5 bpm breathing; the upper edge follows
         # the PPG heart rate (an octave below it, so the cardiac component
         # stays strongly attenuated) up to 1.0 Hz = 60 bpm.
-        # 261112: the common 0.05-0.8 Hz band and 6-36 bpm (261007 / 261013:
+        # 261112: the common 0.1-0.5 Hz band and 6-36 bpm (261007 / 261013:
         # 0.05 Hz to clip(0.5 x PPG heart rate, 0.5, 1.0) Hz, 3-60 bpm).
         "band_hz": RESP_BAND_HZ,
         "adaptive_upper": False,
@@ -501,12 +501,14 @@ class ModelOptions:
 
     @property
     def key(self) -> str:
-        return "rrwavenet_fs{}_{}_dec{}_p{:.2f}_wd{:g}_winrand82".format(
+        return "rrwavenet_fs{}_{}_dec{}_p{:.2f}_wd{:g}_bp{:g}-{:g}_winrand82".format(
             TARGET_FS,
             "stemfusion" if self.stem_fusion == "conv1x1" else "nostemfusion",
             "-".join(str(value) for value in self.decoder_dilations),
             self.dropout,
             self.weight_decay,
+            RESP_BAND_HZ[0],
+            RESP_BAND_HZ[1],
         )
 
     @property
@@ -769,7 +771,7 @@ def respiratory_filter(
     profile: dict,
 ) -> np.ndarray:
     """Respiratory band-pass (261112: second-order sections for every profile; the
-    transfer-function form is numerically fragile at the 0.05 Hz edge)."""
+    transfer-function form is numerically fragile at low band edges)."""
     return sos_bandpass(signal, fs, band[0], band[1])
 
 
