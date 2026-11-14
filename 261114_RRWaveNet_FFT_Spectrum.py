@@ -27,8 +27,8 @@ Signals of a minute (exactly as 261007 / 261013 score it)
   261007), band-passed already.
   Spectrum: detrend, Hamming window, zero padding to 16384 points (fft_rr_bpm of 261007 /
   261013); |FFT| of each curve divided by its largest value in the rate band.
-  Peak: the largest value in the rate band (CapnoBase 3-60 breaths/min = 0.05-1.0 Hz; BIDMC,
-  STEAM2 6-30 breaths/min = 0.1-0.5 Hz). The RRWaveNet peak is the stored
+  Peak: the largest value in the rate band, 0.1-0.5 Hz (6-30 breaths/min) for every dataset.
+  Where the scoring used the same band (BIDMC, STEAM2), the RRWaveNet peak is the stored
   Pred_Wave_FFT_RR / 60; the table checks it for every minute (Matches_Stored_Rate).
 
 Minutes: the scored ones (Ref_Valid) of every subject; the subjects with an MAE issue are left
@@ -80,7 +80,7 @@ FS = 64  # sampling rate of the stored RRWaveNet outputs (Hz)
 DATASETS = ("CapnoBase", "BIDMC", "STEAM2")
 # dataset -> run of the final results, rate band (breaths/min), GT modality
 DATASET_RUN = {"CapnoBase": "261007", "BIDMC": "261013", "STEAM2": "261013"}
-RATE_BAND_BPM = {"CapnoBase": (3.0, 60.0), "BIDMC": (6.0, 30.0), "STEAM2": (6.0, 30.0)}
+RATE_BAND_BPM = {"CapnoBase": (6.0, 30.0), "BIDMC": (6.0, 30.0), "STEAM2": (6.0, 30.0)}  # 0.1-0.5 Hz
 MODALITY = {"CapnoBase": "capnography", "BIDMC": "impedance", "STEAM2": "belt"}
 ADULT_BAND_HZ = (0.1, 0.5)  # RESP_BAND_HZ of 261007 / 261013 (transfer-function filter)
 CAPNOBASE_DEFAULT_BAND_HZ = (0.05, 0.5)  # only if the quality table has no band for a recording
@@ -430,8 +430,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                       "band (as the scoring), then the minute cut out"),
         ("Spectrum", f"detrend, Hamming window, zero padding to {FFT_MIN_POINTS} points (fft_rr_bpm); "
                      "each curve / its peak in the rate band"),
-        ("Peak", "largest |FFT| in the rate band (CapnoBase 0.05-1.0 Hz, BIDMC / STEAM2 0.1-0.5 Hz); "
-                 "Matches_Stored_Rate: RRWaveNet peak = stored Pred_Wave_FFT_RR / 60"),
+        ("Peak", "largest |FFT| in the rate band 0.1-0.5 Hz (every dataset); Matches_Stored_Rate: RRWaveNet "
+                 "peak = stored Pred_Wave_FFT_RR / 60 (CapnoBase was scored in 0.05-1.0 Hz, so it can differ there)"),
         ("Left out", "none (--keep-issue-subjects)" if args.keep_issue_subjects else
          "; ".join(f"{d} {', '.join(s)}" for d, s in EXCLUDED.items())),
     ], columns=["Item", "Description"])
