@@ -6,7 +6,8 @@ script that produced them; only the reference breaths change.
 
 Jobs and result folders
 -----------------------
-1. 261013, BIDMC (D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWaveNet_Adult_SubjectVal_WD):
+1. 261013, BIDMC (D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWavNet_STEAM_BIDMC_v1, or
+   ...\261013_RRWaveNet_Adult_SubjectVal_WD when only that one holds BIDMC results):
    ground truth = the breaths of annotator 1 (bidmc_data.mat,
    data(i).ref.breaths.ann1, manual annotations on the impedance signal).
    261013 used breaths detected by count-orig on the band-passed impedance
@@ -107,7 +108,11 @@ from scipy import stats
 HERE = Path(__file__).resolve().parent
 WORKSPACE_ROOT = Path(r"D:\PPG2RSP_RRWaveNet_Inspired")
 PROJECT_ROOT = WORKSPACE_ROOT / "261113_RRWaveNet_Rescore_ReferenceGT"
-ROOT_261013 = WORKSPACE_ROOT / "261013_RRWaveNet_Adult_SubjectVal_WD"
+# 261013 BIDMC results: the first of these folders that holds them (--root-261013 overrides).
+ROOTS_261013 = (
+    WORKSPACE_ROOT / "261013_RRWavNet_STEAM_BIDMC_v1",
+    WORKSPACE_ROOT / "261013_RRWaveNet_Adult_SubjectVal_WD",
+)
 ROOT_261013_CAPNOBASE = WORKSPACE_ROOT / "261112_RRWaveNet_261013_CapnoBase"
 ROOT_261007 = WORKSPACE_ROOT / "261007_RRWaveNet_NoEvent_v1"
 # Source script of a job; None = found automatically (see the docstring).
@@ -159,7 +164,12 @@ _MODULES: Dict[str, object] = {}
 
 def job_root(args: argparse.Namespace, job_name: str) -> Path:
     if job_name == "261013_bidmc_ann1":
-        return Path(args.root_261013)
+        if args.root_261013:
+            return Path(args.root_261013)
+        for root in ROOTS_261013:  # the first folder with stored BIDMC results
+            if any(root.glob("*/*/BIDMC/Fold_Summaries")):
+                return root
+        return next((root for root in ROOTS_261013 if root.is_dir()), ROOTS_261013[0])
     if job_name == "261013_capnobase_peak":
         return Path(args.root_261013_capnobase)
     return Path(args.root_261007)
@@ -758,7 +768,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--results-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument("--jobs", nargs="+", choices=list(JOBS), default=list(JOBS))
-    parser.add_argument("--root-261013", type=Path, default=ROOT_261013)
+    parser.add_argument("--root-261013", type=Path, default=None,
+                        help="261013 BIDMC results (default: the first of ROOTS_261013 that holds them)")
     parser.add_argument("--root-261013-capnobase", type=Path, default=ROOT_261013_CAPNOBASE)
     parser.add_argument("--root-261007", type=Path, default=ROOT_261007)
     parser.add_argument("--script-261013-bidmc", type=Path, default=None)
