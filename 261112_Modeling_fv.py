@@ -165,7 +165,10 @@ Outputs (PROJECT_ROOT = D:\PPG2RSP_RRWaveNet_Inspired\261112_Modeling_fv)
 
 Run (GPU), from D:\PPG2RSP_RRWaveNet_Inspired\261112_Modeling_fv:
                                  python 261112_Modeling_fv.py
-Resume after an interruption:    python 261112_Modeling_fv.py --resume
+Rerun = continue (default): every finished member (best model, predictions, minute
+table and summary stored with the same model, epochs and profile) is reused and an
+interrupted member continues from its last epoch; only what is missing is trained,
+then the summary is written. --no-resume trains every member again.
 One dataset:                     --datasets steam2
 Parallel workers (e.g. 2):       --resume --shard 0/2, --resume --shard 1/2
                                  (whole folds are shared out), then
@@ -4809,10 +4812,16 @@ def run_fold(
 
 
 def read_minutes(paths: Sequence[Path]) -> pd.DataFrame:
+    """Minute tables of the given folds. A held-out subject whose kept windows hold no
+    complete 60 s minute has an empty table (written without columns); it is skipped
+    here and listed in the summary as not scored."""
     frames = []
     for path in paths:
         if path.exists() and path.stat().st_size > 0:
-            frame = pd.read_csv(path, dtype={"Subject": str}, encoding="utf-8-sig")
+            try:
+                frame = pd.read_csv(path, dtype={"Subject": str}, encoding="utf-8-sig")
+            except pd.errors.EmptyDataError:
+                continue
             if not frame.empty:
                 frames.append(frame)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -4969,7 +4978,19 @@ def summarize_results(
             release_memory()
 
             rows: List[Tuple[str, str, pd.DataFrame]] = []
-            final = scored_minutes(read_minutes(final_paths))
+            final_raw = read_minutes(final_paths)
+            # Held-out subjects with a finished fold but no complete 60 s minute among
+            # their kept windows (e.g. most windows outside 6-36 bpm): nothing to score.
+            minute_subjects = set(final_raw["Subject"].astype(str)) if not final_raw.empty else set()
+            not_scored = [s for s in final_subjects if str(s) not in minute_subjects]
+            for subject in not_scored:
+                missing_rows.append({"Dataset": dataset_label, "Window_Config": spec.name, "Subject": subject,
+                                     "Missing": "not scored: its kept windows hold no complete 60 s minute "
+                                                "(fold trained and stored)"})
+            if not_scored:
+                print(f"{dataset_label} {spec.name}: not scored (no complete 60 s minute among the kept "
+                      f"windows): {', '.join(map(str, not_scored))}")
+            final = scored_minutes(final_raw)
             members = scored_minutes(read_minutes(member_paths_done))
             if not final.empty:
                 final["Window_Config"] = spec.name
@@ -5368,11 +5389,19 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--resume",
+        dest="resume",
         action="store_true",
+        default=True,
         help=(
-            "Reuse members whose summary, minutes and predictions already exist "
+            "(default) Reuse members whose summary, minutes and predictions already exist "
             "and continue interrupted members from their last epoch."
         ),
+    )
+    parser.add_argument(
+        "--no-resume",
+        dest="resume",
+        action="store_false",
+        help="Train every member again (stored members are overwritten).",
     )
     parser.add_argument(
         "--shard",
