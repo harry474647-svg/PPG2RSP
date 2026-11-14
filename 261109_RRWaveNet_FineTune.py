@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 r"""261109_RRWaveNet_FineTune: the RRWaveNet runs 261013 and 261007 with transfer
 learning - pretrained on one dataset (default CapnoBase), then fine-tuned by LOSOCV on
-the others (default STEAM2, BIDMC) - and the comparison with the same runs trained
-from scratch. Every result is saved under one folder.
+the others (default STEAM2, BIDMC) - with the full model (runs 01, 02) and, as the stem
+fusion ablation, with the model without the 1x1 stem fusion (runs 03, 04), and the
+comparison with the same runs trained from scratch. Every result is saved under one folder.
 
 Rerun = continue: the same results folder is continued; what is finished is skipped and only
 what has no training yet is trained (nothing else changes):
@@ -18,60 +19,87 @@ what has no training yet is trained (nothing else changes):
     more (finished members skipped by --resume) and marked then;
   * the generated script is compared with the one already in Code\ (comments and the results folder
     left out): if the code changed, nothing is run, so that results of different code are never
-    mixed (--allow-code-change runs anyway);
+    mixed (--allow-code-change runs anyway). Runs 01 and 02 generate exactly the code of the earlier
+    version of this file, so what they finished before the ablation was added is kept and skipped;
   * Progress.csv lists every dataset: skipped / finished / not finished, members before and after.
 
 Runs, in this order
-  01  261013: pretraining on CapnoBase -> fine-tuning on STEAM2 -> BIDMC
-  02  261007: pretraining on CapnoBase -> fine-tuning on STEAM2 -> BIDMC
-  (--source and --targets choose other datasets, e.g. --source steam2 --targets bidmc capnobase)
+  01  261013: pretraining on CapnoBase -> fine-tuning on STEAM2 -> BIDMC (full model)
+  02  261007: pretraining on CapnoBase -> fine-tuning on STEAM2 -> BIDMC (full model)
+  03  261013 without the 1x1 stem fusion: the same pretraining and fine-tuning (stem fusion ablation)
+  04  261007 without the 1x1 stem fusion: the same pretraining and fine-tuning (stem fusion ablation)
+  (--runs chooses runs, e.g. --runs 03 04; --source and --targets choose other datasets, e.g.
+  --source steam2 --targets bidmc capnobase)
+
+Model without the 1x1 stem fusion (runs 03, 04): stem_fusion = "none", i.e. the three stem
+branches, concatenated to 24 channels, feed the residual encoder directly (no 1x1 convolution +
+GroupNorm after them; 8,729 instead of 9,377 parameters). Pretraining and fine-tuning both use
+it; everything else is the run 01 / 02 of the same version (data, seeds, validation, weight
+decay selection, epochs, early stopping, ensemble, evaluation).
+  261007  its own ablation variant "no_stem_fusion" (pretraining of that variant, fine-tuning
+          calls with --variants no_stem_fusion instead of --variants full)
+  261013  the base script has the full model only; the generated copy of run 03 builds its
+          weight decay candidates without the stem fusion (change e below; variants
+          nostem_wd{wd}, model key "nostemfusion")
 
 1. Pretraining (every subject of the source dataset; no subject is held out, because the
    targets are other datasets), with the training of the version and nothing else changed:
      261007  validation = the last 20% of every subject's windows (temporal, as 261007);
-             full model, weight decay 5e-5; windows 10 s and 20 s (its default)
+             weight decay 5e-5; windows 10 s and 20 s (its default)
      261013  validation = 20% of the subjects held out whole (subject-wise, drawn once with
              a seed of the dataset); member m0 trained with every weight decay candidate
              (0.01 / 0.1 / 1), the one with the lowest validation loss chosen, m1 and m2
              trained with it; window 10 s
    same epochs, minimum epochs, patience, batch size, learning rate and schedule, loss,
    augmentation, early stopping (best validation checkpoint) as the version; three members
-   m0-m2, each with its own seed. Saved in <run>\Pretrained_<source>\<NN_window>\m<k>_best.pth
-   (+ history, summary; 261013: WD_Candidates\ and selection.json).
+   m0-m2, each with its own seed (the same seeds in every run). Saved in
+   <run>\Pretrained_<source>\<NN_window>\m<k>_best.pth (+ history, summary; 261013:
+   WD_Candidates\ and selection.json).
 2. Fine-tuning: the code of the version (generated copy, Code\) with exactly these changes
-   (each must match once, otherwise nothing runs):
+   (each must match, otherwise nothing runs):
      a. PROJECT_ROOT -> the run's folder
      b. PRETRAINED_ROOT (the folder above) and PRETRAINED_SOURCE after DEFAULT_RESULTS_ROOT
      c. pretrained_state(): the weights of a member, before train_one
      d. in train_one, after the model is built: the weights of the same member (m0 <- m0,
         m1 <- m1, m2 <- m2; 261013: every weight decay candidate of m0 starts from m0)
+     e. run 03 only: variant_name / build_variants -> the model without the stem fusion
+        (stem_fusion="none"); its comparison with 261007 reads the no_stem_fusion variant of
+        run 04
    Everything else is the version's LOSOCV unchanged: data, preprocessing, folds,
    validation, weight decay selection (261013), learning rate and schedule (from the
    start, every layer trained), epochs, early stopping, ensemble, evaluation, summary.
    A run is one call per target dataset (STEAM2, then BIDMC) with --resume, then one
-   --summary-only call over the targets; 261007 runs the full model only (--variants full).
-3. Comparison: fine-tuned vs from scratch = the earlier runs with the same version
-   (D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWavNet_STEAM_BIDMC_v1, 261007_RRWaveNet_NoEvent_v1;
-   read only): per subject FFT MAE and waveform PCC, Wilcoxon signed-rank, BH, and the check
-   that both are scored on the same minutes against the same ground truth.
+   --summary-only call over the targets; 261007 runs one model only (--variants full in run
+   02, --variants no_stem_fusion in run 04).
+3. Comparison (per subject FFT MAE and waveform PCC, Wilcoxon signed-rank, BH, and the check
+   that both are scored on the same minutes against the same ground truth):
+     fine-tuned vs from scratch, with the stem fusion (runs 01, 02 vs the earlier runs
+       D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWavNet_STEAM_BIDMC_v1, 261007_RRWaveNet_NoEvent_v1
+       variant full; read only)
+     stem fusion ablation, fine-tuned: without vs with the stem fusion (runs 03, 04 vs 01, 02)
+     fine-tuned vs from scratch, without the stem fusion (run 04 vs the variant
+       no_stem_fusion of 261007_RRWaveNet_NoEvent_v1; 261013 has no such earlier run)
+   Results that are not there yet are listed in Run_Status and left out.
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261109_RRWaveNet_FineTune)
   Code\                     the generated scripts, changes.txt
-  01_261013_CapnoBase-to-STEAM2-BIDMC\   Pretrained_CapnoBase\ and the LOSOCV results in the
-  02_261007_CapnoBase-to-STEAM2-BIDMC\   layout of the base run (Summary\..._results.xlsx, ...)
+  01_261013_CapnoBase-to-STEAM2-BIDMC\                Pretrained_CapnoBase\ and the LOSOCV
+  02_261007_CapnoBase-to-STEAM2-BIDMC\                results in the layout of the base run
+  03_261013_NoStemFusion_CapnoBase-to-STEAM2-BIDMC\   (Summary\..._results.xlsx, ...)
+  04_261007_NoStemFusion_CapnoBase-to-STEAM2-BIDMC\
   run_log.csv, Logs\<run>_<step>.log     every call and its console output
   Progress.csv, <run>\Progress\          finished datasets (skipped on a rerun)
   Comparison\261109_RRWaveNet_FineTune_Comparison.xlsx (+ csv)
     Summary, Paired_Tests, Pretraining (per member: best epoch, validation loss, weight
-    decay), Per_Subject, Run_Status, Notes
+    decay, stem fusion), Per_Subject, Run_Status, Notes
 
 Run (needs CUDA as the base scripts):
-  python 261109_RRWaveNet_FineTune.py
+  python 261109_RRWaveNet_FineTune.py                        every run (finished parts skipped)
   python 261109_RRWaveNet_FineTune.py --plan                 print the calls only
   python 261109_RRWaveNet_FineTune.py --compare-only         only the comparison
-  python 261109_RRWaveNet_FineTune.py --runs 02              only 261007
+  python 261109_RRWaveNet_FineTune.py --runs 03 04           only the stem fusion ablation
   python 261109_RRWaveNet_FineTune.py --source capnobase --targets steam2 bidmc
-Spyder: runfile(r'D:\PPG2RSP_RRWaveNet_Inspired\...\261109_RRWaveNet_FineTune.py', args='--plan')
+Spyder: runfile(r'D:\PPG2RSP_RRWaveNet_Inspired\...\261109_RRWaveNet_FineTune.py')
 Other options go to every call unchanged (e.g. --gpu 1, --no-require-cuda, --epoch-cap 5 for a
 quick test). Options of this file: --runs, --source, --targets, --scripts-dir, --output-root,
 --args-261007, --args-261013, --no-resume, --recheck, --allow-code-change, --write-only, --plan,
@@ -121,7 +149,42 @@ VERSIONS = {
         "options": ["--variants", "full"],
     },
 }
-RUNS = (("01", "261013"), ("02", "261007"))  # the order of the runs
+# 01 / 02: the full model (with the 1x1 stem fusion); 03 / 04: the stem fusion ablation (the model without
+# the 1x1 stem fusion), otherwise the same pretraining and fine-tuning. The order of the runs:
+RUNS = (("01", "261013"), ("02", "261007"), ("03", "261013"), ("04", "261007"))
+NOSTEM_RUNS = ("03", "04")
+NOSTEM_VARIANT_261007 = "no_stem_fusion"  # 261007's own variant without the 1x1 stem fusion
+# Run 03 (change e): the 261013 weight decay candidates without the 1x1 stem fusion; (old, new, count).
+STEM_EDITS_261013 = (
+    ('    return "full_wd{:g}".format(weight_decay)\n',
+     '    return "nostem_wd{:g}".format(weight_decay)\n', 1),
+    ('            "Full model, weight decay {:g}".format(wd),\n'
+     '            ModelOptions(weight_decay=float(wd)),\n',
+     '            "w/o 1x1 stem fusion, weight decay {:g}".format(wd),\n'
+     '            ModelOptions(weight_decay=float(wd), stem_fusion="none"),\n', 1),
+    ('ref_root = condition_root(reference_root, "full", spec, dataset_key)',
+     'ref_root = condition_root(reference_root, "no_stem_fusion", spec, dataset_key)', 1),
+    ('"261007 full model (temporal validation, weight decay 5e-5, ensemble of 3)"',
+     '"261007 w/o 1x1 stem fusion (temporal validation, weight decay 5e-5, ensemble of 3)"', 1),
+    ('"Final ensemble vs 261007 full ensemble"',
+     '"Final ensemble vs 261007 w/o stem fusion ensemble"', 2),
+)
+
+
+def is_nostem(run_id: str) -> bool:
+    """Runs of the stem fusion ablation (the model without the 1x1 stem fusion)."""
+    return run_id in NOSTEM_RUNS
+
+
+def run_label(run_id: str, version: str) -> str:
+    return f"{version} w/o 1x1 stem fusion" if is_nostem(run_id) else version
+
+
+def run_options(run_id: str, version: str) -> List[str]:
+    """The options of the version for a run (261007: the model of the run by --variants)."""
+    if version == "261007" and is_nostem(run_id):
+        return ["--variants", NOSTEM_VARIANT_261007]
+    return list(VERSIONS[version]["options"])
 
 ROOT_PATTERN = re.compile(r'^PROJECT_ROOT = Path\(r"[^"\n]*"\)$', re.MULTILINE)
 RESULTS_LINE = "DEFAULT_RESULTS_ROOT = PROJECT_ROOT\n"
@@ -134,7 +197,8 @@ BUILD_LINE = "    model = model_options.build().to(device)\n"
 # ---------------------------------------------------------------------------
 
 def run_folder(output_root: Path, run_id: str, version: str, source: str, targets: Sequence[str]) -> Path:
-    return output_root / (f"{run_id}_{version}_{DATASET_LABELS[source]}-to-"
+    tag = "_NoStemFusion" if is_nostem(run_id) else ""  # runs 01 / 02 keep their folders
+    return output_root / (f"{run_id}_{version}{tag}_{DATASET_LABELS[source]}-to-"
                           f"{'-'.join(DATASET_LABELS[t] for t in targets)}")
 
 
@@ -165,9 +229,18 @@ def find_script(name: str, folders: Sequence[Optional[Path]]) -> Optional[Path]:
     return None
 
 
-def patched_text(text: str, base_name: str, root: Path, pretrained: Path, source: str) -> str:
-    """The base script with exactly the four changes; stops when one does not match once."""
+def patched_text(text: str, base_name: str, root: Path, pretrained: Path, source: str,
+                 version: str = "", nostem: bool = False) -> str:
+    """The base script with exactly the changes a-d (and e for run 03); stops when one does not match.
+    Runs 01 / 02 (nostem False) get exactly the text of the earlier version of this file."""
     text = text.replace("\r\n", "\n")
+    if nostem and version == "261013":  # change e: the model without the 1x1 stem fusion
+        for old, new, expected in STEM_EDITS_261013:
+            count = text.count(old)
+            if count != expected:
+                raise SystemExit(f"{base_name}: {old.strip()[:60]!r} found {count} times (expected {expected}); "
+                                 "nothing is run")
+            text = text.replace(old, new)
     for old, label in ((RESULTS_LINE, "DEFAULT_RESULTS_ROOT line"), (TRAIN_ONE_LINE, "train_one definition"),
                        (BUILD_LINE, "model build line of train_one")):
         count = text.count(old)
@@ -199,6 +272,11 @@ def patched_text(text: str, base_name: str, root: Path, pretrained: Path, source
     head = (f"# {NAME}: generated from {base_name}; the only changes: every member starts from the member "
             f"pretrained on {DATASET_LABELS[source]} (PRETRAINED_ROOT, pretrained_state, train_one) and "
             f"PROJECT_ROOT = {root}\n")
+    if nostem:
+        head += (f"# {NAME}: stem fusion ablation - the model without the 1x1 stem fusion ("
+                 + ("variant_name / build_variants: stem_fusion=\"none\"; the 261007 comparison reads its "
+                    "no_stem_fusion variant)\n" if version == "261013" else
+                    "--variants no_stem_fusion in every call; no code change for it)\n"))
     if text.startswith("# -*- coding"):
         first, rest = text.split("\n", 1)
         return f"{first}\n{head}{rest}"
@@ -210,7 +288,9 @@ def write_scripts(args: argparse.Namespace, runs: Sequence[tuple]) -> Dict[str, 
     code_dir.mkdir(parents=True, exist_ok=True)
     report = [f"{NAME} ({datetime.now():%Y-%m-%d %H:%M:%S})",
               "Changes in each script: 1. PROJECT_ROOT  2. PRETRAINED_ROOT / PRETRAINED_SOURCE  3. pretrained_state()"
-              "  4. train_one loads the pretrained member after building the model", ""]
+              "  4. train_one loads the pretrained member after building the model"
+              "  5. run 03 only: weight decay candidates without the 1x1 stem fusion (run 04: --variants "
+              "no_stem_fusion)", ""]
     scripts = {}
     for run_id, version in runs:
         base = find_script(VERSIONS[version]["script"], [args.scripts_dir])
@@ -227,12 +307,12 @@ def write_scripts(args: argparse.Namespace, runs: Sequence[tuple]) -> Dict[str, 
         pretrained = pretrained_folder(root, args.source)
         path = code_dir / f"{NAME}_{run_id}_{version}.py"
         # open(..., newline="\n"): Path.write_text has no newline argument before Python 3.10
-        new_text = patched_text(text, base.name, root, pretrained, args.source)
+        new_text = patched_text(text, base.name, root, pretrained, args.source, version, is_nostem(run_id))
         check_code(path, new_text, args.allow_code_change)  # the results here were trained with this code
         with open(path, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(new_text)
         scripts[run_id] = path
-        report.append(f"[{run_id}] {version}: {path.name} -> {root} (pretrained: {pretrained})")
+        report.append(f"[{run_id}] {run_label(run_id, version)}: {path.name} -> {root} (pretrained: {pretrained})")
     (code_dir / "changes.txt").write_text("\n".join(report) + "\n", encoding="utf-8")
     return scripts
 
@@ -266,8 +346,12 @@ def pretrain_options(argv: Sequence[str]) -> argparse.Namespace:
 
 
 def pretrain_member(mod, version: str, spec, source: str, subject_data: dict, subjects: Sequence[str],
-                    val_subjects: Sequence[str], variant, member: int, out_dir: Path, device, opt) -> dict:
+                    val_subjects: Sequence[str], variant, member: int, out_dir: Path, device, opt,
+                    nostem: bool = False) -> dict:
     """One pretrained member (resumable); returns its summary."""
+    expected = "none" if nostem else "conv1x1"
+    if getattr(variant.options, "stem_fusion", expected) != expected:
+        raise RuntimeError(f"{variant.name}: stem fusion {variant.options.stem_fusion!r}, this run needs {expected!r}")
     out_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = out_dir / f"m{member}_best.pth"
     summary_path = out_dir / f"m{member}_summary.json"
@@ -304,7 +388,8 @@ def pretrain_member(mod, version: str, spec, source: str, subject_data: dict, su
     if audit["Audit_Status"] != "PASS_BEST_VALIDATION_CHECKPOINT":
         raise RuntimeError(f"No valid pretrained checkpoint: {checkpoint}")
     summary = {"Source": DATASET_LABELS[source], "Window_Config": spec.name, "Member": member, "Seed": seed,
-               "Variant": variant.name, "Weight_Decay": float(getattr(variant.options, "weight_decay",
+               "Variant": variant.name, "Stem_Fusion": getattr(variant.options, "stem_fusion", ""),
+               "Weight_Decay": float(getattr(variant.options, "weight_decay",
                                                                       getattr(mod, "WEIGHT_DECAY", math.nan))),
                "Validation": ("temporal (last 20% of every subject)" if version == "261007" else
                               "subject-wise: " + " ".join(map(str, val_subjects))),
@@ -320,8 +405,9 @@ def pretrain_member(mod, version: str, spec, source: str, subject_data: dict, su
     return summary
 
 
-def pretrain(mod, version: str, source: str, out_root: Path, opt) -> None:
-    """Every window condition of the version: the pretrained members m0.. on every subject of the source."""
+def pretrain(mod, version: str, source: str, out_root: Path, opt, nostem: bool = False) -> None:
+    """Every window condition of the version: the pretrained members m0.. on every subject of the source
+    (nostem: the model without the 1x1 stem fusion)."""
     import torch
     if opt.threads:
         torch.set_num_threads(int(opt.threads))
@@ -331,8 +417,8 @@ def pretrain(mod, version: str, source: str, out_root: Path, opt) -> None:
     members = opt.members or mod.ENSEMBLE_MEMBERS
     windows = opt.windows or list(mod.DEFAULT_WINDOWS)
     specs = [spec for spec in mod.WINDOW_SPECS if spec.name in windows]
-    print(f"Pretraining {version} on {DATASET_LABELS[source]}: windows {[s.name for s in specs]}, {members} members, "
-          f"device {device}", flush=True)
+    print(f"Pretraining {version}{' w/o 1x1 stem fusion' if nostem else ''} on {DATASET_LABELS[source]}: "
+          f"windows {[s.name for s in specs]}, {members} members, device {device}", flush=True)
     for spec in specs:
         out_dir = out_root / f"{spec.order:02d}_{spec.name}"
         if all((out_dir / f"m{m}_best.pth").exists() and (out_dir / f"m{m}_summary.json").exists()
@@ -345,10 +431,10 @@ def pretrain(mod, version: str, source: str, out_root: Path, opt) -> None:
             raise RuntimeError(f"{DATASET_LABELS[source]}: fewer than three valid subjects")
         print(f"  {spec.name}: {len(subjects)} subjects of {DATASET_LABELS[source]}", flush=True)
         if version == "261007":
-            variant = mod.VARIANTS["full"]
+            variant = mod.VARIANTS[NOSTEM_VARIANT_261007 if nostem else "full"]
             for member in range(members):
                 s = pretrain_member(mod, version, spec, source, subject_data, subjects, [], variant, member,
-                                    out_dir, device, opt)
+                                    out_dir, device, opt, nostem)
                 print(f"    m{member}: best epoch {s['Best_Epoch']}/{s['History_Epochs']}, "
                       f"val loss {s['Best_Val_Loss']:.4f}", flush=True)
         else:
@@ -360,7 +446,7 @@ def pretrain(mod, version: str, source: str, out_root: Path, opt) -> None:
             for variant in candidates.values():
                 wd_dir = out_dir / "WD_Candidates" / variant.name
                 s = pretrain_member(mod, version, spec, source, subject_data, subjects, val_subjects, variant, sel,
-                                    wd_dir, device, opt)
+                                    wd_dir, device, opt, nostem)
                 rows.append({"Weight_Decay": float(variant.options.weight_decay), "Variant": variant.name,
                              "Best_Val_Loss": float(s["Best_Val_Loss"]), "Best_Epoch": s["Best_Epoch"]})
                 print(f"    m{sel} wd {variant.options.weight_decay:g}: val loss {s['Best_Val_Loss']:.4f}", flush=True)
@@ -377,7 +463,7 @@ def pretrain(mod, version: str, source: str, out_root: Path, opt) -> None:
                 if member == sel:
                     continue
                 s = pretrain_member(mod, version, spec, source, subject_data, subjects, val_subjects, chosen,
-                                    member, out_dir, device, opt)
+                                    member, out_dir, device, opt, nostem)
                 print(f"    m{member}: best epoch {s['Best_Epoch']}/{s['History_Epochs']}, "
                       f"val loss {s['Best_Val_Loss']:.4f}", flush=True)
         del subject_data
@@ -391,8 +477,9 @@ def pretrain_worker(argv: Sequence[str]) -> int:
     p.add_argument("--script", type=Path, required=True)
     p.add_argument("--source", required=True, choices=list(DATASET_LABELS))
     p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--nostem", action="store_true", help="the model without the 1x1 stem fusion")
     args, rest = p.parse_known_args(list(argv))
-    pretrain(load_module(args.script), args.version, args.source, args.out, pretrain_options(rest))
+    pretrain(load_module(args.script), args.version, args.source, args.out, pretrain_options(rest), args.nostem)
     return 0
 
 
@@ -460,17 +547,18 @@ def call(command: List[str], output_root: Path, run_id: str, step: str, plan: bo
     return returncode
 
 
-def version_options(version: str, args: argparse.Namespace, others: List[str]) -> List[str]:
-    return list(VERSIONS[version]["options"]) + others + split_options(
+def version_options(version: str, args: argparse.Namespace, others: List[str], run_id: str = "") -> List[str]:
+    return run_options(run_id, version) + others + split_options(
         args.args_261007 if version == "261007" else args.args_261013)
 
 
 def run_commands(run: tuple, script: Path, args: argparse.Namespace, others: List[str]) -> Tuple[List[str], List[str]]:
     run_id, version = run
     base = [sys.executable, str(script)]
-    extra = version_options(version, args, others)
+    extra = version_options(version, args, others, run_id)
     if version == "261013" and "--reference-root" not in extra:
-        partner = next(r for r in RUNS if r[1] == "261007")
+        # the 261007 run with the same model (01 <-> 02, 03 <-> 04)
+        partner = next(r for r in RUNS if r[1] == "261007" and is_nostem(r[0]) == is_nostem(run_id))
         extra += ["--reference-root", str(run_folder(Path(args.output_root), *partner, args.source, args.targets))]
     resume = [] if args.no_resume or "--resume" in extra else ["--resume"]
     return base + resume + extra, base + ["--summary-only"] + extra
@@ -607,13 +695,14 @@ def execute(args: argparse.Namespace, others: List[str], runs: Sequence[tuple], 
     for run in runs:
         run_id, version = run
         root = run_folder(output_root, run_id, version, args.source, args.targets)
-        print(f"\n### Run {run_id}: {version}, pretraining on {DATASET_LABELS[args.source]} -> fine-tuning on "
-              f"{' -> '.join(DATASET_LABELS[t] for t in args.targets)}\n    {root}", flush=True)
+        print(f"\n### Run {run_id}: {run_label(run_id, version)}, pretraining on {DATASET_LABELS[args.source]} -> "
+              f"fine-tuning on {' -> '.join(DATASET_LABELS[t] for t in args.targets)}\n    {root}", flush=True)
         worker = [sys.executable, str(Path(__file__).resolve()), "--pretrain-worker", "--version", version,
                   "--script", str(scripts[run_id]), "--source", args.source,
-                  "--out", str(pretrained_folder(root, args.source))] + version_options(version, args, others)
+                  "--out", str(pretrained_folder(root, args.source))] + (["--nostem"] if is_nostem(run_id) else []) \
+            + version_options(version, args, others, run_id)
         if not args.recheck and pretraining_done(pretrained_folder(root, args.source), version,
-                                                 version_options(version, args, others)):
+                                                 version_options(version, args, others, run_id)):
             print(f"\n[{run_id} pretraining {DATASET_LABELS[args.source]}] every pretrained member is stored - skipped",
                   flush=True)
             code = 0
@@ -631,7 +720,7 @@ def execute(args: argparse.Namespace, others: List[str], runs: Sequence[tuple], 
             status = status or code
         status = status or call(summary + ["--datasets", *args.targets], output_root, run_id, "summary", args.plan)
         if version == "261007":
-            partner = next((r for r in RUNS if r[1] == "261013"), None)
+            partner = next((r for r in RUNS if r[1] == "261013" and is_nostem(r[0]) == is_nostem(run_id)), None)
             if partner and partner[0] in scripts:
                 _, partner_summary = run_commands(partner, scripts[partner[0]], args, others)
                 call(partner_summary + ["--datasets", *args.targets], output_root, partner[0], "summary vs 261007",
@@ -697,29 +786,48 @@ def pretraining_table(output_root: Path, source: str, targets: Sequence[str]) ->
         root = pretrained_folder(run_folder(output_root, run_id, version, source, targets), source)
         for path in sorted(root.glob("*/m*_summary.json")):
             try:
-                rows.append({"Run": run_id, "Version": version, **json.loads(path.read_text(encoding="utf-8"))})
+                rows.append({"Run": run_id, "Version": version, "Model": run_label(run_id, version),
+                             **json.loads(path.read_text(encoding="utf-8"))})
             except Exception:
                 continue
     return pd.DataFrame(rows)
 
 
 def compare(output_root: Path, source: str, targets: Sequence[str]) -> Optional[Path]:
-    fine_label = f"Fine-tuned ({DATASET_LABELS[source]} pretraining)"
+    """Fine-tuned vs from scratch (with and without the 1x1 stem fusion) and the stem fusion ablation of the
+    fine-tuned runs (without vs with the stem fusion)."""
+    src = DATASET_LABELS[source]
+    fine_label = f"Fine-tuned ({src} pretraining)"
+    fine_nostem = f"Fine-tuned w/o stem fusion ({src} pretraining)"
     scratch_label = "From scratch (earlier run)"
+    scratch_nostem = "From scratch w/o stem fusion (earlier run)"
+    trainings = (fine_label, fine_nostem, scratch_label, scratch_nostem)
+    # (A, B, comparison): A_Better counts the subjects where A is better
+    pairs = ((fine_label, scratch_label, "Fine-tuned vs from scratch (with stem fusion)"),
+             (fine_nostem, fine_label, "Stem fusion ablation, fine-tuned (w/o vs with stem fusion)"),
+             (fine_nostem, scratch_nostem, "Fine-tuned vs from scratch (w/o stem fusion)"))
     target_labels = {DATASET_LABELS[t] for t in targets}
     runs = []
     for run_id, version in RUNS:
-        runs.append((run_folder(output_root, run_id, version, source, targets), run_id, fine_label, version))
-        runs.append((WORKSPACE / VERSIONS[version]["earlier_run"], "earlier", scratch_label, version))
+        nostem = is_nostem(run_id)
+        runs.append((run_folder(output_root, run_id, version, source, targets), run_id,
+                     fine_nostem if nostem else fine_label, version, NOSTEM_VARIANT_261007 if nostem else "full"))
+    for version in VERSIONS:
+        earlier = WORKSPACE / VERSIONS[version]["earlier_run"]
+        runs.append((earlier, "earlier", scratch_label, version, "full"))
+        if version == "261007":  # 261013 has no earlier run without the stem fusion
+            runs.append((earlier, "earlier", scratch_nostem, version, NOSTEM_VARIANT_261007))
     frames, status = [], []
-    for root, run_id, label, version in runs:
+    for root, run_id, label, version, row in runs:
         per_subject = read_csv(root / "Summary" / "per_subject_fft.csv")
+        if not per_subject.empty and "Row" in per_subject.columns:  # 261007: the ensemble of the run's model
+            per_subject = per_subject[per_subject["Row"].astype(str) == row]
+        if not per_subject.empty:
+            per_subject = per_subject[per_subject["Dataset"].isin(target_labels)]
         if per_subject.empty:
-            continue
-        if "Row" in per_subject.columns:  # 261007: the full model's ensemble
-            per_subject = per_subject[per_subject["Row"].astype(str) == "full"]
-        per_subject = per_subject[per_subject["Dataset"].isin(target_labels)]
-        if per_subject.empty:
+            status.append({"Run": run_id, "Version": version, "Training": label, "Folder": str(root),
+                           "Dataset": "", "Window_Config": "", "Subjects": 0,
+                           "Note": "no results for the targets yet (Summary\\per_subject_fft.csv)"})
             continue
         frame = per_subject.copy()
         frame.insert(0, "Training", label)
@@ -728,17 +836,21 @@ def compare(output_root: Path, source: str, targets: Sequence[str]) -> Optional[
         frames.append(frame)
         for (dataset, window), group in per_subject.groupby(["Dataset", "Window_Config"]):
             status.append({"Run": run_id, "Version": version, "Training": label, "Folder": str(root),
-                           "Dataset": dataset, "Window_Config": window, "Subjects": int(group["Subject"].nunique())})
-    if not any(f["Training"].iloc[0] == fine_label for f in frames):
+                           "Dataset": dataset, "Window_Config": window, "Subjects": int(group["Subject"].nunique()),
+                           "Note": ""})
+    if not any(f["Training"].iloc[0] in (fine_label, fine_nostem) for f in frames):
         print("Comparison: no fine-tuned run finished yet (no Summary\\per_subject_fft.csv)")
         return None
     per_subject = pd.concat(frames, ignore_index=True)
-    ours = per_subject[per_subject["Training"] == fine_label][["Dataset", "Version", "Window_Config"]].drop_duplicates()
+    fine_rows = per_subject["Training"].isin([fine_label, fine_nostem])
+    ours = per_subject[fine_rows][["Dataset", "Version", "Window_Config"]].drop_duplicates()
     per_subject = per_subject.merge(ours, on=["Dataset", "Version", "Window_Config"], how="inner")
     per_subject["Issue_Subject"] = [is_issue(d, s) for d, s in zip(per_subject["Dataset"], per_subject["Subject"])]
     sets = (("All subjects", per_subject), ("Issue subjects left out", per_subject[~per_subject["Issue_Subject"]]))
     order = {"Dataset": {DATASET_LABELS[d]: i for i, d in enumerate(DATASET_RUN_ORDER)},
-             "Version": {v: i for i, v in enumerate(VERSIONS)}, "Training": {fine_label: 0, scratch_label: 1}}
+             "Version": {v: i for i, v in enumerate(VERSIONS)},
+             "Training": {label: i for i, label in enumerate(trainings)},
+             "Comparison": {p[2]: i for i, p in enumerate(pairs)}}
 
     def ordered(frame: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
         return frame.sort_values(columns, key=lambda s: s.map(order[s.name]).fillna(99) if s.name in order else s,
@@ -754,46 +866,53 @@ def compare(output_root: Path, source: str, targets: Sequence[str]) -> Optional[
                                  "FFT_MAE_Text": f"{mae['Mean']:.2f} ± {mae['SD']:.2f} ({mae['Median']:.2f} [{mae['Q1']:.2f}, {mae['Q3']:.2f}])",
                                  "PCC_Text": f"{pcc['Mean']:.3f} ± {pcc['SD']:.3f} ({pcc['Median']:.3f})"})
         for (dataset, version, window), group in part.groupby(["Dataset", "Version", "Window_Config"], sort=False):
-            a = group[group["Training"] == fine_label].set_index("Subject")
-            b = group[group["Training"] == scratch_label].set_index("Subject")
-            common = a.index.intersection(b.index)
-            if len(common) < 2:
-                continue
-            same = int(sum(int(a.at[s, "N_Minutes"]) == int(b.at[s, "N_Minutes"]) and
-                           np.isclose(float(a.at[s, "GT_RR_Median"]), float(b.at[s, "GT_RR_Median"]), atol=1e-6,
-                                      equal_nan=True) for s in common))
-            for metric, better_low in (("FFT_MAE", True), ("Wave_PCC_Mean", False)):
-                x, y = a.loc[common, metric].to_numpy(float), b.loc[common, metric].to_numpy(float)
-                ok = np.isfinite(x) & np.isfinite(y)
-                x, y = x[ok], y[ok]
-                tests.append({"Subject_Set": subject_set, "Dataset": dataset, "Version": version, "Window_Config": window,
-                              "Metric": metric, "A": fine_label, "B": scratch_label, "Paired_Subjects": int(x.size),
-                              "Same_Minutes_And_GT": f"{same}/{len(common)}",
-                              "Median_A": float(np.median(x)) if x.size else math.nan,
-                              "Median_B": float(np.median(y)) if y.size else math.nan,
-                              "Median_Difference_A_minus_B": float(np.median(x - y)) if x.size else math.nan,
-                              "A_Better": int(np.sum(x < y) if better_low else np.sum(x > y)),
-                              "B_Better": int(np.sum(y < x) if better_low else np.sum(y > x)),
-                              "Wilcoxon_p": wilcoxon_p(x, y)})
+            for a_label, b_label, comparison in pairs:
+                a = group[group["Training"] == a_label].set_index("Subject")
+                b = group[group["Training"] == b_label].set_index("Subject")
+                common = a.index.intersection(b.index)
+                if len(common) < 2:
+                    continue
+                same = int(sum(int(a.at[s, "N_Minutes"]) == int(b.at[s, "N_Minutes"]) and
+                               np.isclose(float(a.at[s, "GT_RR_Median"]), float(b.at[s, "GT_RR_Median"]), atol=1e-6,
+                                          equal_nan=True) for s in common))
+                for metric, better_low in (("FFT_MAE", True), ("Wave_PCC_Mean", False)):
+                    x, y = a.loc[common, metric].to_numpy(float), b.loc[common, metric].to_numpy(float)
+                    ok = np.isfinite(x) & np.isfinite(y)
+                    x, y = x[ok], y[ok]
+                    tests.append({"Subject_Set": subject_set, "Comparison": comparison, "Dataset": dataset,
+                                  "Version": version, "Window_Config": window, "Metric": metric, "A": a_label,
+                                  "B": b_label, "Paired_Subjects": int(x.size),
+                                  "Same_Minutes_And_GT": f"{same}/{len(common)}",
+                                  "Median_A": float(np.median(x)) if x.size else math.nan,
+                                  "Median_B": float(np.median(y)) if y.size else math.nan,
+                                  "Median_Difference_A_minus_B": float(np.median(x - y)) if x.size else math.nan,
+                                  "A_Better": int(np.sum(x < y) if better_low else np.sum(x > y)),
+                                  "B_Better": int(np.sum(y < x) if better_low else np.sum(y > x)),
+                                  "Wilcoxon_p": wilcoxon_p(x, y)})
     summary = ordered(pd.DataFrame(summary_rows), ["Subject_Set", "Dataset", "Version", "Window_Config", "Training"])
     tests = pd.DataFrame(tests)
     if not tests.empty:
         tests["BH_p"] = np.nan
-        for _, idx in tests.groupby(["Subject_Set", "Metric"]).groups.items():
+        for _, idx in tests.groupby(["Subject_Set", "Comparison", "Metric"]).groups.items():
             tests.loc[idx, "BH_p"] = bh(tests.loc[idx, "Wilcoxon_p"].tolist())
-        tests = ordered(tests, ["Subject_Set", "Metric", "Dataset", "Version", "Window_Config"])
+        tests = ordered(tests, ["Subject_Set", "Comparison", "Metric", "Dataset", "Version", "Window_Config"])
     notes = pd.DataFrame([
-        ("Runs", f"01 261013, 02 261007: pretraining on {DATASET_LABELS[source]} (every subject), fine-tuning by "
-                 f"LOSOCV on {', '.join(DATASET_LABELS[t] for t in targets)}; from scratch = the earlier runs "
-                 "(261013_RRWavNet_STEAM_BIDMC_v1, 261007_RRWaveNet_NoEvent_v1), read only"),
-        ("Change", "only the start of every member's training: the weights of the same member pretrained on the "
-                   "source; data, preprocessing, folds, validation, weight decay selection, learning rate and "
-                   "schedule, epochs, early stopping, ensemble and evaluation as the version"),
-        ("Per subject", "Summary\\per_subject_fft.csv: FFT_MAE and Wave_PCC_Mean; 261007 the full model's ensemble, "
-                        "261013 the final ensemble"),
-        ("Paired_Tests", "same subjects; Wilcoxon signed-rank; BH over all tests of a subject set and metric; "
-                         "A_Better = subjects with lower FFT_MAE / higher PCC when fine-tuned; Same_Minutes_And_GT: "
-                         "subjects scored on the same minutes against the same ground truth in both"),
+        ("Runs", f"01 261013, 02 261007 (full model), 03 261013, 04 261007 (without the 1x1 stem fusion): "
+                 f"pretraining on {src} (every subject), fine-tuning by LOSOCV on "
+                 f"{', '.join(DATASET_LABELS[t] for t in targets)}; from scratch = the earlier runs "
+                 "(261013_RRWavNet_STEAM_BIDMC_v1, 261007_RRWaveNet_NoEvent_v1 variants full / no_stem_fusion), "
+                 "read only"),
+        ("Change", "fine-tuning: only the start of every member's training (the weights of the same member "
+                   "pretrained on the source); stem fusion ablation: only the model (no 1x1 stem fusion, "
+                   "stem_fusion = none) in the pretraining and the fine-tuning; data, preprocessing, folds, "
+                   "validation, weight decay selection, seeds, learning rate and schedule, epochs, early stopping, "
+                   "ensemble and evaluation as the version"),
+        ("Per subject", "Summary\\per_subject_fft.csv: FFT_MAE and Wave_PCC_Mean; 261007 the ensemble of the "
+                        "run's model (variant full / no_stem_fusion), 261013 the final ensemble"),
+        ("Paired_Tests", "per Comparison: A vs B on the same subjects; Wilcoxon signed-rank; BH over the tests of "
+                         "a subject set, comparison and metric; A_Better = subjects with lower FFT_MAE / higher PCC "
+                         "in A; Same_Minutes_And_GT: subjects scored on the same minutes against the same ground "
+                         "truth in both"),
         ("Issue subjects", "; ".join(f"{d} {', '.join(s)}" for d, s in EXCLUDED.items())),
     ], columns=["Item", "Description"])
     sheets = {"Summary": summary, "Paired_Tests": tests, "Pretraining": pretraining_table(output_root, source, targets),
@@ -823,7 +942,7 @@ def compare(output_root: Path, source: str, targets: Sequence[str]) -> Optional[
     show = summary[summary["Subject_Set"] == "Issue subjects left out"]
     if not show.empty:
         pd.set_option("display.width", 220)
-        print("\nFFT MAE / PCC, fine-tuned vs from scratch (issue subjects left out):")
+        print("\nFFT MAE / PCC: fine-tuned (with / w/o stem fusion) and from scratch (issue subjects left out):")
         print(show[["Dataset", "Version", "Window_Config", "Training", "Subjects", "FFT_MAE_Text",
                     "PCC_Text"]].to_string(index=False))
     print(f"\nComparison: {path}")
@@ -836,7 +955,9 @@ def compare(output_root: Path, source: str, targets: Sequence[str]) -> Optional[
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> Tuple[argparse.Namespace, List[str]]:
     parser = argparse.ArgumentParser(description="RRWaveNet 261013 / 261007: pretraining on one dataset, fine-tuning "
-                                                 "by LOSOCV on the others, and the comparison with training from scratch")
+                                                 "by LOSOCV on the others (full model: runs 01, 02; without the 1x1 "
+                                                 "stem fusion: runs 03, 04), and the comparison with training from "
+                                                 "scratch")
     parser.add_argument("--runs", nargs="+", choices=[r[0] for r in RUNS], default=[r[0] for r in RUNS])
     parser.add_argument("--source", choices=list(DATASET_LABELS), default=DEFAULT_SOURCE)
     parser.add_argument("--targets", nargs="+", choices=list(DATASET_LABELS), default=list(DEFAULT_TARGETS))
@@ -877,7 +998,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         compare(output_root, args.source, args.targets)
         return 0
     runs = [r for r in RUNS if r[0] in args.runs]
-    print(f"{NAME}: {', '.join(f'{r[0]} {r[1]}' for r in runs)}; pretraining on {DATASET_LABELS[args.source]}, "
+    print(f"{NAME}: {', '.join(f'{r[0]} {run_label(*r)}' for r in runs)}; pretraining on {DATASET_LABELS[args.source]}, "
           f"fine-tuning on {' -> '.join(DATASET_LABELS[t] for t in args.targets)}\nResults: {output_root}")
     scripts = write_scripts(args, runs)
     if args.write_only:
