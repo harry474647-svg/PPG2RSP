@@ -121,6 +121,9 @@ MEMBERS = 3
 ANN1_GAP_FACTOR = 2.5  # ann1 gap: interval > 2.5 x the subject's median ann1 interval
 BIDMC_LABEL_INDEX_BASE = 1  # ann1 holds MATLAB (one-based) sample numbers
 EVAL_WINDOW_SEC = 60.0  # scored minute (as in 261007 / 261013)
+# Printed at the start: the first version (2026-11-13) looked for the source scripts only in its
+# own folder; this version finds them itself (see "Source scripts" in the docstring).
+SCRIPT_VERSION = "v2 (2026-11-14): source scripts found from the run manifests and nearby folders"
 
 JOBS = {
     "261013_bidmc_ann1": {
@@ -691,6 +694,7 @@ def write_excel(path: Path, sheets: Dict[str, pd.DataFrame]) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
+    print(f"{Path(__file__).name} {SCRIPT_VERSION}")
     results_root = Path(args.results_root)
     results_root.mkdir(parents=True, exist_ok=True)
     all_frames, repro, missing, info = [], [], [], []
