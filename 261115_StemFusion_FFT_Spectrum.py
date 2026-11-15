@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-r"""261115_StemFusion_FFT_Spectrum: FFT spectra of the ground truth (GT) and of the model with (Fusion O)
-and without (Fusion X) the 1x1 stem fusion, for every scored 60 s minute of the chosen subjects
-(default: CapnoBase 0332), in the style of 261114_RRWaveNet_FFT_Spectrum (x = frequency in Hz, the peak
-frequency of each curve in the legend beside the plot).
+r"""261115_StemFusion_FFT_Spectrum: FFT spectrum of the whole recording for the ground truth (GT) and the
+model with (Fusion O) and without (Fusion X) the 1x1 stem fusion, for the chosen subjects (default:
+CapnoBase 0332), in the style of 261114_RRWaveNet_FFT_Spectrum (x = frequency in Hz, the peak frequency
+of each curve in the legend beside the plot); y = |FFT| as computed, not scaled.
 
 Models (stored outputs, nothing is trained): member m0 of the LOSOCV fold of the subject, as
 261115_StemFusion_MAEDiff_Waveforms reads them
@@ -13,39 +13,35 @@ Models (stored outputs, nothing is trained): member m0 of the LOSOCV fold of the
   Fold_Summaries\{subject}_m0_RR60s_windows.csv    every 60 s minute: the stored rate of the model
   Members\m0\Predictions\{subject}_test_outputs.npz  predictions and targets of every test window (64 Hz)
 
-Minutes and GT rate: the rescored GT of the stem fusion tables (as 261115_StemFusion_MAEDiff_Waveforms)
-  CapnoBase  breaths by count-orig peak detection on the capnogram, RRest agreement rule
-  BIDMC      breaths of annotator 1 (ann1), expert-label rule of 261013 (--ann1-nogap: no ann1 gap)
-  STEAM2     the stored GT
-  The reference and its preprocessing come from the script that produced the results (261007 for
-  CapnoBase, 261013 for BIDMC / STEAM2), loaded as a module (its data paths; the path options override).
-
-Signals of a minute (as 261114_RRWaveNet_FFT_Spectrum and the scoring)
+Signals of a recording
   The windows are put back on the recording's time axis (overlap-add mean). Model: every run of
   contiguous windows band-passed with the recording's respiratory filter (respiratory_filter of the
-  source script), then the minute is cut out. GT: the stored target of the same seconds.
-  Spectrum: detrend, Hamming window, zero padding to 16384 points; |FFT| of each curve divided by its
-  largest value in the rate band. Peak: the largest value in the rate band, 0.1-0.5 Hz (6-30 /min).
+  source script, as in the scoring). GT: the stored target. The whole recording = every sample covered
+  by the target and both models (runs joined in time order when the coverage has gaps; the number of
+  runs is listed).
+  Spectrum of the whole recording: detrend, Hamming window, zero padding (at least 16384 points);
+  y = |FFT| (magnitude of the complex FFT, not divided by anything). Peak: the largest |FFT| in the rate
+  band, 0.1-0.5 Hz (6-30 /min).
 
-Figures (Fusion O red, Fusion X blue, GT black; rate band dashed)
-  per minute   (a) GT vs Fusion O (top), (b) GT vs Fusion X (bottom), the same minute; beside each
-               panel the peak frequencies, the minute's GT rate, the model's stored rate and its error
-  overview     every drawn minute of the subject in one figure: one row per minute, Fusion O | Fusion X
+Beside each panel: the GT mean rate of the recording (GT breaths in the covered samples / their
+duration; CapnoBase: peak detection on the capnogram, BIDMC: ann1, STEAM2: the stored GT breaths), the
+model's peak, and the FFT MAE of the model over the scored minutes of the recording (the rescored GT of
+the stem fusion tables, as 261115_StemFusion_MAEDiff_Waveforms; --ann1-nogap for BIDMC).
+
+Figure: (a) GT vs Fusion O (top, red), (b) GT vs Fusion X (bottom, blue), the same recording; GT black,
+rate band dashed.
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261115_StemFusion_FFT_Spectrum)
-  {Dataset}_{subject}\{subject}[_rec{k}]_{t0}-{t1}s_fft.png    one figure per minute
-  {Dataset}_{subject}\{Dataset}_{subject}_fft_overview.png/.pdf  all minutes in one figure
-  {Dataset}_{subject}\{Dataset}_{subject}_fft.pdf                every minute, one page each
+  {Dataset}_{subject}\{subject}[_rec{k}]_whole_fft.png   one figure per recording
+  {Dataset}_{subject}\{Dataset}_{subject}_whole_fft.pdf   every recording of the subject, one page each
   261115_StemFusion_FFT_Spectrum.xlsx
-    Minutes   every drawn minute: GT rate, peak frequencies of GT / Fusion O / Fusion X (Hz), |peak
-              difference| to the GT, stored rates and errors of both models
-    Subjects  per subject: minutes, MAE of both models, mean |peak difference| of both models
+    Recordings  every recording: duration, runs, GT mean rate, peak frequency and |FFT| at the peak of GT /
+                Fusion O / Fusion X, |peak difference| to the GT, MAE of both models over the scored minutes
     Notes
 
 Run: python 261115_StemFusion_FFT_Spectrum.py     (Spyder: runfile(...), no options needed)
-Options: --subjects CapnoBase:0332 BIDMC:38 ..., --all-minutes (the not scored minutes too), --ann1-nogap,
---max-freq-hz (x axis, default 1.2), --root-261007, --root-261013, --root-noise, --output-root,
---script-261007, --script-261013, data paths
+Options: --subjects CapnoBase:0332 BIDMC:38 ..., --ann1-nogap, --max-freq-hz (x axis, default 1.2),
+--root-261007, --root-261013, --root-noise, --output-root, --script-261007, --script-261013, data paths
 """
 
 import argparse
@@ -94,7 +90,6 @@ ANN1_GAP_FACTOR = 2.5
 MEMBER = 0
 COLORS = {"GT": "#000000", "O": "#ed665a", "X": "#559ed5"}  # Fusion O red, Fusion X blue
 LABELS = {"O": "Fusion O (with stem fusion)", "X": "Fusion X (without stem fusion)"}
-SHORT = {"O": "Fusion O", "X": "Fusion X"}
 BAND_COLOR, INK, MUTED, GRID = "#b84fb8", "#1f1f1f", "#6b6a66", "#e4e3df"
 
 
@@ -326,9 +321,13 @@ def band_peak(freq: np.ndarray, mag: np.ndarray) -> Tuple[float, float]:
 def curve(label: str, color: str, lw: float, z: int, signal: np.ndarray, fs: float) -> dict:
     freq, mag = spectrum(signal, fs)
     peak_hz, peak_mag = band_peak(freq, mag)
-    ok = np.isfinite(peak_mag) and peak_mag > 0
-    return {"label": label, "color": color, "lw": lw, "z": z, "freq": freq,
-            "y": mag / peak_mag if ok else np.full_like(mag, np.nan), "peak_hz": peak_hz}
+    return {"label": label, "color": color, "lw": lw, "z": z, "freq": freq, "y": mag, "peak_hz": peak_hz,
+            "peak_mag": peak_mag}
+
+
+def contiguous_runs(mask: np.ndarray) -> List[Tuple[int, int]]:
+    padded = np.concatenate([[False], np.asarray(mask, bool), [False]])
+    return [(int(a), int(b)) for a, b in np.flatnonzero(padded[1:] != padded[:-1]).reshape(-1, 2)]
 
 
 # ---------------------------------------------------------------------------
@@ -338,8 +337,9 @@ def curve(label: str, color: str, lw: float, z: int, signal: np.ndarray, fs: flo
 BAND_HZ = (RATE_BAND_BPM[0] / 60.0, RATE_BAND_BPM[1] / 60.0)
 
 
-def plot_spectra(ax, curves: List[dict], max_freq: float, marker_size: float = 5.5) -> float:
-    top = 1.0
+def plot_spectra(ax, curves: List[dict], max_freq: float, marker_size: float = 5.5) -> None:
+    """|FFT| of the curves as computed (no scaling); the peak in the rate band marked."""
+    top = 0.0
     for c in curves:
         keep = c["freq"] <= max_freq
         if np.isfinite(c["y"][keep]).any():
@@ -347,27 +347,26 @@ def plot_spectra(ax, curves: List[dict], max_freq: float, marker_size: float = 5
             ax.plot(c["freq"][keep], c["y"][keep], color=c["color"], lw=c["lw"], solid_capstyle="round", zorder=c["z"])
         if np.isfinite(c["peak_hz"]):
             ax.axvline(c["peak_hz"], color=c["color"], lw=1.0, alpha=0.9, zorder=c["z"] - 1)
-            ax.plot([c["peak_hz"]], [1.0], marker="s", ms=marker_size, color=c["color"], mec="white", mew=0.8,
-                    zorder=c["z"] + 1)
+            ax.plot([c["peak_hz"]], [c["peak_mag"]], marker="s", ms=marker_size, color=c["color"], mec="white",
+                    mew=0.8, zorder=c["z"] + 1)
     for edge in BAND_HZ:
         ax.axvline(edge, color=BAND_COLOR, lw=1.1, ls=(0, (4, 3)), zorder=1)
     ax.set_xlim(0.0, max_freq)
-    ax.set_ylim(0.0, top * 1.08)
+    ax.set_ylim(0.0, (top if top > 0 else 1.0) * 1.08)
     ax.grid(True, color=GRID, lw=0.6)
     ax.set_axisbelow(True)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
-    return top
 
 
 def peak_text(c: dict) -> str:
     return f"{c['label']}\npeak {c['peak_hz']:.3f} Hz" if np.isfinite(c["peak_hz"]) else f"{c['label']}\npeak n/a"
 
 
-def draw_minute(path: Path, pdf, header: Tuple[str, str], panels: Dict[str, List[dict]], texts: Dict[str, str],
-                max_freq: float) -> None:
-    """(a) GT vs Fusion O, (b) GT vs Fusion X for one minute; peak frequencies and rates beside each panel."""
-    width, side, left, panel, gap, top_in, bottom_in = 10.6, 3.6, 0.75, 1.85, 0.55, 0.95, 0.6
+def draw_recording(path: Path, pdf, header: Tuple[str, str], panels: Dict[str, List[dict]], texts: Dict[str, str],
+                   max_freq: float) -> None:
+    """(a) GT vs Fusion O, (b) GT vs Fusion X for the whole recording; peaks and rates beside each panel."""
+    width, side, left, panel, gap, top_in, bottom_in = 10.6, 3.6, 0.8, 1.85, 0.55, 0.95, 0.6
     height = top_in + bottom_in + 2 * panel + gap
     fig = plt.figure(figsize=(width, height))
     axes = []
@@ -377,7 +376,7 @@ def draw_minute(path: Path, pdf, header: Tuple[str, str], panels: Dict[str, List
                           sharex=axes[0] if axes else None)
         axes.append(ax)
         plot_spectra(ax, panels[model], max_freq)
-        ax.set_ylabel("|FFT| (peak = 1)", fontsize=8.5)
+        ax.set_ylabel("|FFT|", fontsize=9)
         ax.set_title(f"({'ab'[k]}) GT vs {LABELS[model]}", fontsize=9.5, loc="left", pad=3)
         if k == 0:
             ax.tick_params(labelbottom=False)
@@ -395,39 +394,6 @@ def draw_minute(path: Path, pdf, header: Tuple[str, str], panels: Dict[str, List
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=200)
     pdf.savefig(fig)
-    plt.close(fig)
-
-
-def draw_overview(path: Path, header: Tuple[str, str], rows: List[dict], max_freq: float) -> None:
-    """Every drawn minute of a subject: one row per minute, Fusion O (left) | Fusion X (right)."""
-    n = len(rows)
-    fig, axes = plt.subplots(n, 2, figsize=(12.0, 1.75 * n + 1.3), squeeze=False, sharex=True)
-    for i, row in enumerate(rows):
-        for j, model in enumerate(("O", "X")):
-            ax = axes[i, j]
-            curves = row["panels"][model]
-            plot_spectra(ax, curves, max_freq, marker_size=4.5)
-            gt, est = curves
-            ae = f"AE {row['AE_' + model]:.2f}" if np.isfinite(row["AE_" + model]) else "not scored"
-            ax.set_title(f"{row['label']} · {SHORT[model]}: GT {gt['peak_hz']:.3f} Hz, {SHORT[model]} "
-                         f"{est['peak_hz']:.3f} Hz, {ae}", fontsize=8.2, loc="left", pad=2)
-            ax.tick_params(labelsize=7.5)
-            if j == 0:
-                ax.set_ylabel("|FFT|", fontsize=8)
-            if i == n - 1:
-                ax.set_xlabel("Frequency (Hz)", fontsize=9)
-    handles = [Line2D([], [], color=COLORS["GT"], lw=1.6), Line2D([], [], color=COLORS["O"], lw=1.9),
-               Line2D([], [], color=COLORS["X"], lw=1.9), Line2D([], [], color=BAND_COLOR, lw=1.1, ls=(0, (4, 3)))]
-    labels = ["GT", LABELS["O"], LABELS["X"], f"rate band {BAND_HZ[0]:.2f}-{BAND_HZ[1]:.2f} Hz"]
-    top_in = 1.0
-    fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(0.06, 1.0 - 0.55 / fig.get_figheight()), ncol=4,
-               frameon=False, fontsize=8.5, borderaxespad=0.0)
-    fig.text(0.06, 1.0 - 0.12 / fig.get_figheight(), header[0], fontsize=11, color=INK, va="top")
-    fig.text(0.06, 1.0 - 0.36 / fig.get_figheight(), header[1], fontsize=7.6, color=MUTED, va="top")
-    fig.tight_layout(rect=(0, 0, 1, 1.0 - top_in / fig.get_figheight()))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=200)
-    fig.savefig(path.with_suffix(".pdf"))
     plt.close(fig)
 
 
@@ -452,73 +418,64 @@ def parse_subjects(items: Sequence[str]) -> Dict[str, List[str]]:
 
 def draw_subject(args, mod, dataset: str, subject: str, record: dict, files: Dict[str, dict], minutes: pd.DataFrame,
                  ann1: Optional[np.ndarray], out_root: Path) -> List[dict]:
+    """The whole-recording spectra of every recording of a subject."""
     fs = mod.TARGET_FS
     folder = out_root / f"{dataset}_{mod.safe_tag(subject)}"
-    multi = len(record["references"]) > 1
-    scored = minutes[minutes.Scored]
-    mae = {m: float(scored[f"AE_{m}"].mean()) if len(scored) else math.nan for m in ("X", "O")}
-    head = f"{dataset} {subject}: MAE X {mae['X']:.2f}, MAE O {mae['O']:.2f} breaths/min (O - X {mae['O'] - mae['X']:+.2f})"
-    sub = (f"GT: {MODALITY[dataset]} target; GT rate: {NEW_GT[dataset]}; models: m0, band-passed as scored; "
-           "|FFT| / its peak in 0.1-0.5 Hz")
-    drawn, out_rows = [], []
     folder.mkdir(parents=True, exist_ok=True)
-    with PdfPages(folder / f"{dataset}_{mod.safe_tag(subject)}_fft.pdf") as pdf:
+    multi = len(record["references"]) > 1
+    sub = (f"GT: {MODALITY[dataset]} target; models: m0, band-passed as scored; FFT of the whole recording "
+           "(detrend, Hamming); y = |FFT|, not scaled; peak in 0.1-0.5 Hz")
+    rows = []
+    with PdfPages(folder / f"{dataset}_{mod.safe_tag(subject)}_whole_fft.pdf") as pdf:
         for segment_id, ref in sorted(record["references"].items()):
-            mins = minutes[minutes.Segment_ID == int(segment_id)].sort_values("Start_Sec")
-            if not args.all_minutes:
-                mins = mins[mins.Scored]
-            if mins.empty:
-                continue
             length = len(ref["signal"])
             preds = {m: as_scored(mod, series(files[m]["outputs"], int(segment_id), length, "predictions"), ref)
                      for m in ("O", "X")}
             target = series(files["O"]["outputs"], int(segment_id), length, "targets")
-            for m in mins.itertuples(index=False):
-                a, b = int(round(m.Start_Sec * fs)), int(round(m.End_Sec * fs))
-                if b > length or not (np.isfinite(target[a:b]).all() and np.isfinite(preds["O"][a:b]).all()
-                                      and np.isfinite(preds["X"][a:b]).all()):
-                    continue
-                gt = curve(f"GT ({MODALITY[dataset]})", COLORS["GT"], 1.6, 4, target[a:b], fs)
-                panels = {model: [gt, curve(LABELS[model], COLORS[model], 1.9, 5, preds[model][a:b], fs)]
-                          for model in ("O", "X")}
-                minute_sec = m.End_Sec - m.Start_Sec
-                gt_rate = m.GT_Count * 60.0 / minute_sec
-                status = "scored" if m.Scored else f"not scored ({m.Reason})"
-                texts = {}
-                for model in ("O", "X"):
-                    rate, ae = getattr(m, f"Rate_{model}"), getattr(m, f"AE_{model}")
-                    texts[model] = (f"minute {m.Start_Sec:.0f}-{m.End_Sec:.0f} s, {status}\n"
-                                    f"GT rate      {gt_rate:5.1f} /min ({gt_rate / 60:.3f} Hz)\n"
-                                    f"model rate   {rate:5.1f} /min ({rate / 60:.3f} Hz)\n"
-                                    f"error (AE)   " + (f"{ae:5.2f} /min" if np.isfinite(ae) else "    -"))
-                rec = f" · recording {segment_id}" if multi else ""
-                stem = f"{mod.safe_tag(subject)}{f'_rec{segment_id}' if multi else ''}_{m.Start_Sec:.0f}-{m.End_Sec:.0f}s"
-                draw_minute(folder / f"{stem}_fft.png", pdf, (f"{head}{rec} · minute {m.Start_Sec:.0f}-{m.End_Sec:.0f} s",
-                                                              sub), panels, texts, args.max_freq_hz)
-                gt_peak = gt["peak_hz"]
-                row = {"Dataset": dataset, "Subject": subject, "Segment_ID": int(segment_id), "Start_Sec": m.Start_Sec,
-                       "End_Sec": m.End_Sec, "Scored": bool(m.Scored), "Reason": m.Reason, "GT_Count": m.GT_Count,
-                       "GT_Rate_Hz": gt_rate / 60.0, "GT_Peak_Hz": gt_peak}
-                for model in ("O", "X"):
-                    peak = panels[model][1]["peak_hz"]
-                    row[f"Peak_Hz_{model}"] = peak
-                    row[f"Abs_Peak_Diff_Hz_{model}"] = abs(peak - gt_peak)
-                    row[f"Stored_Rate_Hz_{model}"] = getattr(m, f"Rate_{model}") / 60.0
-                    row[f"AE_{model}"] = getattr(m, f"AE_{model}")
-                row["Figure"] = str((folder / f"{stem}_fft.png").relative_to(out_root))
-                out_rows.append(row)
-                drawn.append({"label": f"{'rec ' + str(segment_id) + ', ' if multi else ''}{m.Start_Sec:.0f}-{m.End_Sec:.0f} s",
-                              "panels": panels, "AE_O": m.AE_O, "AE_X": m.AE_X})
-    if drawn:
-        draw_overview(folder / f"{dataset}_{mod.safe_tag(subject)}_fft_overview.png", (head, sub), drawn,
-                      args.max_freq_hz)
-    return out_rows
+            covered = np.isfinite(target) & np.isfinite(preds["O"]) & np.isfinite(preds["X"])
+            if covered.sum() < 8 * fs:
+                continue
+            runs = contiguous_runs(covered)
+            duration = float(covered.sum()) / fs
+            breaths, _ = gt_breaths(dataset, mod, ref, ann1)
+            breaths = breaths[(breaths >= 0) & (breaths < length)]
+            gt_rate = float(covered[breaths].sum()) * 60.0 / duration
+            gt = curve(f"GT ({MODALITY[dataset]})", COLORS["GT"], 1.6, 4, target[covered], fs)
+            panels = {m: [gt, curve(LABELS[m], COLORS[m], 1.9, 5, preds[m][covered], fs)] for m in ("O", "X")}
+            mins = minutes[(minutes.Segment_ID == int(segment_id)) & minutes.Scored]
+            mae = {m: float(mins[f"AE_{m}"].mean()) if len(mins) else math.nan for m in ("O", "X")}
+            first, last = runs[0][0] / fs, runs[-1][1] / fs
+            span = f"{first:.0f}-{last:.0f} s, {duration:.0f} s covered" + (f", {len(runs)} runs joined" if len(runs) > 1 else "")
+            texts = {}
+            for m in ("O", "X"):
+                peak = panels[m][1]["peak_hz"]
+                texts[m] = (f"whole recording {span}\n"
+                            f"GT mean rate {gt_rate:5.1f} /min ({gt_rate / 60:.3f} Hz)\n"
+                            f"model peak   {peak * 60:5.1f} /min ({peak:.3f} Hz)\n"
+                            f"MAE, {len(mins)} scored min " + (f"{mae[m]:.2f} /min" if np.isfinite(mae[m]) else "-"))
+            rec = f" · recording {segment_id}" if multi else ""
+            head = (f"{dataset} {subject}{rec}: FFT of the whole recording · MAE X {mae['X']:.2f}, "
+                    f"MAE O {mae['O']:.2f} breaths/min (scored minutes)")
+            stem = f"{mod.safe_tag(subject)}{f'_rec{segment_id}' if multi else ''}_whole_fft"
+            draw_recording(folder / f"{stem}.png", pdf, (head, sub), panels, texts, args.max_freq_hz)
+            row = {"Dataset": dataset, "Subject": subject, "Segment_ID": int(segment_id), "First_Sec": first,
+                   "Last_Sec": last, "Covered_Sec": duration, "Runs": len(runs), "GT_Breaths": int(covered[breaths].sum()),
+                   "GT_Mean_Rate_Hz": gt_rate / 60.0, "GT_Peak_Hz": gt["peak_hz"], "GT_Peak_FFT": gt["peak_mag"]}
+            for m in ("O", "X"):
+                est = panels[m][1]
+                row[f"Peak_Hz_{m}"] = est["peak_hz"]
+                row[f"Peak_FFT_{m}"] = est["peak_mag"]
+                row[f"Abs_Peak_Diff_Hz_{m}"] = abs(est["peak_hz"] - gt["peak_hz"])
+                row[f"MAE_{m}"] = mae[m]
+            row["Scored_Minutes"] = int(len(mins))
+            row["Figure"] = str((folder / f"{stem}.png").relative_to(out_root))
+            rows.append(row)
+    return rows
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="FFT spectra of GT, Fusion O and Fusion X for every scored minute")
+    p = argparse.ArgumentParser(description="FFT of the whole recording: GT, Fusion O and Fusion X")
     p.add_argument("--subjects", nargs="+", default=list(SUBJECTS), help="Dataset:Subject (default CapnoBase:0332)")
-    p.add_argument("--all-minutes", action="store_true", help="draw the not scored minutes too")
     p.add_argument("--ann1-nogap", action="store_true", help="BIDMC: leave out minutes overlapping an ann1 gap")
     p.add_argument("--max-freq-hz", type=float, default=MAX_FREQ_HZ)
     p.add_argument("--root-261007", type=Path, default=ROOT_261007)
@@ -539,7 +496,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     chosen = parse_subjects(args.subjects)
     out_root = Path(args.output_root)
     out_root.mkdir(parents=True, exist_ok=True)
-    minute_rows, subject_rows = [], []
+    recording_rows = []
     for dataset in [d for d in DATASETS if d in chosen]:
         source = SOURCE[dataset]
         roots = [args.root_261007] if source == "261007" else [args.root_261013]
@@ -565,36 +522,27 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             minutes = subject_minutes(args, mod, dataset, subject, data[subject], files, ann1_all.get(subject))
             rows = draw_subject(args, mod, dataset, subject, data[subject], files, minutes, ann1_all.get(subject),
                                 out_root)
-            minute_rows += rows
-            scored = minutes[minutes.Scored]
-            frame = pd.DataFrame(rows)
-            summary = {"Dataset": dataset, "Subject": subject, "Scored_Minutes": int(len(scored)),
-                       "Minutes_Drawn": int(len(rows)),
-                       "MAE_X": float(scored.AE_X.mean()) if len(scored) else math.nan,
-                       "MAE_O": float(scored.AE_O.mean()) if len(scored) else math.nan}
-            for model in ("X", "O"):
-                v = frame[frame.Scored][f"Abs_Peak_Diff_Hz_{model}"] if len(frame) else pd.Series(dtype=float)
-                summary[f"Mean_Abs_Peak_Diff_Hz_{model}"] = float(v.mean()) if len(v) else math.nan
-            summary["Files_O"], summary["Files_X"] = str(files["O"]["root"]), str(files["X"]["root"])
-            subject_rows.append(summary)
-            print(f"  {subject}: {len(rows)} minutes drawn; MAE X {summary['MAE_X']:.2f}, O {summary['MAE_O']:.2f}; "
-                  f"mean |peak - GT peak| X {summary['Mean_Abs_Peak_Diff_Hz_X']:.3f} Hz, "
-                  f"O {summary['Mean_Abs_Peak_Diff_Hz_O']:.3f} Hz", flush=True)
+            recording_rows += rows
+            for r in rows:
+                print(f"  {subject} recording {r['Segment_ID']}: {r['Covered_Sec']:.0f} s; GT mean rate "
+                      f"{r['GT_Mean_Rate_Hz']:.3f} Hz, peak GT {r['GT_Peak_Hz']:.3f} Hz, O {r['Peak_Hz_O']:.3f} Hz, "
+                      f"X {r['Peak_Hz_X']:.3f} Hz; MAE X {r['MAE_X']:.2f}, O {r['MAE_O']:.2f}", flush=True)
+            if not rows:
+                print(f"  {subject}: no recording with stored outputs of both models")
         del data
     notes = pd.DataFrame([
         ("Models", "member m0 of the LOSOCV fold; Fusion O = with the 1x1 stem fusion, Fusion X = without"),
-        ("GT", "spectrum: the stored target of the minute; rate and scored minutes: CapnoBase peak detection on the "
-               "capnogram (RRest rule), BIDMC ann1 (expert-label rule), STEAM2 stored GT"),
-        ("Spectrum", "detrend, Hamming window, zero padding to 16384 points; |FFT| / its largest value in 0.1-0.5 Hz; "
-                     "model waveform band-passed as scored"),
+        ("Signals", "the whole recording: every sample covered by the stored target and both models (runs joined in "
+                    "time order when there are gaps); model waveform band-passed as scored; GT = stored target"),
+        ("Spectrum", "detrend, Hamming window, zero padding (>= 16384 points); |FFT| as computed, not scaled"),
         ("Peak", "largest |FFT| in 0.1-0.5 Hz (6-30 breaths/min); Abs_Peak_Diff = |model peak - GT peak|"),
-        ("Stored rate", "Pred_Wave_FFT_RR of the model's minute table (the scored rate; its band is the scoring band "
-                        "of the source script, which can differ from 0.1-0.5 Hz)"),
+        ("GT mean rate", "GT breaths in the covered samples / covered duration (CapnoBase peak detection on the "
+                         "capnogram, BIDMC ann1, STEAM2 stored breaths)"),
+        ("MAE", "mean |stored rate - GT breath count| over the scored minutes of the recording (rescored GT)"),
     ], columns=["Item", "Description"])
     path = out_root / f"{NAME}.xlsx"
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        pd.DataFrame(minute_rows).round(5).to_excel(writer, sheet_name="Minutes", index=False)
-        pd.DataFrame(subject_rows).round(5).to_excel(writer, sheet_name="Subjects", index=False)
+        pd.DataFrame(recording_rows).round(5).to_excel(writer, sheet_name="Recordings", index=False)
         notes.to_excel(writer, sheet_name="Notes", index=False)
     print(f"\nFigures under {out_root}; table: {path}")
 
