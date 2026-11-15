@@ -54,9 +54,10 @@ without a weight decay selection) are left out and listed.
    the fold). O and X are paired by subject: mean +- SD,
    median [IQR], number of subjects with a higher value in O, Wilcoxon
    p (**** p < 1e-4, *** < 1e-3, ** < 1e-2, * < 0.05, ns). Box plots: Stem
-   Fusion X (left, red) vs Stem Fusion O (right, blue) with the
-   significance bracket, per dataset and for all datasets, and one overview
-   figure per metric. Subjects without both m0 models are left out
+   Fusion O (left, red) vs Stem Fusion X (right, blue), black median line,
+   with the significance bracket (marked up to **: ** p < 0.01, * < 0.05,
+   ns), per dataset and for all datasets, and one overview figure per
+   metric. Subjects without both m0 models are left out
    (stem_fusion_ox_skipped.csv).
 2. Residual encoder blocks (full model)
    The 24-channel feature map at five stages: Stem = the stem fusion output
@@ -167,8 +168,8 @@ ALL_DATASETS = "All datasets"
 STEM_FOLDER = "Stem_Fusion_OX"
 STEM_O_VARIANT = "full"
 STEM_X_VARIANT = "no_stem_fusion"
-# Box order and colours: X (left, red), O (right, blue).
-MODEL_TYPES = (("Stem Fusion X", "#e8968c"), ("Stem Fusion O", "#5b8db8"))
+# Box order and colours: O (left, red), X (right, blue).
+MODEL_TYPES = (("Stem Fusion O", "#ed665a"), ("Stem Fusion X", "#559ed5"))
 STEM_METRICS = (
     # (column, axis label, drawn)
     ("EffectiveRank", "Effective rank", True),
@@ -240,6 +241,13 @@ def significance_stars(p_value: float) -> str:
         if p_value < threshold:
             return stars
     return "ns"
+
+
+def figure_stars(p_value: float) -> str:
+    """Significance mark of the box plots: at most ** (** p < 0.01, * < 0.05, ns)."""
+    if not np.isfinite(p_value):
+        return "n/a"
+    return "**" if p_value < 1e-2 else "*" if p_value < 0.05 else "ns"
 
 
 # ---------------------------------------------------------------------------
@@ -600,13 +608,13 @@ def collect(sources: Dict[str, Tuple[object, Path]], dataset_keys: Sequence[str]
 # ---------------------------------------------------------------------------
 
 def draw_box(axis, values_x: np.ndarray, values_o: np.ndarray, label: str, p_value: float) -> None:
-    """Stem Fusion X vs O box plot with the significance bracket."""
+    """Stem Fusion O (left) vs X (right) box plot with the significance bracket."""
     boxes = axis.boxplot(
-        [values_x, values_o],
+        [values_o, values_x],
         widths=0.55,
         patch_artist=True,
         showfliers=False,
-        medianprops={"color": "#ff7f0e", "linewidth": 1.5},
+        medianprops={"color": "#111111", "linewidth": 1.5},
         whiskerprops={"color": "#222222"},
         capprops={"color": "#222222"},
     )
@@ -623,7 +631,7 @@ def draw_box(axis, values_x: np.ndarray, values_o: np.ndarray, label: str, p_val
     span = max(top - bottom, 1e-6)
     level, tick = top + 0.08 * span, 0.03 * span
     axis.plot([1, 1, 2, 2], [level - tick, level, level, level - tick], color="#111111", linewidth=1.5)
-    axis.text(1.5, level + 0.01 * span, significance_stars(p_value), ha="center", va="bottom",
+    axis.text(1.5, level + 0.01 * span, figure_stars(p_value), ha="center", va="bottom",
               fontsize=14, fontweight="bold")
     axis.set_ylim(bottom - 0.08 * span, level + 0.18 * span)
 
