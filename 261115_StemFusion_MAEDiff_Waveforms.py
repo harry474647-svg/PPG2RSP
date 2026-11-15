@@ -34,8 +34,9 @@ an MAE issue (CapnoBase 0115, BIDMC 27, STEAM2 12_YJJ, 22_LMS, 26_CKK) are drawn
 
 Figures: every 30 s window of every recording of a detected subject (the windows of a minute
 are its first and second half; stretches outside the scored minute grid in 30 s steps):
-  (a) GT vs Fusion X, (b) GT vs Fusion O, the same seconds, no model shifted in time; every
-  waveform min-max scaled in the window; GT = the reference signal the GT breaths were found on
+  (a) GT vs Fusion O (top, red), (b) GT vs Fusion X (bottom, blue), the same seconds, no model
+  shifted in time; every waveform min-max scaled in the window; GT = the reference signal the GT
+  breaths were found on
   (CapnoBase capnogram, BIDMC impedance, STEAM2 belt; band-passed and aligned as in the scoring),
   its GT breaths marked; beside each panel the minute's GT rate, the model's rate and error and
   the Pearson r in the 30 s window. The model waveforms are drawn as the rate was scored: every run of
@@ -97,7 +98,7 @@ THRESHOLD_BPM = 2.0
 WINDOW_SEC = 30.0
 ANN1_GAP_FACTOR = 2.5
 MEMBER = 0
-COLORS = {"GT": "#111111", "X": "#ed665a", "O": "#559ed5"}  # the colours of the stem fusion box plots
+COLORS = {"GT": "#111111", "O": "#ed665a", "X": "#559ed5"}  # top panel (Fusion O) red, bottom panel (Fusion X) blue
 LABELS = {"X": "Fusion X (without stem fusion)", "O": "Fusion O (with stem fusion)"}
 INK, MUTED, GRID = "#1f1f1f", "#6b6a66", "#e4e3df"
 
@@ -340,7 +341,7 @@ def draw_window(path: Path, pdf, header: str, t: np.ndarray, gt: np.ndarray, bre
     fig = plt.figure(figsize=(width, height))
     g = minmax(gt)
     axes = []
-    for k, model in enumerate(("X", "O")):
+    for k, model in enumerate(("O", "X")):
         bottom = bottom_in + (1 - k) * (panel + gap)
         ax = fig.add_axes([left / width, bottom / height, (width - left - side - 0.2) / width, panel / height],
                           sharex=axes[0] if axes else None)
@@ -512,8 +513,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         ("MAE", "per subject, mean |stored rate - GT breath count| over the scored minutes, the same minutes for both"),
         ("Detection", f"|MAE O - MAE X| >= {args.threshold:g} breaths/min, both directions"
                       + ("; MAE issue subjects left out" if args.skip_issue_subjects else "; MAE issue subjects marked")),
-        ("Figures", f"every {args.window_sec:g} s window of every recording of a detected subject; (a) GT vs Fusion X, "
-                    "(b) GT vs Fusion O; min-max scaled in the window; GT breaths marked at the top"),
+        ("Figures", f"every {args.window_sec:g} s window of every recording of a detected subject; (a) GT vs Fusion O, "
+                    "(b) GT vs Fusion X; min-max scaled in the window; GT breaths marked at the top"),
     ], columns=["Item", "Description"])
     path = out_root / "261115_StemFusion_MAEDiff.xlsx"
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
