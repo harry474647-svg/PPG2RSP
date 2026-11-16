@@ -30,30 +30,40 @@ Extraction (per recording)
      target was filtered with: BIDMC / STEAM2 0.1-0.5 Hz; CapnoBase 0.05 Hz to the heart-rate dependent
      upper edge, at most 1.0 Hz), 3rd-order Butterworth, zero phase, so slow trends and pulse-rate drifts
      do not cover the respiratory peaks.
-Spectrum of the whole recording (each series): detrend, Hamming window, zero padding (at least 4096
-points); |FFT| divided by its largest value in the rate band so the three curves share one axis (their
-units differ); peak = the largest |FFT| in the rate band, 0.1-0.5 Hz (6-30 /min; --rate-band-hz).
-GT rate of the recording (for comparison): GT breaths / covered time, with the GT of the final results
-(CapnoBase: breaths detected on the capnogram; BIDMC: annotator 1 (ann1) of bidmc_data.mat; STEAM2:
-the stored breaths of the belt).
+Windows: steps 1-5 run on the whole recording; the series are then cut into 60 s windows (--window-sec,
+default 60) on the 60 s grid of the scoring (0-60 s, 60-120 s, ... from the start of the recording); a
+window is used when the series cover at least 90% of it and it holds at least 10 used beats.
+--window-sec 0: the whole recording as one window (first to last used beat).
+Spectrum of each window and series: detrend, Hamming window, zero padding (at least 4096 points); |FFT|
+divided by its largest value in the rate band so the three curves share one axis (their units differ);
+peak = the largest |FFT| in the rate band, 0.1-0.5 Hz (6-30 /min; --rate-band-hz).
+GT rate of the window (for comparison): GT breaths in the window / its length (with 60 s windows: the GT
+breath count of the minute, as in the scoring), with the GT of the final results (CapnoBase: breaths
+detected on the capnogram; BIDMC: annotator 1 (ann1) of bidmc_data.mat; STEAM2: the stored breaths of
+the belt).
 
-Figure per recording
+Figure per window (per recording with --window-sec 0)
   (a) RIIV, RIAV and RIFV over time (band-passed), each z-scored (mean 0, SD 1) so they overlap on one axis
   (b) their |FFT| (peak = 1) over each other; the peak of each marked, its frequency in the legend;
       the GT rate dotted, the rate band dashed
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261116_PPG_RIIV_RIAV_RIFV_FFT)
-  {Dataset}\{subject}[_rec{k}]_RIIV_RIAV_RIFV.png    one figure per recording
-  {Dataset}\{Dataset}_RIIV_RIAV_RIFV.pdf              every recording of the dataset, one page each
+  60 s windows (default)
+    {Dataset}\{subject}\{subject}[_rec{k}]_{t0}-{t1}s_RIIV_RIAV_RIFV.png   one figure per window
+    {Dataset}\{subject}\{Dataset}_{subject}_RIIV_RIAV_RIFV.pdf             every window of the subject
+  --window-sec 0
+    {Dataset}\{subject}[_rec{k}]_RIIV_RIAV_RIFV.png    one figure per recording
+    {Dataset}\{Dataset}_RIIV_RIAV_RIFV.pdf              every recording of the dataset, one page each
   261116_PPG_RIIV_RIAV_RIFV_FFT.xlsx
-    Recordings  every recording: duration, beats, mean heart rate, the peak frequency of RIIV / RIAV /
-                RIFV (Hz), the GT rate (Hz) and |peak - GT rate| of each
+    Windows     every window (or recording): start, end, beats, mean pulse rate, GT breaths, the peak
+                frequency of RIIV / RIAV / RIFV (Hz), the GT rate (Hz) and |peak - GT rate| of each
     Summary     per dataset: mean |peak - GT rate| of each modulation, recordings within 0.02 Hz of the GT rate,
                 and how often each is the closest (ties counted for each)
     Notes
 
 Run: python 261116_PPG_RIIV_RIAV_RIFV_FFT.py     (Spyder: runfile(...), no options needed)
-Options: --datasets, --subjects CapnoBase:0332 BIDMC:05 ..., --keep-issue-subjects, --rate-band-hz,
+Options: --window-sec (default 60; 0 = whole recording), --datasets, --subjects CapnoBase:0332 BIDMC:05 ...,
+--keep-issue-subjects, --rate-band-hz,
 --max-freq-hz (x axis, default 1.0), --output-root, --script-261007, --script-261013, --root-261007,
 --root-261013, --capnobase-path, --bidmc-path, --steam2-ppg-dir, --steam2-rsp-dir
 """
@@ -108,6 +118,9 @@ MEDIAN_BEATS = 7
 FFT_MIN_POINTS = 4096
 RATE_BAND_HZ = (0.1, 0.5)
 MAX_FREQ_HZ = 1.0
+WINDOW_SEC = 60.0  # 0 = the whole recording
+MIN_WINDOW_COVER = 0.9
+MIN_WINDOW_BEATS = 10
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +276,8 @@ def style(ax) -> None:
 
 
 def draw(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tuple[np.ndarray, np.ndarray]],
-         spectra: Dict[str, dict], gt_rate_hz: float, band: Tuple[float, float], max_freq: float) -> None:
+         spectra: Dict[str, dict], gt_rate_hz: float, band: Tuple[float, float], max_freq: float,
+         span_label: str) -> None:
     width, side, left, top_in, bottom_in = 12.6, 3.3, 0.8, 1.0, 0.6
     h_ts, h_fft, gap = 2.3, 2.5, 0.75
     height = top_in + bottom_in + h_ts + h_fft + gap
@@ -307,7 +321,7 @@ def draw(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tuple[np.nd
     ax.set_ylim(0.0, top * 1.08)
     ax.set_xlabel("Frequency (Hz)", fontsize=9)
     ax.set_ylabel("|FFT| (peak = 1)", fontsize=9)
-    ax.set_title("(b) FFT of RIIV, RIAV, RIFV (whole recording)", fontsize=9.5, loc="left", pad=3)
+    ax.set_title(f"(b) FFT of RIIV, RIAV, RIFV ({span_label})", fontsize=9.5, loc="left", pad=3)
     style(ax)
     handles = [Line2D([], [], color=COLORS[k], lw=1.7, marker="s", ms=5.5, mec="white", mew=0.8) for k in MODS]
     labels = [f"{k} peak {spectra[k]['peak_hz']:.3f} Hz\n({spectra[k]['peak_hz'] * 60:.1f} /min)"
@@ -346,6 +360,18 @@ def parse_subjects(items: Optional[Sequence[str]]) -> Dict[str, List[str]]:
     return chosen
 
 
+def window_spans(t_first: float, t_last: float, window_sec: float) -> List[Tuple[float, float]]:
+    """60 s windows on the scoring grid (0, 60, 120 s ...) covered at least 90% by the series; or the whole span."""
+    if window_sec <= 0:
+        return [(t_first, t_last)]
+    spans = []
+    for k in range(int(math.floor(t_last / window_sec)) + 1):
+        a, b = k * window_sec, (k + 1) * window_sec
+        if min(b, t_last) - max(a, t_first) >= MIN_WINDOW_COVER * window_sec:
+            spans.append((a, b))
+    return spans
+
+
 def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Path) -> List[dict]:
     source = SOURCE[dataset]
     roots = [args.root_261007] if source == "261007" else [args.root_261013]
@@ -361,69 +387,110 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Pat
     ann1_all = read_ann1(mod) if dataset == "BIDMC" else {}
     fs = float(mod.TARGET_FS)
     band = tuple(args.rate_band_hz)
+    whole = args.window_sec <= 0
     excluded = [] if args.keep_issue_subjects else list(EXCLUDED[dataset])
     rows = []
     folder = out_root / dataset
     folder.mkdir(parents=True, exist_ok=True)
-    with PdfPages(folder / f"{dataset}_RIIV_RIAV_RIFV.pdf") as pdf:
+    dataset_pdf = PdfPages(folder / f"{dataset}_RIIV_RIAV_RIFV.pdf") if whole else None
+    try:
         for subject in sorted(data):
             if dataset in chosen and not any(same_subject(subject, s) for s in chosen[dataset]):
                 continue
             if any(same_subject(subject, x) for x in excluded):
                 print(f"  {subject}: left out (MAE issue)")
                 continue
-            references = data[subject]["references"]
-            multi = len(references) > 1
-            for segment_id, ref in sorted(references.items()):
-                profile = ref["profile"]
-                beats = extract_modulations(mod, ref["model_input"], fs, tuple(profile["ppg_hr_range_bpm"]),
-                                            ref.get("ppg_artifact_mask"))
-                if "times" not in beats or len(beats["times"]) < 10:
-                    print(f"  {subject} recording {segment_id}: too few usable beats ({beats.get('n_detected', 0)} detected)")
-                    continue
-                resp_band = tuple(float(v) for v in ref["band_hz"])
-                series = {}
-                for k in MODS:
-                    grid, values = resample(beats["times"], beats["values"][k])
-                    series[k] = (grid, respiratory_band(values, RESAMPLE_HZ, resp_band))
-                spectra = {}
-                for k in MODS:
-                    freq, mag = spectrum(series[k][1], RESAMPLE_HZ)
-                    peak_hz, peak_mag = band_peak(freq, mag, band)
-                    spectra[k] = {"freq": freq, "mag": mag, "peak_hz": peak_hz, "peak_mag": peak_mag}
-                t0, t1 = float(beats["times"][0]), float(beats["times"][-1])
-                breaths = gt_breaths(dataset, mod, ref, ann1_all.get(subject))
-                breaths = breaths[(breaths >= t0 * fs) & (breaths < t1 * fs)]
-                gt_rate_hz = len(breaths) / (t1 - t0) if t1 > t0 else math.nan
-                rec = f" · recording {segment_id}" if multi else ""
-                header = (f"{dataset} {subject}{rec}: respiratory modulations of the PPG · {len(beats['times'])} beats "
-                          f"used of {beats['n_detected']}, mean pulse rate {beats['mean_hr']:.0f} /min, {t0:.0f}-{t1:.0f} s",
-                          f"PPG = model input (64 Hz); beats on the 0.5-5 Hz pulse band, values on the PPG low-passed at "
-                          f"{PPG_LOWPASS_HZ:g} Hz; series resampled to {RESAMPLE_HZ:g} Hz and band-passed "
-                          f"{resp_band[0]:.2f}-{resp_band[1]:.2f} Hz; GT rate = {GT_NAME[dataset]} / time")
-                stem = f"{mod.safe_tag(subject)}{f'_rec{segment_id}' if multi else ''}_RIIV_RIAV_RIFV"
-                draw(folder / f"{stem}.png", pdf, header, series, spectra, gt_rate_hz, band, args.max_freq_hz)
-                row = {"Dataset": dataset, "Subject": subject, "Segment_ID": int(segment_id), "Start_Sec": t0,
-                       "End_Sec": t1, "Beats_Detected": beats["n_detected"], "Beats_Used": int(len(beats["times"])),
-                       "Mean_Pulse_Rate_BPM": beats["mean_hr"], "Filter_Band_Low_Hz": resp_band[0],
-                       "Filter_Band_High_Hz": resp_band[1], "GT_Rate_Hz": gt_rate_hz}
-                for k in MODS:
-                    row[f"{k}_Peak_Hz"] = spectra[k]["peak_hz"]
-                    row[f"{k}_Abs_Diff_To_GT_Hz"] = abs(spectra[k]["peak_hz"] - gt_rate_hz)
-                diffs = {k: row[f"{k}_Abs_Diff_To_GT_Hz"] for k in MODS if np.isfinite(row[f"{k}_Abs_Diff_To_GT_Hz"])}
-                best = min(diffs.values()) if diffs else math.nan
-                row["Closest_To_GT"] = "+".join(k for k, v in diffs.items() if v <= best + 1e-9)  # ties: all of them
-                row["Figure"] = str((folder / f"{stem}.png").relative_to(out_root))
-                rows.append(row)
-                print(f"  {subject}{f' rec {segment_id}' if multi else ''}: {len(beats['times'])} beats; peaks RIIV "
-                      f"{row['RIIV_Peak_Hz']:.3f}, RIAV {row['RIAV_Peak_Hz']:.3f}, RIFV {row['RIFV_Peak_Hz']:.3f} Hz; "
-                      f"GT {gt_rate_hz:.3f} Hz", flush=True)
+            tag = mod.safe_tag(subject)
+            sub_folder = folder if whole else folder / tag
+            sub_folder.mkdir(parents=True, exist_ok=True)
+            pdf_path = sub_folder / f"{dataset}_{tag}_RIIV_RIAV_RIFV.pdf"
+            pdf = dataset_pdf if whole else PdfPages(pdf_path)
+            pages = 0
+            try:
+                references = data[subject]["references"]
+                multi = len(references) > 1
+                for segment_id, ref in sorted(references.items()):
+                    profile = ref["profile"]
+                    beats = extract_modulations(mod, ref["model_input"], fs, tuple(profile["ppg_hr_range_bpm"]),
+                                                ref.get("ppg_artifact_mask"))
+                    if "times" not in beats or len(beats["times"]) < MIN_WINDOW_BEATS:
+                        print(f"  {subject} recording {segment_id}: too few usable beats "
+                              f"({beats.get('n_detected', 0)} detected)")
+                        continue
+                    resp_band = tuple(float(v) for v in ref["band_hz"])
+                    full = {}
+                    for k in MODS:
+                        grid, values = resample(beats["times"], beats["values"][k])
+                        full[k] = (grid, respiratory_band(values, RESAMPLE_HZ, resp_band))
+                    breaths_all = gt_breaths(dataset, mod, ref, ann1_all.get(subject))
+                    times = beats["times"]
+                    rec = f" · recording {segment_id}" if multi else ""
+                    drawn = 0
+                    for a, b in window_spans(float(times[0]), float(times[-1]), args.window_sec):
+                        in_window = (times >= a) & (times < b) if not whole else np.ones(len(times), bool)
+                        if int(in_window.sum()) < MIN_WINDOW_BEATS:
+                            continue
+                        series = {}
+                        for k in MODS:
+                            grid, values = full[k]
+                            keep = (grid >= a) & (grid < b) if not whole else np.ones(len(grid), bool)
+                            series[k] = (grid[keep], values[keep])
+                        if min(len(series[k][0]) for k in MODS) < 8:
+                            continue
+                        spectra = {}
+                        for k in MODS:
+                            freq, mag = spectrum(series[k][1], RESAMPLE_HZ)
+                            peak_hz, peak_mag = band_peak(freq, mag, band)
+                            spectra[k] = {"freq": freq, "mag": mag, "peak_hz": peak_hz, "peak_mag": peak_mag}
+                        breaths = breaths_all[(breaths_all >= a * fs) & (breaths_all < b * fs)]
+                        gt_rate_hz = len(breaths) / (b - a) if b > a else math.nan
+                        pulse_rate = float(np.mean(beats["values"]["RIFV"][in_window]))
+                        span = f"{a:.0f}-{b:.0f} s"
+                        header = (f"{dataset} {subject}{rec}: respiratory modulations of the PPG · "
+                                  + (f"whole recording {span}" if whole else f"window {span}")
+                                  + f" · {int(in_window.sum())} beats, mean pulse rate {pulse_rate:.0f} /min",
+                                  f"PPG = model input (64 Hz); beats on the 0.5-5 Hz pulse band; series at "
+                                  f"{RESAMPLE_HZ:g} Hz, band-passed {resp_band[0]:.2f}-{resp_band[1]:.2f} Hz; GT rate = "
+                                  f"{GT_NAME[dataset]} / {'recording' if whole else 'window'} length")
+                        stem = (f"{tag}{f'_rec{segment_id}' if multi else ''}"
+                                + ("" if whole else f"_{a:.0f}-{b:.0f}s") + "_RIIV_RIAV_RIFV")
+                        draw(sub_folder / f"{stem}.png", pdf, header, series, spectra, gt_rate_hz, band,
+                             args.max_freq_hz, "whole recording" if whole else f"{args.window_sec:g} s window {span}")
+                        pages += 1
+                        drawn += 1
+                        row = {"Dataset": dataset, "Subject": subject, "Segment_ID": int(segment_id),
+                               "Window_Sec": float(args.window_sec) if not whole else 0.0, "Start_Sec": a, "End_Sec": b,
+                               "Beats_Used": int(in_window.sum()), "Mean_Pulse_Rate_BPM": pulse_rate,
+                               "Filter_Band_Low_Hz": resp_band[0], "Filter_Band_High_Hz": resp_band[1],
+                               "GT_Breaths": int(len(breaths)), "GT_Rate_Hz": gt_rate_hz}
+                        for k in MODS:
+                            row[f"{k}_Peak_Hz"] = spectra[k]["peak_hz"]
+                            row[f"{k}_Abs_Diff_To_GT_Hz"] = abs(spectra[k]["peak_hz"] - gt_rate_hz)
+                        diffs = {k: row[f"{k}_Abs_Diff_To_GT_Hz"] for k in MODS
+                                 if np.isfinite(row[f"{k}_Abs_Diff_To_GT_Hz"])}
+                        best = min(diffs.values()) if diffs else math.nan
+                        row["Closest_To_GT"] = "+".join(k for k, v in diffs.items() if v <= best + 1e-9)  # ties: all
+                        row["Figure"] = str((sub_folder / f"{stem}.png").relative_to(out_root))
+                        rows.append(row)
+                    print(f"  {subject}{f' rec {segment_id}' if multi else ''}: {len(times)} beats used, "
+                          + ("whole recording" if whole else f"{drawn} windows of {args.window_sec:g} s") + " drawn",
+                          flush=True)
+            finally:
+                if not whole:
+                    pdf.close()
+                    if pages == 0:
+                        pdf_path.unlink(missing_ok=True)
+    finally:
+        if dataset_pdf is not None:
+            dataset_pdf.close()
     del data
     return rows
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="RIIV, RIAV, RIFV of the PPG: time series and FFT spectra per recording")
+    p = argparse.ArgumentParser(description="RIIV, RIAV, RIFV of the PPG: time series and FFT spectra per window")
+    p.add_argument("--window-sec", type=float, default=WINDOW_SEC,
+                   help="window length in s on the scoring grid (default 60); 0 = the whole recording")
     p.add_argument("--datasets", nargs="+", choices=list(DATASETS), default=list(DATASETS))
     p.add_argument("--subjects", nargs="+", default=None, help="Dataset:Subject (default: every subject)")
     p.add_argument("--keep-issue-subjects", action="store_true")
@@ -454,7 +521,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     summary = []
     if not table.empty:
         for dataset, g in table.groupby("Dataset", sort=False):
-            row = {"Dataset": dataset, "Recordings": int(len(g))}
+            row = {"Dataset": dataset, ("Recordings" if args.window_sec <= 0 else "Windows"): int(len(g))}
             for k in MODS:
                 d = g[f"{k}_Abs_Diff_To_GT_Hz"].dropna()
                 row[f"{k}_Mean_Abs_Diff_Hz"] = float(d.mean()) if len(d) else math.nan
@@ -470,15 +537,19 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         ("Series", f"one value per used beat at the peak time, resampled to {RESAMPLE_HZ:g} Hz by cubic spline, then "
                    "band-passed with the recording's respiratory band of the source script (Filter_Band_*; 3rd-order "
                    "Butterworth, zero phase)"),
-        ("Spectrum", "whole recording: detrend, Hamming window, zero padding (>= 4096 points); figure |FFT| / its peak "
+        ("Windows", "whole recording (first to last used beat)" if args.window_sec <= 0 else
+                    f"{args.window_sec:g} s windows on the scoring grid from the start of the recording, covered at least "
+                    f"{MIN_WINDOW_COVER:.0%} by the series, at least {MIN_WINDOW_BEATS} used beats; extraction and "
+                    "filtering on the whole recording, then cut"),
+        ("Spectrum", "per window: detrend, Hamming window, zero padding (>= 4096 points); figure |FFT| / its peak "
                      f"in {args.rate_band_hz[0]:g}-{args.rate_band_hz[1]:g} Hz"),
-        ("GT rate", "GT breaths between the first and last used beat / that time (CapnoBase capnogram breaths, BIDMC "
-                    "ann1, STEAM2 belt breaths)"),
+        ("GT rate", "GT breaths in the window / its length (CapnoBase capnogram breaths, BIDMC ann1, STEAM2 belt "
+                    "breaths); with 60 s windows the GT breath count of the minute"),
         ("Reference", "Karlen W et al. IEEE TBME 2013;60(7):1946-53; Charlton PH et al. Physiol Meas 2016;37(4):610-26"),
     ], columns=["Item", "Description"])
     path = out_root / f"{NAME}.xlsx"
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        table.round(5).to_excel(writer, sheet_name="Recordings", index=False)
+        table.round(5).to_excel(writer, sheet_name="Recordings" if args.window_sec <= 0 else "Windows", index=False)
         pd.DataFrame(summary).round(5).to_excel(writer, sheet_name="Summary", index=False)
         notes.to_excel(writer, sheet_name="Notes", index=False)
     print(f"\nFigures under {out_root}; table: {path}")
