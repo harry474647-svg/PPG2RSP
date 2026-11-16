@@ -43,19 +43,22 @@ breath count of the minute, as in the scoring; with 30 s windows: twice the coun
 detected on the capnogram; BIDMC: annotator 1 (ann1) of bidmc_data.mat; STEAM2: the stored breaths of
 the belt).
 
-Figure per window (per recording with --window-sec 0); GT (black) = the continuous reference signal of the
-source script (CapnoBase capnogram, BIDMC impedance, STEAM2 belt; band-passed and aligned as in the scoring)
-  (a) GT, RIIV, RIAV and RIFV over time (band-passed), each z-scored (mean 0, SD 1) so they overlap on one axis
-  (b) their |FFT| (peak = 1) over each other; the peak of each marked, its frequency in the legend;
-      the GT rate (breath count / length) dotted, the rate band dashed
+Figures per window (per recording for the whole recording), in two styles, each in its own folder
+(--styles, default both); GT (black) = the continuous reference signal of the source script (CapnoBase
+capnogram, BIDMC impedance, STEAM2 belt; band-passed and aligned as in the scoring)
+  overlap   (a) GT, RIIV, RIAV and RIFV over time (band-passed), each z-scored (mean 0, SD 1), on one axis
+            (b) their |FFT| (peak = 1) over each other; the peak of each marked, its frequency in the legend;
+                the GT rate (breath count / length) dotted, the rate band dashed
+  separate  the same curves, one row per signal (GT, RIIV, RIAV, RIFV), each with its own axes:
+            left the time series, right the |FFT| (peak = 1) with its peak, the GT rate dotted, the band dashed
 
-Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261116_PPG_RIIV_RIAV_RIFV_FFT)
+Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261116_PPG_RIIV_RIAV_RIFV_FFT), {style} = overlap or separate
   windows of W s (default W = 60 and 30)
-    {Dataset}\{subject}\w{W}s\{subject}[_rec{k}]_{t0}-{t1}s_RIIV_RIAV_RIFV.png   one figure per window
-    {Dataset}\{subject}\w{W}s\{Dataset}_{subject}_w{W}s_RIIV_RIAV_RIFV.pdf       every W s window of the subject
+    {style}\{Dataset}\{subject}\w{W}s\{subject}[_rec{k}]_{t0}-{t1}s_RIIV_RIAV_RIFV.png   one figure per window
+    {style}\{Dataset}\{subject}\w{W}s\{Dataset}_{subject}_w{W}s_RIIV_RIAV_RIFV.pdf       every W s window
   whole recording (length 0)
-    {Dataset}\{subject}[_rec{k}]_RIIV_RIAV_RIFV.png    one figure per recording
-    {Dataset}\{Dataset}_RIIV_RIAV_RIFV.pdf              every recording of the dataset, one page each
+    {style}\{Dataset}\{subject}[_rec{k}]_RIIV_RIAV_RIFV.png    one figure per recording
+    {style}\{Dataset}\{Dataset}_RIIV_RIAV_RIFV.pdf              every recording of the dataset
   261116_PPG_RIIV_RIAV_RIFV_FFT.xlsx
     Windows     every window (Window_Sec 60 / 30; 0 = whole recording): start, end, beats, mean pulse rate,
                 GT breaths, the GT rate (Hz),
@@ -65,7 +68,7 @@ Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261116_PPG_RIIV_RIAV_RIFV_FFT)
     Notes
 
 Run: python 261116_PPG_RIIV_RIAV_RIFV_FFT.py     (Spyder: runfile(...), no options needed)
-Options: --window-sec (default 60 30; 0 = whole recording), --datasets, --subjects CapnoBase:0332 BIDMC:05 ...,
+Options: --window-sec (default 60 30; 0 = whole recording), --styles (default overlap separate), --datasets, --subjects CapnoBase:0332 BIDMC:05 ...,
 --keep-issue-subjects, --rate-band-hz,
 --max-freq-hz (x axis, default 1.0), --output-root, --script-261007, --script-261013, --root-261007,
 --root-261013, --capnobase-path, --bidmc-path, --steam2-ppg-dir, --steam2-rsp-dir
@@ -123,6 +126,7 @@ FFT_MIN_POINTS = 4096
 RATE_BAND_HZ = (0.1, 0.5)
 MAX_FREQ_HZ = 1.0
 WINDOW_SECS = (60.0, 30.0)  # every length is drawn; 0 = the whole recording
+STYLES = ("overlap", "separate")  # each style in its own folder
 MIN_WINDOW_COVER = 0.9
 MIN_WINDOW_BEATS = 10
 
@@ -279,7 +283,7 @@ def style(ax) -> None:
         ax.spines[side].set_visible(False)
 
 
-def draw(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tuple[np.ndarray, np.ndarray]],
+def draw_overlap(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tuple[np.ndarray, np.ndarray]],
          spectra: Dict[str, dict], gt: dict, gt_rate_hz: float, band: Tuple[float, float], max_freq: float,
          span_label: str) -> None:
     width, side, left, top_in, bottom_in = 12.6, 3.3, 0.8, 1.0, 0.6
@@ -359,6 +363,75 @@ def draw(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tuple[np.nd
     plt.close(fig)
 
 
+def draw_separate(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tuple[np.ndarray, np.ndarray]],
+                  spectra: Dict[str, dict], gt: dict, gt_rate_hz: float, band: Tuple[float, float], max_freq: float,
+                  span_label: str) -> None:
+    """One row per signal (GT, RIIV, RIAV, RIFV): the time series (z-scored) left, the |FFT| (peak = 1) right."""
+    keys = ("GT",) + MODS
+    names = {"GT": gt["label"], **LONG}
+    colors = {"GT": GT_COLOR, **COLORS}
+    width, left, right, col_gap, top_in, bottom_in, row_h, gap = 12.6, 1.05, 0.3, 0.75, 1.3, 0.62, 1.25, 0.3
+    height = top_in + bottom_in + len(keys) * row_h + (len(keys) - 1) * gap
+    fig = plt.figure(figsize=(width, height))
+    col_w = (width - left - right - col_gap) / 2
+    ts_axes, fft_axes = [], []
+    for i, key in enumerate(keys):
+        y = bottom_in + (len(keys) - 1 - i) * (row_h + gap)
+        ax_t = fig.add_axes([left / width, y / height, col_w / width, row_h / height],
+                            sharex=ts_axes[0] if ts_axes else None)
+        ax_f = fig.add_axes([(left + col_w + col_gap) / width, y / height, col_w / width, row_h / height],
+                            sharex=fft_axes[0] if fft_axes else None)
+        ts_axes.append(ax_t)
+        fft_axes.append(ax_f)
+        t, v = gt["series"] if key == "GT" else series[key]
+        sd = float(np.std(v))
+        ax_t.plot(t, (v - np.mean(v)) / sd if sd > 0 else v * 0, color=colors[key], lw=1.3 if key == "GT" else 1.1)
+        ax_t.set_xlim(t[0], t[-1])
+        ax_t.set_ylabel(names[key].replace(" (", "\n("), fontsize=8.5)
+        s = gt if key == "GT" else spectra[key]
+        keep = s["freq"] <= max_freq
+        top = 1.0
+        if np.isfinite(s["peak_mag"]) and s["peak_mag"] > 0:
+            yv = s["mag"][keep] / s["peak_mag"]
+            top = max(top, float(np.nanmax(yv)))
+            ax_f.plot(s["freq"][keep], yv, color=colors[key], lw=1.6, zorder=4)
+            ax_f.axvline(s["peak_hz"], color=colors[key], lw=1.0, alpha=0.9, zorder=3)
+            ax_f.plot([s["peak_hz"]], [1.0], marker="s", ms=5.5, color=colors[key], mec="white", mew=0.8, zorder=6)
+        if np.isfinite(gt_rate_hz):
+            ax_f.axvline(gt_rate_hz, color=GT_COLOR, lw=1.1, ls=(0, (1, 2)), zorder=5)
+        for edge in band:
+            ax_f.axvline(edge, color=BAND_COLOR, lw=1.1, ls=(0, (4, 3)), zorder=1)
+        ax_f.set_xlim(0.0, max_freq)
+        ax_f.set_ylim(0.0, top * 1.12)
+        peak = s["peak_hz"]
+        ax_f.text(0.99, 0.93, f"peak {peak:.3f} Hz ({peak * 60:.1f} /min)" if np.isfinite(peak) else "peak n/a",
+                  transform=ax_f.transAxes, ha="right", va="top", fontsize=8.2, color=INK)
+        for ax in (ax_t, ax_f):
+            style(ax)
+            ax.tick_params(labelsize=8)
+            if i < len(keys) - 1:
+                ax.tick_params(labelbottom=False)
+    ts_axes[0].set_title("(a) over time (band-passed, each z-scored)", fontsize=9.5, loc="left", pad=3)
+    fft_axes[0].set_title(f"(b) |FFT| (peak = 1), {span_label}", fontsize=9.5, loc="left", pad=3)
+    ts_axes[-1].set_xlabel("Time in the recording (s)", fontsize=9)
+    fft_axes[-1].set_xlabel("Frequency (Hz)", fontsize=9)
+    rate = (f"GT rate (breath count) {gt_rate_hz:.3f} Hz ({gt_rate_hz * 60:.1f} /min)" if np.isfinite(gt_rate_hz)
+            else "GT rate n/a")
+    fig.legend([Line2D([], [], color=GT_COLOR, lw=1.1, ls=(0, (1, 2))),
+                Line2D([], [], color=BAND_COLOR, lw=1.1, ls=(0, (4, 3)))],
+               [rate, f"rate band {band[0]:.2f}-{band[1]:.2f} Hz"], loc="upper left", ncol=2, frameon=False,
+               fontsize=8.2, bbox_to_anchor=(left / width, 1.0 - 0.72 / height), borderaxespad=0.0)
+    fig.text(left / width, 1.0 - 0.18 / height, header[0], fontsize=10.5, color=INK, va="top")
+    fig.text(left / width, 1.0 - 0.48 / height, header[1], fontsize=7.6, color=MUTED, va="top")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=200)
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
+DRAW = {"overlap": draw_overlap, "separate": draw_separate}
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -408,9 +481,10 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Pat
     lengths = sorted({float(w) for w in args.window_sec}, reverse=True)
     excluded = [] if args.keep_issue_subjects else list(EXCLUDED[dataset])
     rows = []
-    folder = out_root / dataset
-    folder.mkdir(parents=True, exist_ok=True)
-    dataset_pdf = {"pdf": None, "path": folder / f"{dataset}_RIIV_RIAV_RIFV.pdf", "pages": 0}  # whole recordings
+    styles = [st for st in STYLES if st in args.styles]
+    folders = {st: out_root / st / dataset for st in styles}
+    dataset_pdfs = {st: {"pdf": None, "path": folders[st] / f"{dataset}_RIIV_RIAV_RIFV.pdf", "pages": 0}
+                    for st in styles}  # whole recordings
 
     def open_pdf(slot: dict):
         if slot["pdf"] is None:
@@ -432,8 +506,9 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Pat
                 print(f"  {subject}: left out (MAE issue)")
                 continue
             tag = mod.safe_tag(subject)
-            subject_pdfs = {w: {"pdf": None, "path": folder / tag / f"w{w:g}s" / f"{dataset}_{tag}_w{w:g}s_RIIV_RIAV_RIFV.pdf",
-                                "pages": 0} for w in lengths if w > 0}
+            subject_pdfs = {(st, w): {"pdf": None, "pages": 0, "path": folders[st] / tag / f"w{w:g}s"
+                                      / f"{dataset}_{tag}_w{w:g}s_RIIV_RIAV_RIFV.pdf"}
+                            for st in styles for w in lengths if w > 0}
             try:
                 references = data[subject]["references"]
                 multi = len(references) > 1
@@ -494,10 +569,13 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Pat
                                       f"{GT_NAME[dataset]} / {'recording' if whole else 'window'} length")
                             stem = (f"{tag}{f'_rec{segment_id}' if multi else ''}"
                                     + ("" if whole else f"_{a:.0f}-{b:.0f}s") + "_RIIV_RIAV_RIFV")
-                            target = folder if whole else folder / tag / f"w{length:g}s"
-                            pdf = open_pdf(dataset_pdf if whole else subject_pdfs[length])
-                            draw(target / f"{stem}.png", pdf, header, series, spectra, gt, gt_rate_hz, band,
-                                 args.max_freq_hz, "whole recording" if whole else f"{length:g} s window {span}")
+                            figures = {}
+                            for st in styles:
+                                target = folders[st] if whole else folders[st] / tag / f"w{length:g}s"
+                                pdf = open_pdf(dataset_pdfs[st] if whole else subject_pdfs[(st, length)])
+                                DRAW[st](target / f"{stem}.png", pdf, header, series, spectra, gt, gt_rate_hz, band,
+                                         args.max_freq_hz, "whole recording" if whole else f"{length:g} s window {span}")
+                                figures[st] = str((target / f"{stem}.png").relative_to(out_root))
                             drawn[length] += 1
                             row = {"Dataset": dataset, "Subject": subject, "Segment_ID": int(segment_id),
                                    "Window_Sec": 0.0 if whole else length, "Start_Sec": a, "End_Sec": b,
@@ -511,7 +589,8 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Pat
                                      if np.isfinite(row[f"{k}_Abs_Diff_To_GT_Hz"])}
                             best = min(diffs.values()) if diffs else math.nan
                             row["Closest_To_GT"] = "+".join(k for k, v in diffs.items() if v <= best + 1e-9)  # ties
-                            row["Figure"] = str((target / f"{stem}.png").relative_to(out_root))
+                            for st in styles:
+                                row[f"Figure_{st.capitalize()}"] = figures[st]
                             rows.append(row)
                     done = ", ".join("whole recording" if w <= 0 else f"{n} windows of {w:g} s" for w, n in drawn.items())
                     print(f"  {subject}{f' rec {segment_id}' if multi else ''}: {len(times)} beats used; {done} drawn",
@@ -520,7 +599,8 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Pat
                 for slot in subject_pdfs.values():
                     close_pdf(slot)
     finally:
-        close_pdf(dataset_pdf)
+        for slot in dataset_pdfs.values():
+            close_pdf(slot)
     del data
     return rows
 
@@ -529,6 +609,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="RIIV, RIAV, RIFV of the PPG: time series and FFT spectra per window")
     p.add_argument("--window-sec", nargs="+", type=float, default=list(WINDOW_SECS),
                    help="window lengths in s, every one drawn (default 60 30); 0 = the whole recording")
+    p.add_argument("--styles", nargs="+", choices=list(STYLES), default=list(STYLES),
+                   help="figure styles, each in its own folder (default overlap separate)")
     p.add_argument("--datasets", nargs="+", choices=list(DATASETS), default=list(DATASETS))
     p.add_argument("--subjects", nargs="+", default=None, help="Dataset:Subject (default: every subject)")
     p.add_argument("--keep-issue-subjects", action="store_true")
