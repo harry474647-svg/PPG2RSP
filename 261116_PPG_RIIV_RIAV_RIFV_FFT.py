@@ -48,9 +48,9 @@ Figures per window (per recording for the whole recording), in two styles, each 
 capnogram, BIDMC impedance, STEAM2 belt; band-passed and aligned as in the scoring)
   overlap   (a) GT, RIIV, RIAV and RIFV over time (band-passed), each z-scored (mean 0, SD 1), on one axis
             (b) their |FFT| (peak = 1) over each other; the peak of each marked, its frequency in the legend;
-                the GT rate (breath count / length) dotted, the rate band dashed
+                the GT rate (breath count / length) dotted
   separate  the same curves, one row per signal (GT, RIIV, RIAV, RIFV), each with its own axes:
-            left the time series, right the |FFT| (peak = 1) with its peak, the GT rate dotted, the band dashed
+            left the time series, right the |FFT| (peak = 1) with its peak, the GT rate dotted
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261116_PPG_RIIV_RIAV_RIFV_FFT), {style} = overlap or separate
   windows of W s (default W = 60 and 30)
@@ -116,7 +116,7 @@ EXCLUDED = {"STEAM2": ("22_LMS", "26_CKK", "12_YJJ"), "BIDMC": ("27",), "CapnoBa
 MODS = ("RIIV", "RIAV", "RIFV")
 LONG = {"RIIV": "RIIV (intensity)", "RIAV": "RIAV (amplitude)", "RIFV": "RIFV (pulse rate)"}
 COLORS = {"RIIV": "#2a78d6", "RIAV": "#eb6834", "RIFV": "#1baf7a"}  # validated categorical slots 1-3
-GT_COLOR, BAND_COLOR, INK, MUTED, GRID = "#000000", "#b84fb8", "#1f1f1f", "#6b6a66", "#e4e3df"
+GT_COLOR, INK, MUTED, GRID = "#000000", "#1f1f1f", "#6b6a66", "#e4e3df"
 RESAMPLE_HZ = 4.0
 PPG_LOWPASS_HZ = 8.0
 PEAK_SEARCH_SEC = 0.15
@@ -333,8 +333,6 @@ def draw_overlap(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tup
             ax.plot([s["peak_hz"]], [1.0], marker="s", ms=5.5, color=COLORS[key], mec="white", mew=0.8, zorder=8)
     if np.isfinite(gt_rate_hz):
         ax.axvline(gt_rate_hz, color=GT_COLOR, lw=1.1, ls=(0, (1, 2)), zorder=9)
-    for edge in band:
-        ax.axvline(edge, color=BAND_COLOR, lw=1.1, ls=(0, (4, 3)), zorder=1)
     ax.set_xlim(0.0, max_freq)
     ax.set_ylim(0.0, top * 1.08)
     ax.set_xlabel("Frequency (Hz)", fontsize=9)
@@ -347,11 +345,9 @@ def draw_overlap(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tup
     handles += [Line2D([], [], color=COLORS[k], lw=1.7, marker="s", ms=5.5, mec="white", mew=0.8) for k in MODS]
     labels += [f"{k} peak {spectra[k]['peak_hz']:.3f} Hz\n({spectra[k]['peak_hz'] * 60:.1f} /min)"
                if np.isfinite(spectra[k]["peak_hz"]) else f"{k} peak n/a" for k in MODS]
-    handles += [Line2D([], [], color=GT_COLOR, lw=1.1, ls=(0, (1, 2))),
-                Line2D([], [], color=BAND_COLOR, lw=1.1, ls=(0, (4, 3)))]
+    handles += [Line2D([], [], color=GT_COLOR, lw=1.1, ls=(0, (1, 2)))]
     labels += [f"GT rate (breath count)\n{gt_rate_hz:.3f} Hz ({gt_rate_hz * 60:.1f} /min)" if np.isfinite(gt_rate_hz)
-               else "GT rate n/a",
-               f"rate band {band[0]:.2f}-{band[1]:.2f} Hz"]
+               else "GT rate n/a"]
     fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(x_leg, (bottom_in + h_fft) / height), frameon=False,
                fontsize=7.9, labelspacing=0.55, borderaxespad=0.0)
 
@@ -399,8 +395,6 @@ def draw_separate(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tu
             ax_f.plot([s["peak_hz"]], [1.0], marker="s", ms=5.5, color=colors[key], mec="white", mew=0.8, zorder=6)
         if np.isfinite(gt_rate_hz):
             ax_f.axvline(gt_rate_hz, color=GT_COLOR, lw=1.1, ls=(0, (1, 2)), zorder=5)
-        for edge in band:
-            ax_f.axvline(edge, color=BAND_COLOR, lw=1.1, ls=(0, (4, 3)), zorder=1)
         ax_f.set_xlim(0.0, max_freq)
         ax_f.set_ylim(0.0, top * 1.12)
         peak = s["peak_hz"]
@@ -417,9 +411,8 @@ def draw_separate(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tu
     fft_axes[-1].set_xlabel("Frequency (Hz)", fontsize=9)
     rate = (f"GT rate (breath count) {gt_rate_hz:.3f} Hz ({gt_rate_hz * 60:.1f} /min)" if np.isfinite(gt_rate_hz)
             else "GT rate n/a")
-    fig.legend([Line2D([], [], color=GT_COLOR, lw=1.1, ls=(0, (1, 2))),
-                Line2D([], [], color=BAND_COLOR, lw=1.1, ls=(0, (4, 3)))],
-               [rate, f"rate band {band[0]:.2f}-{band[1]:.2f} Hz"], loc="upper left", ncol=2, frameon=False,
+    fig.legend([Line2D([], [], color=GT_COLOR, lw=1.1, ls=(0, (1, 2)))],
+               [rate], loc="upper left", ncol=1, frameon=False,
                fontsize=8.2, bbox_to_anchor=(left / width, 1.0 - 0.72 / height), borderaxespad=0.0)
     fig.text(left / width, 1.0 - 0.18 / height, header[0], fontsize=10.5, color=INK, va="top")
     fig.text(left / width, 1.0 - 0.48 / height, header[1], fontsize=7.6, color=MUTED, va="top")
