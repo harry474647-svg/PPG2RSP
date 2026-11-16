@@ -42,10 +42,11 @@ breath count of the minute, as in the scoring), with the GT of the final results
 detected on the capnogram; BIDMC: annotator 1 (ann1) of bidmc_data.mat; STEAM2: the stored breaths of
 the belt).
 
-Figure per window (per recording with --window-sec 0)
-  (a) RIIV, RIAV and RIFV over time (band-passed), each z-scored (mean 0, SD 1) so they overlap on one axis
+Figure per window (per recording with --window-sec 0); GT (black) = the continuous reference signal of the
+source script (CapnoBase capnogram, BIDMC impedance, STEAM2 belt; band-passed and aligned as in the scoring)
+  (a) GT, RIIV, RIAV and RIFV over time (band-passed), each z-scored (mean 0, SD 1) so they overlap on one axis
   (b) their |FFT| (peak = 1) over each other; the peak of each marked, its frequency in the legend;
-      the GT rate dotted, the rate band dashed
+      the GT rate (breath count / length) dotted, the rate band dashed
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261116_PPG_RIIV_RIAV_RIFV_FFT)
   60 s windows (default)
@@ -55,8 +56,8 @@ Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261116_PPG_RIIV_RIAV_RIFV_FFT)
     {Dataset}\{subject}[_rec{k}]_RIIV_RIAV_RIFV.png    one figure per recording
     {Dataset}\{Dataset}_RIIV_RIAV_RIFV.pdf              every recording of the dataset, one page each
   261116_PPG_RIIV_RIAV_RIFV_FFT.xlsx
-    Windows     every window (or recording): start, end, beats, mean pulse rate, GT breaths, the peak
-                frequency of RIIV / RIAV / RIFV (Hz), the GT rate (Hz) and |peak - GT rate| of each
+    Windows     every window (or recording): start, end, beats, mean pulse rate, GT breaths, the GT rate (Hz),
+                the peak frequency of the GT reference and of RIIV / RIAV / RIFV (Hz), |peak - GT rate| of each
     Summary     per dataset: mean |peak - GT rate| of each modulation, recordings within 0.02 Hz of the GT rate,
                 and how often each is the closest (ties counted for each)
     Notes
@@ -105,6 +106,7 @@ DATASETS = ("CapnoBase", "BIDMC", "STEAM2")
 KEYS = {"CapnoBase": "capnobase", "BIDMC": "bidmc", "STEAM2": "steam2"}
 SOURCE = {"CapnoBase": "261007", "BIDMC": "261013", "STEAM2": "261013"}
 GT_NAME = {"CapnoBase": "breaths detected on the capnogram", "BIDMC": "ann1", "STEAM2": "belt breaths"}
+MODALITY = {"CapnoBase": "capnogram", "BIDMC": "impedance", "STEAM2": "belt"}
 EXCLUDED = {"STEAM2": ("22_LMS", "26_CKK", "12_YJJ"), "BIDMC": ("27",), "CapnoBase": ("0115",)}
 MODS = ("RIIV", "RIAV", "RIFV")
 LONG = {"RIIV": "RIIV (intensity)", "RIAV": "RIAV (amplitude)", "RIFV": "RIFV (pulse rate)"}
@@ -276,10 +278,10 @@ def style(ax) -> None:
 
 
 def draw(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tuple[np.ndarray, np.ndarray]],
-         spectra: Dict[str, dict], gt_rate_hz: float, band: Tuple[float, float], max_freq: float,
+         spectra: Dict[str, dict], gt: dict, gt_rate_hz: float, band: Tuple[float, float], max_freq: float,
          span_label: str) -> None:
     width, side, left, top_in, bottom_in = 12.6, 3.3, 0.8, 1.0, 0.6
-    h_ts, h_fft, gap = 2.3, 2.5, 0.75
+    h_ts, h_fft, gap = 2.3, 2.9, 0.75
     height = top_in + bottom_in + h_ts + h_fft + gap
     fig = plt.figure(figsize=(width, height))
     plot_w = (width - left - side - 0.25) / width
@@ -288,22 +290,32 @@ def draw(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tuple[np.nd
     # (a) time series, z-scored
     y0 = bottom_in + h_fft + gap
     ax = fig.add_axes([left / width, y0 / height, plot_w, h_ts / height])
+    t_gt, v_gt = gt["series"]
+    sd_gt = float(np.std(v_gt))
+    ax.plot(t_gt, (v_gt - np.mean(v_gt)) / sd_gt if sd_gt > 0 else v_gt * 0, color=GT_COLOR, lw=1.5, zorder=2)
     for key in MODS:
         t, v = series[key]
         sd = float(np.std(v))
-        ax.plot(t, (v - np.mean(v)) / sd if sd > 0 else v * 0, color=COLORS[key], lw=1.0, label=LONG[key])
+        ax.plot(t, (v - np.mean(v)) / sd if sd > 0 else v * 0, color=COLORS[key], lw=1.0, zorder=3)
     ax.set_xlim(min(series[k][0][0] for k in MODS), max(series[k][0][-1] for k in MODS))
     ax.set_xlabel("Time in the recording (s)", fontsize=9)
     ax.set_ylabel("z-score", fontsize=9)
-    ax.set_title("(a) RIIV, RIAV, RIFV over time (band-passed, each z-scored)", fontsize=9.5, loc="left", pad=3)
+    ax.set_title("(a) GT, RIIV, RIAV, RIFV over time (band-passed, each z-scored)", fontsize=9.5, loc="left", pad=3)
     style(ax)
-    fig.legend([Line2D([], [], color=COLORS[k], lw=1.6) for k in MODS], [LONG[k] for k in MODS], loc="upper left",
+    fig.legend([Line2D([], [], color=GT_COLOR, lw=1.6)] + [Line2D([], [], color=COLORS[k], lw=1.6) for k in MODS],
+               [gt["label"]] + [LONG[k] for k in MODS], loc="upper left",
                bbox_to_anchor=(x_leg, (y0 + h_ts) / height), frameon=False, fontsize=8.2, labelspacing=0.7,
                borderaxespad=0.0)
 
     # (b) spectra, |FFT| / peak in the band
     ax = fig.add_axes([left / width, bottom_in / height, plot_w, h_fft / height])
     top = 1.0
+    if np.isfinite(gt["peak_mag"]) and gt["peak_mag"] > 0:
+        keep = gt["freq"] <= max_freq
+        y = gt["mag"][keep] / gt["peak_mag"]
+        top = max(top, float(np.nanmax(y)))
+        ax.plot(gt["freq"][keep], y, color=GT_COLOR, lw=1.7, zorder=3)
+        ax.plot([gt["peak_hz"]], [1.0], marker="s", ms=5.5, color=GT_COLOR, mec="white", mew=0.8, zorder=8)
     for z, key in enumerate(MODS):
         s = spectra[key]
         keep = s["freq"] <= max_freq
@@ -321,17 +333,21 @@ def draw(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tuple[np.nd
     ax.set_ylim(0.0, top * 1.08)
     ax.set_xlabel("Frequency (Hz)", fontsize=9)
     ax.set_ylabel("|FFT| (peak = 1)", fontsize=9)
-    ax.set_title(f"(b) FFT of RIIV, RIAV, RIFV ({span_label})", fontsize=9.5, loc="left", pad=3)
+    ax.set_title(f"(b) FFT of GT, RIIV, RIAV, RIFV ({span_label})", fontsize=9.5, loc="left", pad=3)
     style(ax)
-    handles = [Line2D([], [], color=COLORS[k], lw=1.7, marker="s", ms=5.5, mec="white", mew=0.8) for k in MODS]
-    labels = [f"{k} peak {spectra[k]['peak_hz']:.3f} Hz\n({spectra[k]['peak_hz'] * 60:.1f} /min)"
-              if np.isfinite(spectra[k]["peak_hz"]) else f"{k} peak n/a" for k in MODS]
+    handles = [Line2D([], [], color=GT_COLOR, lw=1.7, marker="s", ms=5.5, mec="white", mew=0.8)]
+    labels = [f"{gt['label']} peak {gt['peak_hz']:.3f} Hz\n({gt['peak_hz'] * 60:.1f} /min)"
+              if np.isfinite(gt["peak_hz"]) else f"{gt['label']} peak n/a"]
+    handles += [Line2D([], [], color=COLORS[k], lw=1.7, marker="s", ms=5.5, mec="white", mew=0.8) for k in MODS]
+    labels += [f"{k} peak {spectra[k]['peak_hz']:.3f} Hz\n({spectra[k]['peak_hz'] * 60:.1f} /min)"
+               if np.isfinite(spectra[k]["peak_hz"]) else f"{k} peak n/a" for k in MODS]
     handles += [Line2D([], [], color=GT_COLOR, lw=1.1, ls=(0, (1, 2))),
                 Line2D([], [], color=BAND_COLOR, lw=1.1, ls=(0, (4, 3)))]
-    labels += [f"GT rate {gt_rate_hz:.3f} Hz\n({gt_rate_hz * 60:.1f} /min)" if np.isfinite(gt_rate_hz) else "GT rate n/a",
+    labels += [f"GT rate (breath count)\n{gt_rate_hz:.3f} Hz ({gt_rate_hz * 60:.1f} /min)" if np.isfinite(gt_rate_hz)
+               else "GT rate n/a",
                f"rate band {band[0]:.2f}-{band[1]:.2f} Hz"]
     fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(x_leg, (bottom_in + h_fft) / height), frameon=False,
-               fontsize=8.2, labelspacing=0.8, borderaxespad=0.0)
+               fontsize=7.9, labelspacing=0.55, borderaxespad=0.0)
 
     fig.text(left / width, 1.0 - 0.18 / height, header[0], fontsize=10.5, color=INK, va="top")
     fig.text(left / width, 1.0 - 0.48 / height, header[1], fontsize=7.6, color=MUTED, va="top")
@@ -442,6 +458,16 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Pat
                             freq, mag = spectrum(series[k][1], RESAMPLE_HZ)
                             peak_hz, peak_mag = band_peak(freq, mag, band)
                             spectra[k] = {"freq": freq, "mag": mag, "peak_hz": peak_hz, "peak_mag": peak_mag}
+                        ref_signal = np.asarray(ref["signal"], dtype=np.float64)
+                        g0 = max(0, int(round((a if not whole else float(times[0])) * fs)))
+                        g1 = min(len(ref_signal), int(round((b if not whole else float(times[-1])) * fs)))
+                        gt_values = ref_signal[g0:g1]
+                        ok = np.isfinite(gt_values)
+                        gt_t = np.arange(g0, g1)[ok] / fs
+                        gt_freq, gt_mag = spectrum(gt_values[ok], fs)
+                        gt_peak_hz, gt_peak_mag = band_peak(gt_freq, gt_mag, band)
+                        gt = {"label": f"GT ({MODALITY[dataset]})", "series": (gt_t, gt_values[ok]), "freq": gt_freq,
+                              "mag": gt_mag, "peak_hz": gt_peak_hz, "peak_mag": gt_peak_mag}
                         breaths = breaths_all[(breaths_all >= a * fs) & (breaths_all < b * fs)]
                         gt_rate_hz = len(breaths) / (b - a) if b > a else math.nan
                         pulse_rate = float(np.mean(beats["values"]["RIFV"][in_window]))
@@ -454,7 +480,7 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Pat
                                   f"{GT_NAME[dataset]} / {'recording' if whole else 'window'} length")
                         stem = (f"{tag}{f'_rec{segment_id}' if multi else ''}"
                                 + ("" if whole else f"_{a:.0f}-{b:.0f}s") + "_RIIV_RIAV_RIFV")
-                        draw(sub_folder / f"{stem}.png", pdf, header, series, spectra, gt_rate_hz, band,
+                        draw(sub_folder / f"{stem}.png", pdf, header, series, spectra, gt, gt_rate_hz, band,
                              args.max_freq_hz, "whole recording" if whole else f"{args.window_sec:g} s window {span}")
                         pages += 1
                         drawn += 1
@@ -462,7 +488,7 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Pat
                                "Window_Sec": float(args.window_sec) if not whole else 0.0, "Start_Sec": a, "End_Sec": b,
                                "Beats_Used": int(in_window.sum()), "Mean_Pulse_Rate_BPM": pulse_rate,
                                "Filter_Band_Low_Hz": resp_band[0], "Filter_Band_High_Hz": resp_band[1],
-                               "GT_Breaths": int(len(breaths)), "GT_Rate_Hz": gt_rate_hz}
+                               "GT_Breaths": int(len(breaths)), "GT_Rate_Hz": gt_rate_hz, "GT_Ref_Peak_Hz": gt_peak_hz}
                         for k in MODS:
                             row[f"{k}_Peak_Hz"] = spectra[k]["peak_hz"]
                             row[f"{k}_Abs_Diff_To_GT_Hz"] = abs(spectra[k]["peak_hz"] - gt_rate_hz)
