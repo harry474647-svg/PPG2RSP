@@ -38,7 +38,7 @@ A length of 0 = the whole recording as one window (first to last used beat), e.g
 Spectrum of each window and series: detrend, Hamming window, zero padding (at least 4096 points); |FFT|
 divided by its largest value in the rate band so the three curves share one axis (their units differ);
 peak = the largest |FFT| in the rate band, 0.1-0.5 Hz (6-30 /min; --rate-band-hz).
-GT rate of the window (for comparison): GT breaths in the window / its length (with 60 s windows: the GT
+GT rate of the window (in the table only): GT breaths in the window / its length (with 60 s windows: the GT
 breath count of the minute, as in the scoring; with 30 s windows: twice the count of the half minute), with the GT of the final results (CapnoBase: breaths
 detected on the capnogram; BIDMC: annotator 1 (ann1) of bidmc_data.mat; STEAM2: the stored breaths of
 the belt).
@@ -47,10 +47,9 @@ Figures per window (per recording for the whole recording), in two styles, each 
 (--styles, default both); GT (black) = the continuous reference signal of the source script (CapnoBase
 capnogram, BIDMC impedance, STEAM2 belt; band-passed and aligned as in the scoring)
   overlap   (a) GT, RIIV, RIAV and RIFV over time (band-passed), each z-scored (mean 0, SD 1), on one axis
-            (b) their |FFT| (peak = 1) over each other; the peak of each marked, its frequency in the legend;
-                the GT rate (breath count / length) dotted
+            (b) their |FFT| (peak = 1) over each other; the peak of each marked, its frequency in the legend
   separate  the same curves, one row per signal (GT, RIIV, RIAV, RIFV), each with its own axes:
-            left the time series, right the |FFT| (peak = 1) with its peak, the GT rate dotted
+            left the time series, right the |FFT| (peak = 1) with its peak
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261116_PPG_RIIV_RIAV_RIFV_FFT), {style} = overlap or separate
   windows of W s (default W = 60 and 30)
@@ -331,8 +330,6 @@ def draw_overlap(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tup
             ax.plot(s["freq"][keep], y, color=COLORS[key], lw=1.7, zorder=4 + z)
             ax.axvline(s["peak_hz"], color=COLORS[key], lw=1.0, alpha=0.9, zorder=3)
             ax.plot([s["peak_hz"]], [1.0], marker="s", ms=5.5, color=COLORS[key], mec="white", mew=0.8, zorder=8)
-    if np.isfinite(gt_rate_hz):
-        ax.axvline(gt_rate_hz, color=GT_COLOR, lw=1.1, ls=(0, (1, 2)), zorder=9)
     ax.set_xlim(0.0, max_freq)
     ax.set_ylim(0.0, top * 1.08)
     ax.set_xlabel("Frequency (Hz)", fontsize=9)
@@ -345,9 +342,6 @@ def draw_overlap(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tup
     handles += [Line2D([], [], color=COLORS[k], lw=1.7, marker="s", ms=5.5, mec="white", mew=0.8) for k in MODS]
     labels += [f"{k} peak {spectra[k]['peak_hz']:.3f} Hz\n({spectra[k]['peak_hz'] * 60:.1f} /min)"
                if np.isfinite(spectra[k]["peak_hz"]) else f"{k} peak n/a" for k in MODS]
-    handles += [Line2D([], [], color=GT_COLOR, lw=1.1, ls=(0, (1, 2)))]
-    labels += [f"GT rate (breath count)\n{gt_rate_hz:.3f} Hz ({gt_rate_hz * 60:.1f} /min)" if np.isfinite(gt_rate_hz)
-               else "GT rate n/a"]
     fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(x_leg, (bottom_in + h_fft) / height), frameon=False,
                fontsize=7.9, labelspacing=0.55, borderaxespad=0.0)
 
@@ -366,7 +360,7 @@ def draw_separate(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tu
     keys = ("GT",) + MODS
     names = {"GT": gt["label"], **LONG}
     colors = {"GT": GT_COLOR, **COLORS}
-    width, left, right, col_gap, top_in, bottom_in, row_h, gap = 12.6, 1.05, 0.3, 0.75, 1.3, 0.62, 1.25, 0.3
+    width, left, right, col_gap, top_in, bottom_in, row_h, gap = 12.6, 1.05, 0.3, 0.75, 1.0, 0.62, 1.25, 0.3
     height = top_in + bottom_in + len(keys) * row_h + (len(keys) - 1) * gap
     fig = plt.figure(figsize=(width, height))
     col_w = (width - left - right - col_gap) / 2
@@ -393,8 +387,6 @@ def draw_separate(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tu
             ax_f.plot(s["freq"][keep], yv, color=colors[key], lw=1.6, zorder=4)
             ax_f.axvline(s["peak_hz"], color=colors[key], lw=1.0, alpha=0.9, zorder=3)
             ax_f.plot([s["peak_hz"]], [1.0], marker="s", ms=5.5, color=colors[key], mec="white", mew=0.8, zorder=6)
-        if np.isfinite(gt_rate_hz):
-            ax_f.axvline(gt_rate_hz, color=GT_COLOR, lw=1.1, ls=(0, (1, 2)), zorder=5)
         ax_f.set_xlim(0.0, max_freq)
         ax_f.set_ylim(0.0, top * 1.12)
         peak = s["peak_hz"]
@@ -409,11 +401,6 @@ def draw_separate(path: Path, pdf, header: Tuple[str, str], series: Dict[str, Tu
     fft_axes[0].set_title(f"(b) |FFT| (peak = 1), {span_label}", fontsize=9.5, loc="left", pad=3)
     ts_axes[-1].set_xlabel("Time in the recording (s)", fontsize=9)
     fft_axes[-1].set_xlabel("Frequency (Hz)", fontsize=9)
-    rate = (f"GT rate (breath count) {gt_rate_hz:.3f} Hz ({gt_rate_hz * 60:.1f} /min)" if np.isfinite(gt_rate_hz)
-            else "GT rate n/a")
-    fig.legend([Line2D([], [], color=GT_COLOR, lw=1.1, ls=(0, (1, 2)))],
-               [rate], loc="upper left", ncol=1, frameon=False,
-               fontsize=8.2, bbox_to_anchor=(left / width, 1.0 - 0.72 / height), borderaxespad=0.0)
     fig.text(left / width, 1.0 - 0.18 / height, header[0], fontsize=10.5, color=INK, va="top")
     fig.text(left / width, 1.0 - 0.48 / height, header[1], fontsize=7.6, color=MUTED, va="top")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -558,8 +545,7 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Pat
                                       + (f"whole recording {span}" if whole else f"{length:g} s window {span}")
                                       + f" · {int(in_window.sum())} beats, mean pulse rate {pulse_rate:.0f} /min",
                                       f"PPG = model input (64 Hz); beats on the 0.5-5 Hz pulse band; series at "
-                                      f"{RESAMPLE_HZ:g} Hz, band-passed {resp_band[0]:.2f}-{resp_band[1]:.2f} Hz; GT rate = "
-                                      f"{GT_NAME[dataset]} / {'recording' if whole else 'window'} length")
+                                      f"{RESAMPLE_HZ:g} Hz, band-passed {resp_band[0]:.2f}-{resp_band[1]:.2f} Hz")
                             stem = (f"{tag}{f'_rec{segment_id}' if multi else ''}"
                                     + ("" if whole else f"_{a:.0f}-{b:.0f}s") + "_RIIV_RIAV_RIFV")
                             figures = {}
