@@ -57,7 +57,8 @@ Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261117_Resp_Regularity_Spectral)
     Windows_B   every 30 s window: peak, P (%), class
     Windows_C   every 40 s window: peak, energy share (%), class
     Subjects    per subject: class shares and subject classes of A, B, C; median P, entropy, RR peak;
-                CapnoBase ventilation mode (from the CapnoBase param/meta files)
+                CapnoBase age and ventilation mode as written in the meta file (treatment_ventilation) and in
+                the param file (case_ventilation); the two differ for 0016, 0018, 0127, 0142 and 0322
     Datasets    per dataset: windows and subjects per class of each criterion, median entropy per class
     Criteria    the criteria, parameters and references
 
@@ -184,6 +185,17 @@ def wanted(subject: str, dataset: str, chosen: Dict[str, List[str]], excluded: S
     return not any(same_subject(subject, x) for x in excluded)
 
 
+def capnobase_text(mod, csv_dir: Path, case_id: str, kind: str, part: str) -> str:
+    """A field of the CapnoBase param or meta file (e.g. the ventilation mode); empty when missing."""
+    path = mod.capnobase_file(csv_dir, case_id, kind)
+    if path is None:
+        return ""
+    try:
+        return mod._text_field(mod.read_capnobase_fields(path), part).strip('"').strip()
+    except Exception:
+        return ""
+
+
 def capnobase_recordings(mod, chosen, excluded) -> Iterator[Tuple[str, List[dict]]]:
     cfg = mod.DATASET_CONFIGS["capnobase"]
     csv_dir = Path(cfg["data_path"])
@@ -197,7 +209,9 @@ def capnobase_recordings(mod, chosen, excluded) -> Iterator[Tuple[str, List[dict
             continue
         yield case_id, [{"name": "", "rsp": case["co2"], "fs": float(case["co2_fs"]),
                          "artifacts": np.asarray(case["co2_artifacts_sec"], float).reshape(-1, 2),
-                         "ventilation": str(case["diagnostics"].get("CapnoBase_Ventilation", "")).strip('"')}]
+                         "ventilation_param": capnobase_text(mod, csv_dir, case_id, "param", "vent"),
+                         "ventilation_meta": capnobase_text(mod, csv_dir, case_id, "meta", "vent"),
+                         "age": capnobase_text(mod, csv_dir, case_id, "meta", "age")}]
 
 
 def bidmc_recordings(mod, chosen, excluded) -> Iterator[Tuple[str, List[dict]]]:
@@ -213,7 +227,7 @@ def bidmc_recordings(mod, chosen, excluded) -> Iterator[Tuple[str, List[dict]]]:
         except Exception as exc:
             print(f"  [BIDMC {subject}] skipped: {exc}")
             continue
-        yield subject, [{"name": "", "rsp": rsp, "fs": fs, "artifacts": np.empty((0, 2)), "ventilation": ""}]
+        yield subject, [{"name": "", "rsp": rsp, "fs": fs, "artifacts": np.empty((0, 2))}]
 
 
 def steam2_recordings(mod, chosen, excluded) -> Iterator[Tuple[str, List[dict]]]:
@@ -230,8 +244,7 @@ def steam2_recordings(mod, chosen, excluded) -> Iterator[Tuple[str, List[dict]]]
                 pieces, _ = mod.steam2_session_pieces(ppg, rsp)  # same pieces as the source script
                 for k, (_, r, _, r_fs) in enumerate(pieces):
                     name = session if len(pieces) == 1 else f"{session} piece {k + 1}"
-                    recordings.append({"name": name, "rsp": r, "fs": float(r_fs), "artifacts": np.empty((0, 2)),
-                                       "ventilation": ""})
+                    recordings.append({"name": name, "rsp": r, "fs": float(r_fs), "artifacts": np.empty((0, 2))})
         except Exception as exc:
             print(f"  [STEAM2 {subject}] skipped: {exc}")
             continue
@@ -412,7 +425,8 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]]) -> Dict[str, 
             spans = rec["artifacts"] if not args.keep_artifacts else np.empty((0, 2))
             base = {"Dataset": dataset, "Subject": subject, "Recording_Index": rec_index, "Recording": rec["name"]}
             out["info"].append({**base, "Duration_Sec": np.asarray(rec["rsp"]).size / rec["fs"],
-                                "Ventilation": rec["ventilation"]})
+                                "Age": rec.get("age", ""), "Ventilation_Meta": rec.get("ventilation_meta", ""),
+                                "Ventilation_Param": rec.get("ventilation_param", "")})
             xa, va = prep_a(rec["rsp"], rec["fs"], A["fs"])
             xb, vb = prep_a(rec["rsp"], rec["fs"], B["fs"])
             xc, vc = prep_c(rec["rsp"], rec["fs"])
@@ -439,7 +453,8 @@ def summarize(win: Dict[str, pd.DataFrame], info: pd.DataFrame) -> Tuple[pd.Data
     keys = ["Dataset", "Subject"]
     meta = info.groupby(keys, sort=False).agg(Recordings=("Recording_Index", "nunique"),
                                               Duration_Min=("Duration_Sec", lambda s: s.sum() / 60.0),
-                                              Ventilation=("Ventilation", "first")).reset_index()
+                                              Age=("Age", "first"), Ventilation_Meta=("Ventilation_Meta", "first"),
+                                              Ventilation_Param=("Ventilation_Param", "first")).reset_index()
     rows = []
     for (dataset, subject), m in meta.set_index(keys).iterrows():
         row = {"Dataset": dataset, "Subject": subject, **m.to_dict()}
