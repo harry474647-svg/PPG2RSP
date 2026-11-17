@@ -20,10 +20,10 @@ Filtering (per recording, on the whole recording, then cut into windows)
   Butterworth, 4th order (--filter-order), zero phase (forward-backward, second-order sections).
   Missing samples (NaN) are bridged by linear interpolation for the filter and shown as gaps.
 
-Windows: every length in --window-sec (default 60 and 30 s: both are drawn), on a grid from the start of
-the recording (60 s: 0-60, 60-120 s, ...; 30 s: 0-30, 30-60 s, ...), over the time both signals cover;
+Windows: every length in --window-sec (default 60 and 10 s: both are drawn), on a grid from the start of
+the recording (60 s: 0-60, 60-120 s, ...; 10 s: 0-10, 10-20 s, ...), over the time both signals cover;
 a window is drawn when both signals have at least 90% valid (not missing) samples in it.
-A length of 0 = the whole recording as one window, e.g. --window-sec 60 30 0.
+A length of 0 = the whole recording as one window, e.g. --window-sec 60 10 0.
 
 Figures, in two styles, each in its own folder (--styles, default both)
   overlap   PPG (blue) and RSP (black) on one axis, each z-scored in the window (mean 0, SD 1)
@@ -31,7 +31,7 @@ Figures, in two styles, each in its own folder (--styles, default both)
             (a) PPG band-passed, (b) RSP band-passed
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261117_PPG_RSP_Overlay), {style} = overlap or separate
-  windows of W s (default W = 60 and 30)
+  windows of W s (default W = 60 and 10)
     {style}\{Dataset}\{subject}\w{W}s\{subject}[_rec{k}]_{t0}-{t1}s.png          one figure per window
     {style}\{Dataset}\{subject}\w{W}s\{Dataset}_{subject}_w{W}s_{style}.pdf     every W s window, one per page
   whole recording (length 0)
@@ -43,7 +43,7 @@ Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261117_PPG_RSP_Overlay), {style} = overla
     Notes       filters and settings
 
 Run: python 261117_PPG_RSP_Overlay.py     (Spyder: runfile(...), no options needed)
-Options: --window-sec (default 60 30; 0 = whole recording), --styles (default overlap separate),
+Options: --window-sec (default 60 10; 0 = whole recording), --styles (default overlap separate),
 --datasets, --subjects CapnoBase:0104 BIDMC:09 ..., --keep-issue-subjects, --ppg-band-hz (default 0.1 5.0),
 --rsp-band-hz (default 0.1 0.5), --filter-order (default 4), --dpi (default 150), --output-root,
 --script-261007, --script-261013, --root-261007, --root-261013, --capnobase-path, --bidmc-path,
@@ -89,7 +89,7 @@ EXCLUDED = {"STEAM2": ("22_LMS", "26_CKK", "12_YJJ"), "BIDMC": ("27",), "CapnoBa
 PPG_BAND_HZ = (0.1, 5.0)
 RSP_BAND_HZ = (0.1, 0.5)
 FILTER_ORDER = 4
-WINDOW_SECS = (60.0, 30.0)  # every length is drawn; 0 = the whole recording
+WINDOW_SECS = (60.0, 10.0)  # every length is drawn; 0 = the whole recording
 STYLES = ("overlap", "separate")  # each style in its own folder
 MIN_VALID_FRACTION = 0.9
 DPI = 150
@@ -272,7 +272,7 @@ def style_axis(ax) -> None:
 
 
 def figure_width(length: float) -> float:
-    return 12.0 if length <= 30 else 16.0 if length <= 60 else 22.0
+    return 10.0 if length <= 10 else 16.0 if length <= 60 else 22.0
 
 
 def draw_overlap(path: Path, pdf, header: Tuple[str, str], t_p, ppg, t_r, rsp, labels: Tuple[str, str], dpi: int) -> None:
@@ -422,7 +422,7 @@ def dataset_rows(args, dataset: str, chosen: Dict[str, List[str]], out_root: Pat
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PPG and respiration reference over each other, band-passed, per window")
     p.add_argument("--window-sec", nargs="+", type=float, default=list(WINDOW_SECS),
-                   help="window lengths in s, every one drawn (default 60 30); 0 = the whole recording")
+                   help="window lengths in s, every one drawn (default 60 10); 0 = the whole recording")
     p.add_argument("--styles", nargs="+", choices=list(STYLES), default=list(STYLES),
                    help="figure styles, each in its own folder (default overlap separate)")
     p.add_argument("--datasets", nargs="+", choices=list(DATASETS), default=list(DATASETS))
