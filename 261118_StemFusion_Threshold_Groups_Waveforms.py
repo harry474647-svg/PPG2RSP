@@ -7,9 +7,12 @@ Groups, for every threshold T (--thresholds, default 2 and 3 breaths/min); MAE =
   1_change     |MAE O - MAE X| >= T, both directions (Fusion O better: O < X; Fusion O worse: O > X)
   2_improved   MAE X > T and MAE O < T: above T without the stem fusion, below T with it
   3_worsened   MAE X < T and MAE O > T: the opposite
-Clinical criterion (--clinical-mae, --clinical-pcc, default MAE < 3.0 breaths/min and |PCC| > 0.6), with
-|PCC| = the mean over the scored minutes of the absolute waveform PCC of every minute (Wave_PCC of the stored
-minute tables)
+Clinical criteria (--clinical-mae, --clinical-pcc, default 3.0 breaths/min and 0.6), with |PCC| = the mean over the
+scored minutes of the absolute waveform PCC of every minute (Wave_PCC of the stored minute tables); each criterion
+on its own, so a subject can be in several of them
+  1_MAE        MAE < 3
+  2_absPCC     |PCC| > 0.6
+  3_both       MAE < 3 and |PCC| > 0.6
   better       Fusion X does not meet the criterion, Fusion O meets it
   worse        Fusion X meets the criterion, Fusion O does not
 A subject can be in several groups and at both thresholds; it is drawn once and every figure is saved in each
@@ -56,21 +59,22 @@ Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261118_StemFusion_Threshold_Groups_Wavefo
   T{T}bpm\1_change_ge{T}bpm\{Dataset}_{subject}_{O_better|O_worse}\{recording}_{t0}-{t1}s.png
   T{T}bpm\2_improved_Xover{T}_Ounder{T}\{Dataset}_{subject}\...
   T{T}bpm\3_worsened_Xunder{T}_Oover{T}\{Dataset}_{subject}\...
-  Clinical_MAE{3}_absPCC{0.6}\1_better_Xfails_Omeets\{Dataset}_{subject}\...
-  Clinical_MAE{3}_absPCC{0.6}\2_worse_Xmeets_Ofails\{Dataset}_{subject}\...
+  Clinical_MAE{3}_absPCC{0.6}\{1_MAE_lt3 | 2_absPCC_gt0.6 | 3_MAE_lt3_and_absPCC_gt0.6}\
+      1_better_Xfails_Omeets\{Dataset}_{subject}\...  and  2_worse_Xmeets_Ofails\{Dataset}_{subject}\...
       every 30 s window, and {Dataset}_{subject}_windows.pdf (all windows, one page each) in every folder
   261118_StemFusion_Threshold_Groups.xlsx
     Group_Summary  per criterion (threshold or clinical), group and dataset: number of subjects and their list
                    ("none" when empty)
     Groups         every subject of every group: MAE X, MAE O, difference, |PCC| X, |PCC| O, direction, folder
-    Subjects       every subject: MAE X, MAE O, difference, |PCC| X, |PCC| O, the clinical criterion with each model,
-                   scored minutes, its groups
+    Subjects       every subject: MAE X, MAE O, difference, |PCC| X, |PCC| O, each clinical criterion with each
+                   model, scored minutes, its groups
     Minutes        every minute of the grouped subjects: GT, rates and errors of both models
     Missing        subjects without stored results of both models or without a scored minute
     Notes
 
 Run: python 261118_StemFusion_Threshold_Groups_Waveforms.py     (Spyder: runfile(...), no options needed)
-Options: --thresholds (default 2 3), --clinical-mae (3), --clinical-pcc (0.6), --datasets, --keep-issue-subjects, --ann1-nogap, --window-sec,
+Options: --thresholds (default 2 3), --clinical-mae (3), --clinical-pcc (0.6), --datasets, --keep-issue-subjects,
+--ann1-nogap, --window-sec,
 --raw-predictions, --root-261007, --root-261013, --root-noise, --output-root, --script-261007, --script-261013,
 --capnobase-path, --bidmc-path, --steam2-ppg-dir, --steam2-rsp-dir
 """
@@ -116,8 +120,9 @@ MODALITY = {"CapnoBase": "capnogram", "BIDMC": "impedance", "STEAM2": "belt"}
 EXCLUDED = {"STEAM2": ("22_LMS", "26_CKK", "12_YJJ"), "BIDMC": ("27",), "CapnoBase": ("0115",)}
 THRESHOLDS = (2.0, 3.0)  # breaths/min
 GROUPS = ("1_change", "2_improved", "3_worsened")
-CLINICAL_MAE = 3.0  # clinical criterion: MAE < 3.0 breaths/min and |PCC| > 0.6
+CLINICAL_MAE = 3.0  # clinical criteria: MAE < 3.0 breaths/min, |PCC| > 0.6, and both
 CLINICAL_PCC = 0.6
+CLINICAL_CRITERIA = ("mae", "pcc", "both")
 CLINICAL_GROUPS = ("better", "worse")
 WINDOW_SEC = 30.0
 ANN1_GAP_FACTOR = 2.5
@@ -151,12 +156,19 @@ def clinical_folder(group: str) -> str:
     return {"better": "1_better_Xfails_Omeets", "worse": "2_worse_Xmeets_Ofails"}[group]
 
 
-def clinical_rule(args) -> str:
-    return f"MAE < {args.clinical_mae:g} and |PCC| > {args.clinical_pcc:g}"
+def clinical_rule(criterion: str, args) -> str:
+    mae, pcc = f"MAE < {args.clinical_mae:g}", f"|PCC| > {args.clinical_pcc:g}"
+    return {"mae": mae, "pcc": pcc, "both": f"{mae} and {pcc}"}[criterion]
 
 
-def meets_clinical(mae: float, abs_pcc: float, args) -> bool:
-    return bool(mae < args.clinical_mae and abs_pcc > args.clinical_pcc)
+def clinical_criterion_folder(criterion: str, args) -> str:
+    mae, pcc = f"MAE_lt{args.clinical_mae:g}", f"absPCC_gt{args.clinical_pcc:g}"
+    return {"mae": f"1_{mae}", "pcc": f"2_{pcc}", "both": f"3_{mae}_and_{pcc}"}[criterion]
+
+
+def meets_clinical(criterion: str, mae: float, abs_pcc: float, args) -> bool:
+    ok_mae, ok_pcc = bool(mae < args.clinical_mae), bool(abs_pcc > args.clinical_pcc)
+    return {"mae": ok_mae, "pcc": ok_pcc, "both": ok_mae and ok_pcc}[criterion]
 
 
 def clinical_failed(mae: float, abs_pcc: float, args) -> str:
@@ -165,19 +177,31 @@ def clinical_failed(mae: float, abs_pcc: float, args) -> str:
     return " + ".join(parts)
 
 
-def clinical_membership(row: dict, args) -> Optional[str]:
-    """better: Fusion X misses the clinical criterion and Fusion O meets it; worse: the opposite."""
-    x = meets_clinical(row["MAE_X"], row["AbsPCC_X"], args)
-    o = meets_clinical(row["MAE_O"], row["AbsPCC_O"], args)
-    return "better" if o and not x else "worse" if x and not o else None
+def clinical_memberships(row: dict, args) -> List[Tuple[str, str]]:
+    """(criterion, better / worse) of every clinical criterion whose status changes: better = Fusion X misses the
+    criterion and Fusion O meets it, worse = the opposite."""
+    out = []
+    for criterion in CLINICAL_CRITERIA:
+        x = meets_clinical(criterion, row["MAE_X"], row["AbsPCC_X"], args)
+        o = meets_clinical(criterion, row["MAE_O"], row["AbsPCC_O"], args)
+        if o and not x:
+            out.append((criterion, "better"))
+        elif x and not o:
+            out.append((criterion, "worse"))
+    return out
 
 
-def clinical_text(group: str, row: dict, args) -> str:
-    if group == "better":
-        return (f"clinical ({clinical_rule(args)}) better: X misses "
-                f"({clinical_failed(row['MAE_X'], row['AbsPCC_X'], args)}) -> O meets")
-    return (f"clinical ({clinical_rule(args)}) worse: X meets -> O misses "
-            f"({clinical_failed(row['MAE_O'], row['AbsPCC_O'], args)})")
+def clinical_text(criterion: str, group: str, row: dict, args) -> str:
+    rule = clinical_rule(criterion, args)
+    if criterion == "mae":
+        values = f"MAE {row['MAE_X']:.2f} -> {row['MAE_O']:.2f}"
+    elif criterion == "pcc":
+        values = f"|PCC| {row['AbsPCC_X']:.2f} -> {row['AbsPCC_O']:.2f}"
+    elif group == "better":
+        values = f"X misses {clinical_failed(row['MAE_X'], row['AbsPCC_X'], args)}"
+    else:
+        values = f"O misses {clinical_failed(row['MAE_O'], row['AbsPCC_O'], args)}"
+    return f"clinical ({rule}) {group}: {values}"
 
 
 def memberships(mae_x: float, mae_o: float, thresholds: Sequence[float]) -> List[Tuple[float, str]]:
@@ -610,14 +634,17 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             row["Diff_O_minus_X"] = row["MAE_O"] - row["MAE_X"]
             # |PCC|: absolute PCC of every scored minute, averaged over the subject's scored minutes
             row["AbsPCC_X"], row["AbsPCC_O"] = float(scored.PCC_X.abs().mean()), float(scored.PCC_O.abs().mean())
-            row["Clinical_X"] = meets_clinical(row["MAE_X"], row["AbsPCC_X"], args)
-            row["Clinical_O"] = meets_clinical(row["MAE_O"], row["AbsPCC_O"], args)
+            for criterion in CLINICAL_CRITERIA:
+                for side in ("X", "O"):
+                    row[f"Meets_{criterion.upper()}_{side}"] = meets_clinical(criterion, row[f"MAE_{side}"],
+                                                                              row[f"AbsPCC_{side}"], args)
             row["Files_O"], row["Files_X"] = str(files["O"]["root"]), str(files["X"]["root"])
             grouped = not (issue and not args.keep_issue_subjects)
             groups = memberships(row["MAE_X"], row["MAE_O"], thresholds) if grouped else []
-            clinical = clinical_membership(row, args) if grouped else None
-            row["Clinical_Change"] = clinical or ""
-            row["Groups"] = "; ".join([f"{t:g} bpm {g}" for t, g in groups] + ([f"clinical {clinical}"] if clinical else []))
+            clinical = clinical_memberships(row, args) if grouped else []
+            row["Clinical_Changes"] = "; ".join(f"{clinical_rule(c, args)} {g}" for c, g in clinical)
+            row["Groups"] = "; ".join([f"{t:g} bpm {g}" for t, g in groups]
+                                      + [f"clinical {c} {g}" for c, g in clinical])
             subjects_rows.append(row)
             tag = mod.safe_tag(subject)
             diff = row["Diff_O_minus_X"]
@@ -625,20 +652,20 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             places = [(("threshold", t, g), out_root / f"T{t:g}bpm" / group_folder(g, t)
                        / (f"{dataset}_{tag}_{direction}" if g == "1_change" else f"{dataset}_{tag}"),
                        f"{t:g} bpm {group_text(g, t, diff)}") for t, g in groups]
-            if clinical:
-                places.append((("clinical", clinical), out_root / clinical_dir(args) / clinical_folder(clinical)
-                               / f"{dataset}_{tag}", clinical_text(clinical, row, args)))
+            places += [(("clinical", c, g), out_root / clinical_dir(args) / clinical_criterion_folder(c, args)
+                        / clinical_folder(g) / f"{dataset}_{tag}", clinical_text(c, g, row, args)) for c, g in clinical]
             if not places:
                 continue
             n = draw_subject(args, mod, dataset, subject, data[subject], files, minutes, row, places, ann1_all.get(subject))
             for key, folder, _ in places:
                 is_clinical = key[0] == "clinical"
-                group_rows.append({"Criterion": f"clinical {clinical_rule(args)}" if is_clinical else f"{key[1]:g} bpm",
+                group_rows.append({"Criterion": f"clinical {clinical_rule(key[1], args)}" if is_clinical
+                                   else f"{key[1]:g} bpm",
                                    "Threshold_BPM": math.nan if is_clinical else key[1],
-                                   "Group": key[1] if is_clinical else key[2], "Dataset": dataset, "Subject": subject,
+                                   "Group": key[2], "Dataset": dataset, "Subject": subject,
                                    "Issue_Subject": issue, "MAE_X": row["MAE_X"], "MAE_O": row["MAE_O"],
                                    "Diff_O_minus_X": diff, "AbsPCC_X": row["AbsPCC_X"], "AbsPCC_O": row["AbsPCC_O"],
-                                   "Clinical_X": row["Clinical_X"], "Clinical_O": row["Clinical_O"],
+                                   "Meets_Both_X": row["Meets_BOTH_X"], "Meets_Both_O": row["Meets_BOTH_O"],
                                    "Missed_By_X": clinical_failed(row["MAE_X"], row["AbsPCC_X"], args),
                                    "Missed_By_O": clinical_failed(row["MAE_O"], row["AbsPCC_O"], args),
                                    "Direction": "Fusion O better" if diff < 0 else "Fusion O worse",
@@ -655,8 +682,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     print("\nGroups (MAE = subject MAE of a model)")
     sets = [(f"{t:g} bpm", t, g, {"1_change": f"|MAE O - MAE X| >= {t:g}", "2_improved": f"MAE X > {t:g} and MAE O < {t:g}",
                                   "3_worsened": f"MAE X < {t:g} and MAE O > {t:g}"}[g]) for t in thresholds for g in GROUPS]
-    sets += [(f"clinical {clinical_rule(args)}", math.nan, g,
-              {"better": "X misses and O meets", "worse": "X meets and O misses"}[g]) for g in CLINICAL_GROUPS]
+    sets += [(f"clinical {clinical_rule(c, args)}", math.nan, g,
+              {"better": "X misses and O meets", "worse": "X meets and O misses"}[g])
+             for c in CLINICAL_CRITERIA for g in CLINICAL_GROUPS]
+    criterion_key = {f"clinical {clinical_rule(c, args)}": c for c in CLINICAL_CRITERIA}
     for criterion, t, g, label in sets:
         sel = groups[(groups["Criterion"] == criterion) & (groups["Group"] == g)] if not groups.empty else groups
         listing = ", ".join(f"{r.Dataset} {r.Subject} (MAE {r.MAE_X:.2f} -> {r.MAE_O:.2f}, |PCC| {r.AbsPCC_X:.2f} -> "
@@ -673,9 +702,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                    "Fusion_O_Worse": int((s["Diff_O_minus_X"] > 0).sum()) if len(s) else 0,
                    "Subjects": ", ".join(f"{r.Subject} (MAE {r.MAE_X:.2f} -> {r.MAE_O:.2f}, |PCC| {r.AbsPCC_X:.2f} -> "
                                          f"{r.AbsPCC_O:.2f})" for r in s.itertuples()) if len(s) else "none"}
-            if criterion.startswith("clinical"):
-                row["Meeting_X"] = int(subjects.loc[compared, "Clinical_X"].sum())
-                row["Meeting_O"] = int(subjects.loc[compared, "Clinical_O"].sum())
+            if criterion in criterion_key:
+                c = criterion_key[criterion].upper()
+                row["Meeting_X"] = int(subjects.loc[compared, f"Meets_{c}_X"].sum())
+                row["Meeting_O"] = int(subjects.loc[compared, f"Meets_{c}_O"].sum())
             summary.append(row)
     notes = pd.DataFrame([
         ("Models", "member m0 of every LOSOCV fold; Fusion O = with the 1x1 stem fusion, Fusion X = without"),
@@ -685,8 +715,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         ("Groups", "for every threshold T: 1_change = |MAE O - MAE X| >= T (both directions); 2_improved = MAE X > T "
                    "and MAE O < T; 3_worsened = MAE X < T and MAE O > T; thresholds "
                    + ", ".join(f"{t:g}" for t in thresholds) + " breaths/min"),
-        ("Clinical", f"{clinical_rule(args)}: |PCC| = mean over the scored minutes of |Wave_PCC| of every minute; "
-                     "better = Fusion X misses and Fusion O meets the criterion, worse = the opposite"),
+        ("Clinical", "three criteria, each on its own: " + "; ".join(clinical_rule(c, args) for c in CLINICAL_CRITERIA)
+                     + "; |PCC| = mean over the scored minutes of |Wave_PCC| of every minute; better = Fusion X "
+                     "misses and Fusion O meets the criterion, worse = the opposite; a subject is saved in the folder "
+                     "of every criterion it changes"),
         ("Subjects", "MAE issue subjects (CapnoBase 0115, BIDMC 27, STEAM2 12_YJJ, 22_LMS, 26_CKK) "
                      + ("kept and marked" if args.keep_issue_subjects else "left out of the groups")),
         ("Figures", f"every {args.window_sec:g} s window of every recording of a grouped subject, saved in every "
