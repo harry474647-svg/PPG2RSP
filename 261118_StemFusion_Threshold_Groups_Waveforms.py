@@ -7,6 +7,11 @@ Groups, for every threshold T (--thresholds, default 2 and 3 breaths/min); MAE =
   1_change     |MAE O - MAE X| >= T, both directions (Fusion O better: O < X; Fusion O worse: O > X)
   2_improved   MAE X > T and MAE O < T: above T without the stem fusion, below T with it
   3_worsened   MAE X < T and MAE O > T: the opposite
+Clinical criterion (--clinical-mae, --clinical-pcc, default MAE < 3.0 breaths/min and |PCC| > 0.6), with
+|PCC| = the mean over the scored minutes of the absolute waveform PCC of every minute (Wave_PCC of the stored
+minute tables)
+  better       Fusion X does not meet the criterion, Fusion O meets it
+  worse        Fusion X meets the criterion, Fusion O does not
 A subject can be in several groups and at both thresholds; it is drawn once and every figure is saved in each
 of its group folders. The subjects with an MAE issue (CapnoBase 0115, BIDMC 27, STEAM2 12_YJJ, 22_LMS,
 26_CKK) are left out of the groups as in the final results (--keep-issue-subjects keeps them, marked).
@@ -51,17 +56,21 @@ Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261118_StemFusion_Threshold_Groups_Wavefo
   T{T}bpm\1_change_ge{T}bpm\{Dataset}_{subject}_{O_better|O_worse}\{recording}_{t0}-{t1}s.png
   T{T}bpm\2_improved_Xover{T}_Ounder{T}\{Dataset}_{subject}\...
   T{T}bpm\3_worsened_Xunder{T}_Oover{T}\{Dataset}_{subject}\...
+  Clinical_MAE{3}_absPCC{0.6}\1_better_Xfails_Omeets\{Dataset}_{subject}\...
+  Clinical_MAE{3}_absPCC{0.6}\2_worse_Xmeets_Ofails\{Dataset}_{subject}\...
       every 30 s window, and {Dataset}_{subject}_windows.pdf (all windows, one page each) in every folder
   261118_StemFusion_Threshold_Groups.xlsx
-    Group_Summary  per threshold, group and dataset: number of subjects and their list ("none" when empty)
-    Groups         every subject of every group: MAE X, MAE O, difference, direction, folder
-    Subjects       every subject: MAE X, MAE O, difference, scored minutes, its groups
+    Group_Summary  per criterion (threshold or clinical), group and dataset: number of subjects and their list
+                   ("none" when empty)
+    Groups         every subject of every group: MAE X, MAE O, difference, |PCC| X, |PCC| O, direction, folder
+    Subjects       every subject: MAE X, MAE O, difference, |PCC| X, |PCC| O, the clinical criterion with each model,
+                   scored minutes, its groups
     Minutes        every minute of the grouped subjects: GT, rates and errors of both models
     Missing        subjects without stored results of both models or without a scored minute
     Notes
 
 Run: python 261118_StemFusion_Threshold_Groups_Waveforms.py     (Spyder: runfile(...), no options needed)
-Options: --thresholds (default 2 3), --datasets, --keep-issue-subjects, --ann1-nogap, --window-sec,
+Options: --thresholds (default 2 3), --clinical-mae (3), --clinical-pcc (0.6), --datasets, --keep-issue-subjects, --ann1-nogap, --window-sec,
 --raw-predictions, --root-261007, --root-261013, --root-noise, --output-root, --script-261007, --script-261013,
 --capnobase-path, --bidmc-path, --steam2-ppg-dir, --steam2-rsp-dir
 """
@@ -72,6 +81,7 @@ import json
 import math
 import re
 import sys
+import textwrap
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -106,6 +116,9 @@ MODALITY = {"CapnoBase": "capnogram", "BIDMC": "impedance", "STEAM2": "belt"}
 EXCLUDED = {"STEAM2": ("22_LMS", "26_CKK", "12_YJJ"), "BIDMC": ("27",), "CapnoBase": ("0115",)}
 THRESHOLDS = (2.0, 3.0)  # breaths/min
 GROUPS = ("1_change", "2_improved", "3_worsened")
+CLINICAL_MAE = 3.0  # clinical criterion: MAE < 3.0 breaths/min and |PCC| > 0.6
+CLINICAL_PCC = 0.6
+CLINICAL_GROUPS = ("better", "worse")
 WINDOW_SEC = 30.0
 ANN1_GAP_FACTOR = 2.5
 MEMBER = 0
@@ -128,6 +141,43 @@ def group_text(group: str, threshold: float, diff: float) -> str:
     if group == "2_improved":
         return f"improved: X > {t} -> O < {t}"
     return f"worsened: X < {t} -> O > {t}"
+
+
+def clinical_dir(args) -> str:
+    return f"Clinical_MAE{args.clinical_mae:g}_absPCC{args.clinical_pcc:g}"
+
+
+def clinical_folder(group: str) -> str:
+    return {"better": "1_better_Xfails_Omeets", "worse": "2_worse_Xmeets_Ofails"}[group]
+
+
+def clinical_rule(args) -> str:
+    return f"MAE < {args.clinical_mae:g} and |PCC| > {args.clinical_pcc:g}"
+
+
+def meets_clinical(mae: float, abs_pcc: float, args) -> bool:
+    return bool(mae < args.clinical_mae and abs_pcc > args.clinical_pcc)
+
+
+def clinical_failed(mae: float, abs_pcc: float, args) -> str:
+    """Which part of the clinical criterion a model misses."""
+    parts = [n for n, bad in (("MAE", not mae < args.clinical_mae), ("|PCC|", not abs_pcc > args.clinical_pcc)) if bad]
+    return " + ".join(parts)
+
+
+def clinical_membership(row: dict, args) -> Optional[str]:
+    """better: Fusion X misses the clinical criterion and Fusion O meets it; worse: the opposite."""
+    x = meets_clinical(row["MAE_X"], row["AbsPCC_X"], args)
+    o = meets_clinical(row["MAE_O"], row["AbsPCC_O"], args)
+    return "better" if o and not x else "worse" if x and not o else None
+
+
+def clinical_text(group: str, row: dict, args) -> str:
+    if group == "better":
+        return (f"clinical ({clinical_rule(args)}) better: X misses "
+                f"({clinical_failed(row['MAE_X'], row['AbsPCC_X'], args)}) -> O meets")
+    return (f"clinical ({clinical_rule(args)}) worse: X meets -> O misses "
+            f"({clinical_failed(row['MAE_O'], row['AbsPCC_O'], args)})")
 
 
 def memberships(mae_x: float, mae_o: float, thresholds: Sequence[float]) -> List[Tuple[float, str]]:
@@ -305,7 +355,8 @@ def subject_minutes(args, mod, dataset: str, subject: str, record: dict, files: 
                      "End_Sec": t1, "Scored": valid, "Reason": "" if valid else reason, "GT_Count": count,
                      "Ann1_Gap": gap, "Rate_X": float(x["Pred_Wave_FFT_RR"]), "Rate_O": float(o["Pred_Wave_FFT_RR"]),
                      "AE_X": abs(float(x["Pred_Wave_FFT_RR"]) - count) if valid else math.nan,
-                     "AE_O": abs(float(o["Pred_Wave_FFT_RR"]) - count) if valid else math.nan})
+                     "AE_O": abs(float(o["Pred_Wave_FFT_RR"]) - count) if valid else math.nan,
+                     "PCC_X": float(x.get("Wave_PCC", math.nan)), "PCC_O": float(o.get("Wave_PCC", math.nan))})
     return pd.DataFrame(rows)
 
 
@@ -377,7 +428,8 @@ def windows_of(minutes: pd.DataFrame, covered: np.ndarray, fs: int, size: float)
 def draw_window(targets: Sequence[Tuple[Path, PdfPages]], header: Tuple[str, str, str], t: np.ndarray, gt: np.ndarray,
                 breaths_sec: np.ndarray, preds: Dict[str, np.ndarray], texts: Dict[str, str]) -> None:
     """One 30 s window, saved as PNG and PDF page in every target (group folder)."""
-    width, side, left, panel, gap, top_in, bottom_in = 12.0, 3.4, 0.7, 1.75, 0.45, 1.15, 0.6
+    extra = header[2].count("\n")  # the group line may wrap
+    width, side, left, panel, gap, top_in, bottom_in = 12.0, 3.4, 0.7, 1.75, 0.45, 1.15 + 0.17 * extra, 0.6
     height = top_in + bottom_in + 2 * panel + gap
     fig = plt.figure(figsize=(width, height))
     g = minmax(gt)
@@ -411,7 +463,7 @@ def draw_window(targets: Sequence[Tuple[Path, PdfPages]], header: Tuple[str, str
     axes[-1].set_xlabel("Time in the recording (s)")
     fig.text(left / width, 1.0 - 0.18 / height, header[0], fontsize=10.5, color=INK, va="top")
     fig.text(left / width, 1.0 - 0.47 / height, header[1], fontsize=7.6, color=MUTED, va="top")
-    fig.text(left / width, 1.0 - 0.68 / height, header[2], fontsize=7.6, color=INK, va="top")
+    fig.text(left / width, 1.0 - 0.68 / height, header[2], fontsize=7.6, color=INK, va="top", linespacing=1.4)
     for path, pdf in targets:
         path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(path, dpi=160)
@@ -420,23 +472,20 @@ def draw_window(targets: Sequence[Tuple[Path, PdfPages]], header: Tuple[str, str
 
 
 def draw_subject(args, mod, dataset: str, subject: str, record: dict, files: Dict[str, dict], minutes: pd.DataFrame,
-                 summary: dict, groups: List[Tuple[float, str]], ann1: Optional[np.ndarray],
-                 out_root: Path) -> Tuple[Dict[Tuple[float, str], str], int]:
-    """Every 30 s window of a subject, saved in the folder of each of its groups."""
+                 summary: dict, places: List[Tuple[tuple, Path, str]], ann1: Optional[np.ndarray]) -> int:
+    """Every 30 s window of a subject, saved in the folder of each of its groups (places: key, folder, text)."""
     fs = mod.TARGET_FS
     tag = mod.safe_tag(subject)
     diff = summary["Diff_O_minus_X"]
-    direction = "O_better" if diff < 0 else "O_worse"
-    folders = {}
-    for t, group in groups:
-        sub_folder = f"{dataset}_{tag}_{direction}" if group == "1_change" else f"{dataset}_{tag}"
-        folders[(t, group)] = out_root / f"T{t:g}bpm" / group_folder(group, t) / sub_folder
+    folders = {key: folder for key, folder, _ in places}
     multi = len(record["references"]) > 1
     count = 0
     issue = " · MAE issue subject" if summary["Issue_Subject"] else ""
     head = (f"{dataset} {subject}: MAE X {summary['MAE_X']:.2f}, MAE O {summary['MAE_O']:.2f} breaths/min "
-            f"(O - X {diff:+.2f}; {'Fusion O better' if diff < 0 else 'Fusion O worse'}){issue}")
-    group_line = "groups: " + "; ".join(f"{t:g} bpm {group_text(g, t, diff)}" for t, g in groups)
+            f"(O - X {diff:+.2f}; {'Fusion O better' if diff < 0 else 'Fusion O worse'}); "
+            f"|PCC| X {summary['AbsPCC_X']:.2f}, O {summary['AbsPCC_O']:.2f}{issue}")
+    group_line = "\n".join(textwrap.wrap("groups: " + "; ".join(text for _, _, text in places), 185,
+                                          subsequent_indent="    "))
     pdfs = {}
     try:
         for key, folder in folders.items():
@@ -485,7 +534,7 @@ def draw_subject(args, mod, dataset: str, subject: str, record: dict, files: Dic
     finally:
         for pdf in pdfs.values():
             pdf.close()
-    return {k: str(v) for k, v in folders.items()}, count
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +550,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Stem fusion subjects grouped at 2 and 3 breaths/min (change, improved "
                                             "below the threshold, worsened above it) and their 30 s waveforms")
     p.add_argument("--thresholds", nargs="+", type=float, default=list(THRESHOLDS), help="breaths/min (default 2 3)")
+    p.add_argument("--clinical-mae", type=float, default=CLINICAL_MAE, help="clinical criterion: MAE below (default 3.0)")
+    p.add_argument("--clinical-pcc", type=float, default=CLINICAL_PCC,
+                   help="clinical criterion: mean |PCC| above (default 0.6)")
     p.add_argument("--datasets", nargs="+", choices=list(DATASETS), default=list(DATASETS))
     p.add_argument("--keep-issue-subjects", action="store_true", help="also group the MAE issue subjects (marked)")
     p.add_argument("--ann1-nogap", action="store_true", help="BIDMC: leave out minutes overlapping an ann1 gap")
@@ -556,20 +608,41 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             row = {"Dataset": dataset, "Subject": subject, "Issue_Subject": issue, "Scored_Minutes": int(len(scored)),
                    "MAE_X": float(scored.AE_X.mean()), "MAE_O": float(scored.AE_O.mean())}
             row["Diff_O_minus_X"] = row["MAE_O"] - row["MAE_X"]
+            # |PCC|: absolute PCC of every scored minute, averaged over the subject's scored minutes
+            row["AbsPCC_X"], row["AbsPCC_O"] = float(scored.PCC_X.abs().mean()), float(scored.PCC_O.abs().mean())
+            row["Clinical_X"] = meets_clinical(row["MAE_X"], row["AbsPCC_X"], args)
+            row["Clinical_O"] = meets_clinical(row["MAE_O"], row["AbsPCC_O"], args)
             row["Files_O"], row["Files_X"] = str(files["O"]["root"]), str(files["X"]["root"])
-            groups = [] if (issue and not args.keep_issue_subjects) else memberships(row["MAE_X"], row["MAE_O"], thresholds)
-            row["Groups"] = "; ".join(f"{t:g} bpm {g}" for t, g in groups)
+            grouped = not (issue and not args.keep_issue_subjects)
+            groups = memberships(row["MAE_X"], row["MAE_O"], thresholds) if grouped else []
+            clinical = clinical_membership(row, args) if grouped else None
+            row["Clinical_Change"] = clinical or ""
+            row["Groups"] = "; ".join([f"{t:g} bpm {g}" for t, g in groups] + ([f"clinical {clinical}"] if clinical else []))
             subjects_rows.append(row)
-            if not groups:
+            tag = mod.safe_tag(subject)
+            diff = row["Diff_O_minus_X"]
+            direction = "O_better" if diff < 0 else "O_worse"
+            places = [(("threshold", t, g), out_root / f"T{t:g}bpm" / group_folder(g, t)
+                       / (f"{dataset}_{tag}_{direction}" if g == "1_change" else f"{dataset}_{tag}"),
+                       f"{t:g} bpm {group_text(g, t, diff)}") for t, g in groups]
+            if clinical:
+                places.append((("clinical", clinical), out_root / clinical_dir(args) / clinical_folder(clinical)
+                               / f"{dataset}_{tag}", clinical_text(clinical, row, args)))
+            if not places:
                 continue
-            folders, n = draw_subject(args, mod, dataset, subject, data[subject], files, minutes, row, groups,
-                                      ann1_all.get(subject), out_root)
-            for (t, g), folder in folders.items():
-                group_rows.append({"Threshold_BPM": t, "Group": g, "Dataset": dataset, "Subject": subject,
+            n = draw_subject(args, mod, dataset, subject, data[subject], files, minutes, row, places, ann1_all.get(subject))
+            for key, folder, _ in places:
+                is_clinical = key[0] == "clinical"
+                group_rows.append({"Criterion": f"clinical {clinical_rule(args)}" if is_clinical else f"{key[1]:g} bpm",
+                                   "Threshold_BPM": math.nan if is_clinical else key[1],
+                                   "Group": key[1] if is_clinical else key[2], "Dataset": dataset, "Subject": subject,
                                    "Issue_Subject": issue, "MAE_X": row["MAE_X"], "MAE_O": row["MAE_O"],
-                                   "Diff_O_minus_X": row["Diff_O_minus_X"],
-                                   "Direction": "Fusion O better" if row["Diff_O_minus_X"] < 0 else "Fusion O worse",
-                                   "Scored_Minutes": row["Scored_Minutes"], "Windows_Drawn": n, "Folder": folder})
+                                   "Diff_O_minus_X": diff, "AbsPCC_X": row["AbsPCC_X"], "AbsPCC_O": row["AbsPCC_O"],
+                                   "Clinical_X": row["Clinical_X"], "Clinical_O": row["Clinical_O"],
+                                   "Missed_By_X": clinical_failed(row["MAE_X"], row["AbsPCC_X"], args),
+                                   "Missed_By_O": clinical_failed(row["MAE_O"], row["AbsPCC_O"], args),
+                                   "Direction": "Fusion O better" if diff < 0 else "Fusion O worse",
+                                   "Scored_Minutes": row["Scored_Minutes"], "Windows_Drawn": n, "Folder": str(folder)})
             minute_frames.append(minutes)
             print(f"  {subject}: MAE X {row['MAE_X']:.2f}, O {row['MAE_O']:.2f} (O - X {row['Diff_O_minus_X']:+.2f})"
                   f"{' [issue]' if issue else ''} -> {row['Groups']}; {n} windows drawn", flush=True)
@@ -580,25 +653,30 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     summary = []
     datasets_read = list(dict.fromkeys(subjects["Dataset"])) if not subjects.empty else []
     print("\nGroups (MAE = subject MAE of a model)")
-    for t in thresholds:
-        for g in GROUPS:
-            sel = groups[(groups["Threshold_BPM"] == t) & (groups["Group"] == g)] if not groups.empty else groups
-            label = {"1_change": f"|MAE O - MAE X| >= {t:g}", "2_improved": f"MAE X > {t:g} and MAE O < {t:g}",
-                     "3_worsened": f"MAE X < {t:g} and MAE O > {t:g}"}[g]
-            listing = ", ".join(f"{r.Dataset} {r.Subject} ({r.MAE_X:.2f} -> {r.MAE_O:.2f})" for r in sel.itertuples())
-            print(f"  {t:g} bpm {g:11s} [{label}]: {len(sel)} subjects" + (f": {listing}" if len(sel) else ": none"))
-            for d in datasets_read:
-                s = sel[sel["Dataset"] == d] if not sel.empty else sel
-                compared = subjects["Dataset"] == d
-                if not args.keep_issue_subjects:
-                    compared &= ~subjects["Issue_Subject"].astype(bool)
-                n_all = int(compared.sum())
-                summary.append({"Threshold_BPM": t, "Group": g, "Rule": label, "Dataset": d, "Subjects_in_Group": len(s),
-                                "Subjects_Compared": n_all,
-                                "Fusion_O_Better": int((s["Diff_O_minus_X"] < 0).sum()) if len(s) else 0,
-                                "Fusion_O_Worse": int((s["Diff_O_minus_X"] > 0).sum()) if len(s) else 0,
-                                "Subjects": ", ".join(f"{r.Subject} ({r.MAE_X:.2f} -> {r.MAE_O:.2f})"
-                                                      for r in s.itertuples()) if len(s) else "none"})
+    sets = [(f"{t:g} bpm", t, g, {"1_change": f"|MAE O - MAE X| >= {t:g}", "2_improved": f"MAE X > {t:g} and MAE O < {t:g}",
+                                  "3_worsened": f"MAE X < {t:g} and MAE O > {t:g}"}[g]) for t in thresholds for g in GROUPS]
+    sets += [(f"clinical {clinical_rule(args)}", math.nan, g,
+              {"better": "X misses and O meets", "worse": "X meets and O misses"}[g]) for g in CLINICAL_GROUPS]
+    for criterion, t, g, label in sets:
+        sel = groups[(groups["Criterion"] == criterion) & (groups["Group"] == g)] if not groups.empty else groups
+        listing = ", ".join(f"{r.Dataset} {r.Subject} (MAE {r.MAE_X:.2f} -> {r.MAE_O:.2f}, |PCC| {r.AbsPCC_X:.2f} -> "
+                            f"{r.AbsPCC_O:.2f})" for r in sel.itertuples())
+        print(f"  {criterion} {g} [{label}]: {len(sel)} subjects" + (f": {listing}" if len(sel) else ": none"))
+        for d in datasets_read:
+            s = sel[sel["Dataset"] == d] if not sel.empty else sel
+            compared = subjects["Dataset"] == d
+            if not args.keep_issue_subjects:
+                compared &= ~subjects["Issue_Subject"].astype(bool)
+            row = {"Criterion": criterion, "Threshold_BPM": t, "Group": g, "Rule": label, "Dataset": d,
+                   "Subjects_in_Group": len(s), "Subjects_Compared": int(compared.sum()),
+                   "Fusion_O_Better": int((s["Diff_O_minus_X"] < 0).sum()) if len(s) else 0,
+                   "Fusion_O_Worse": int((s["Diff_O_minus_X"] > 0).sum()) if len(s) else 0,
+                   "Subjects": ", ".join(f"{r.Subject} (MAE {r.MAE_X:.2f} -> {r.MAE_O:.2f}, |PCC| {r.AbsPCC_X:.2f} -> "
+                                         f"{r.AbsPCC_O:.2f})" for r in s.itertuples()) if len(s) else "none"}
+            if criterion.startswith("clinical"):
+                row["Meeting_X"] = int(subjects.loc[compared, "Clinical_X"].sum())
+                row["Meeting_O"] = int(subjects.loc[compared, "Clinical_O"].sum())
+            summary.append(row)
     notes = pd.DataFrame([
         ("Models", "member m0 of every LOSOCV fold; Fusion O = with the 1x1 stem fusion, Fusion X = without"),
         ("GT", "CapnoBase: peak detection on the capnogram (RRest rule); BIDMC: ann1 (expert-label rule"
@@ -607,6 +685,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         ("Groups", "for every threshold T: 1_change = |MAE O - MAE X| >= T (both directions); 2_improved = MAE X > T "
                    "and MAE O < T; 3_worsened = MAE X < T and MAE O > T; thresholds "
                    + ", ".join(f"{t:g}" for t in thresholds) + " breaths/min"),
+        ("Clinical", f"{clinical_rule(args)}: |PCC| = mean over the scored minutes of |Wave_PCC| of every minute; "
+                     "better = Fusion X misses and Fusion O meets the criterion, worse = the opposite"),
         ("Subjects", "MAE issue subjects (CapnoBase 0115, BIDMC 27, STEAM2 12_YJJ, 22_LMS, 26_CKK) "
                      + ("kept and marked" if args.keep_issue_subjects else "left out of the groups")),
         ("Figures", f"every {args.window_sec:g} s window of every recording of a grouped subject, saved in every "
@@ -616,7 +696,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     path = out_root / "261118_StemFusion_Threshold_Groups.xlsx"
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         pd.DataFrame(summary).to_excel(writer, sheet_name="Group_Summary", index=False)
-        (groups.sort_values(["Threshold_BPM", "Group", "Diff_O_minus_X"]).round(4) if not groups.empty
+        (groups.sort_values(["Criterion", "Group", "Diff_O_minus_X"]).round(4) if not groups.empty
          else pd.DataFrame({"Result": ["none: no subject in any group"]})).to_excel(writer, sheet_name="Groups", index=False)
         (subjects.sort_values("Diff_O_minus_X").round(4) if not subjects.empty else subjects).to_excel(
             writer, sheet_name="Subjects", index=False)
