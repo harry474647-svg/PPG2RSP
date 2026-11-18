@@ -82,16 +82,33 @@ RED, BLUE, GRAY = "#ed665a", "#559ed5", "#b4b2ad"  # red = improved with stem fu
 TARGET, INK, MUTED, GRID = "#a8823c", "#1f1f1f", "#6b6a66", "#e6e5e1"
 
 
+def base_candidates(given: Optional[Path]):
+    """Where 261118_StemFusion_Threshold_Groups_Waveforms.py may be: given, next to this script, one folder up, in its own folder of the workspace
+    (D:\\PPG2RSP_RRWaveNet_Inspired\\261118_StemFusion_Threshold_Groups_Waveforms\\), in the workspace, the working
+    folder, then any folder of the workspace (newest first)."""
+    stem = Path(BASE_SCRIPT).stem
+    paths = ([Path(given)] if given else []) + [HERE / BASE_SCRIPT, HERE.parent / BASE_SCRIPT,
+                                                 HERE.parent / stem / BASE_SCRIPT, WORKSPACE / stem / BASE_SCRIPT,
+                                                 WORKSPACE / BASE_SCRIPT, Path.cwd() / BASE_SCRIPT]
+    if WORKSPACE.is_dir():
+        found = list(WORKSPACE.glob(f"*/{BASE_SCRIPT}")) + list(WORKSPACE.glob(f"*/*/{BASE_SCRIPT}"))
+        paths += sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
+    return paths
+
+
 def load_base(given: Optional[Path]):
     """261118_StemFusion_Threshold_Groups_Waveforms as a module (its stored files, GT and minute rules)."""
-    for path in ([Path(given)] if given else []) + [HERE / BASE_SCRIPT, Path.cwd() / BASE_SCRIPT]:
+    tried = base_candidates(given)
+    for path in tried:
         if path.is_file():
+            print(f"Using {path}", flush=True)
             spec = importlib.util.spec_from_file_location("seed_var_base_261118", str(path))
             module = importlib.util.module_from_spec(spec)
             sys.modules[spec.name] = module
             spec.loader.exec_module(module)
             return module
-    raise FileNotFoundError(f"{BASE_SCRIPT} not found next to this script ({HERE}); give it with --script-261118")
+    raise FileNotFoundError(f"{BASE_SCRIPT} not found (looked in: " + "; ".join(str(p.parent) for p in tried[:6])
+                            + f" and the folders of {WORKSPACE}); give it with --script-261118")
 
 
 # ---------------------------------------------------------------------------

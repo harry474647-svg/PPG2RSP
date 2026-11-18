@@ -78,16 +78,33 @@ CLINICAL_PCC = 0.6
 MODEL = "O"  # Fusion O: with the 1x1 stem fusion
 
 
+def base_candidates(given: Optional[Path]):
+    """Where 261118_StemFusion_Threshold_Groups_Waveforms.py may be: given, next to this script, one folder up, in its own folder of the workspace
+    (D:\\PPG2RSP_RRWaveNet_Inspired\\261118_StemFusion_Threshold_Groups_Waveforms\\), in the workspace, the working
+    folder, then any folder of the workspace (newest first)."""
+    stem = Path(BASE_SCRIPT).stem
+    paths = ([Path(given)] if given else []) + [HERE / BASE_SCRIPT, HERE.parent / BASE_SCRIPT,
+                                                 HERE.parent / stem / BASE_SCRIPT, WORKSPACE / stem / BASE_SCRIPT,
+                                                 WORKSPACE / BASE_SCRIPT, Path.cwd() / BASE_SCRIPT]
+    if WORKSPACE.is_dir():
+        found = list(WORKSPACE.glob(f"*/{BASE_SCRIPT}")) + list(WORKSPACE.glob(f"*/*/{BASE_SCRIPT}"))
+        paths += sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
+    return paths
+
+
 def load_base(given: Optional[Path]):
     """261118_StemFusion_Threshold_Groups_Waveforms as a module (its loading, GT and FFT functions)."""
-    for path in ([Path(given)] if given else []) + [HERE / BASE_SCRIPT, Path.cwd() / BASE_SCRIPT]:
+    tried = base_candidates(given)
+    for path in tried:
         if path.is_file():
+            print(f"Using {path}", flush=True)
             spec = importlib.util.spec_from_file_location("best_fft_base_261118", str(path))
             module = importlib.util.module_from_spec(spec)
             sys.modules[spec.name] = module
             spec.loader.exec_module(module)
             return module
-    raise FileNotFoundError(f"{BASE_SCRIPT} not found next to this script ({HERE}); give it with --script-261118")
+    raise FileNotFoundError(f"{BASE_SCRIPT} not found (looked in: " + "; ".join(str(p.parent) for p in tried[:6])
+                            + f" and the folders of {WORKSPACE}); give it with --script-261118")
 
 
 # ---------------------------------------------------------------------------
