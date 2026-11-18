@@ -50,10 +50,15 @@ Figures (as 261115_StemFusion_MAEDiff_Waveforms): every 30 s window of every rec
   (a) GT vs Fusion O (top, deep red), (b) GT vs Fusion X (bottom, deep blue; both drawn thicker than the GT
   and above it), the same seconds, no model shifted in time; every waveform min-max scaled in the window;
   GT = the reference signal the GT breaths were found on (CapnoBase capnogram, BIDMC impedance, STEAM2 belt;
-  band-passed and aligned as in the scoring), its GT breaths marked; beside each panel the minute's GT rate,
-  the model's rate and error and the Pearson r in the 30 s window; the header names every group of the subject.
+  band-passed and aligned as in the scoring); beside each panel the minute's GT rate, the model's rate and error
+  and the Pearson r in the 30 s window; the header names every group of the subject.
   The model waveforms are drawn as the rate was scored: every run of contiguous windows band-passed with the
   recording's respiratory filter (--raw-predictions: the raw output).
+FFT figures (FFT\ folder of every subject folder): the |FFT| of the same 30 s window (as 261116: detrend,
+  Hamming window, zero padding to >= 32768 points), (a) GT vs Fusion O, (b) GT vs Fusion X (Fusion O and X are not
+  drawn together); every spectrum scaled to its peak = 1, the peak (largest |FFT| in the recording's rate band of
+  the scoring) marked by a vertical line and a square; the peaks beside each panel. Windows shorter than 10 s
+  get no FFT figure.
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261118_StemFusion_Threshold_Groups_Waveforms)
   T{T}bpm\1_change_ge{T}bpm\{Dataset}_{subject}_{O_better|O_worse}\{recording}_{t0}-{t1}s.png
@@ -61,7 +66,8 @@ Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261118_StemFusion_Threshold_Groups_Wavefo
   T{T}bpm\3_worsened_Xunder{T}_Oover{T}\{Dataset}_{subject}\...
   Clinical_MAE{3}_absPCC{0.6}\{1_MAE_lt3 | 2_absPCC_gt0.6 | 3_MAE_lt3_and_absPCC_gt0.6}\
       1_better_Xfails_Omeets\{Dataset}_{subject}\...  and  2_worse_Xmeets_Ofails\{Dataset}_{subject}\...
-      every 30 s window, and {Dataset}_{subject}_windows.pdf (all windows, one page each) in every folder
+      every 30 s window, and {Dataset}_{subject}_windows.pdf (all windows, one page each) in every folder;
+      FFT\{recording}_{t0}-{t1}s_FFT.png and FFT\{Dataset}_{subject}_FFT.pdf in every subject folder
   261118_StemFusion_Threshold_Groups.xlsx
     Group_Summary  per criterion (threshold or clinical), group and dataset: number of subjects and their list
                    ("none" when empty)
@@ -96,6 +102,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.io as sio
+from scipy.signal import detrend
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.lines import Line2D
 
@@ -129,6 +136,9 @@ ANN1_GAP_FACTOR = 2.5
 MEMBER = 0
 COLORS = {"GT": "#111111", "O": "#d7191c", "X": "#0b5fc4"}  # top panel (Fusion O) deep red, bottom (Fusion X) deep blue
 MODEL_LW = 2.2  # model lines drawn thicker than the GT and above it
+FFT_MIN_POINTS = 32768  # zero padding of the spectrum (64 Hz: 0.002 Hz steps, a smooth curve)
+MAX_FREQ_HZ = 1.0      # frequency axis of the FFT figures (at least the rate band)
+FFT_MIN_SEC = 10.0     # shorter windows get no FFT figure
 LABELS = {"X": "Fusion X (without stem fusion)", "O": "Fusion O (with stem fusion)"}
 INK, MUTED, GRID = "#1f1f1f", "#6b6a66", "#e4e3df"
 
@@ -429,6 +439,25 @@ def pearson(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.corrcoef(a[ok], b[ok])[0, 1])
 
 
+def spectrum(x: np.ndarray, fs: float) -> Tuple[np.ndarray, np.ndarray]:
+    """Frequency (Hz) and |FFT| of a window: detrend, Hamming window, zero padding (as 261116)."""
+    x = np.asarray(x, dtype=np.float64)
+    if len(x) < 8 or not np.isfinite(x).all() or float(np.std(x)) < 1e-12:
+        return np.zeros(1), np.full(1, np.nan)
+    windowed = detrend(x) * np.hamming(len(x))
+    n_fft = max(FFT_MIN_POINTS, 1 << int(math.ceil(math.log2(len(x)))))
+    return np.fft.rfftfreq(n_fft, d=1.0 / fs), np.abs(np.fft.rfft(windowed, n=n_fft))
+
+
+def band_peak(freq: np.ndarray, mag: np.ndarray, band: Tuple[float, float]) -> Tuple[float, float]:
+    """Largest |FFT| in the rate band: (frequency, magnitude)."""
+    keep = (freq >= band[0]) & (freq <= band[1]) & np.isfinite(mag)
+    if not keep.any():
+        return math.nan, math.nan
+    k = int(np.flatnonzero(keep)[np.argmax(mag[keep])])
+    return float(freq[k]), float(mag[k])
+
+
 def windows_of(minutes: pd.DataFrame, covered: np.ndarray, fs: int, size: float) -> List[Tuple[float, float]]:
     """Every 30 s window: the halves of every minute, then the covered stretches outside the minutes."""
     out = []
@@ -450,7 +479,7 @@ def windows_of(minutes: pd.DataFrame, covered: np.ndarray, fs: int, size: float)
 
 
 def draw_window(targets: Sequence[Tuple[Path, PdfPages]], header: Tuple[str, str, str], t: np.ndarray, gt: np.ndarray,
-                breaths_sec: np.ndarray, preds: Dict[str, np.ndarray], texts: Dict[str, str]) -> None:
+                preds: Dict[str, np.ndarray], texts: Dict[str, str]) -> None:
     """One 30 s window, saved as PNG and PDF page in every target (group folder)."""
     extra = header[2].count("\n")  # the group line may wrap
     width, side, left, panel, gap, top_in, bottom_in = 12.0, 3.4, 0.7, 1.75, 0.45, 1.15 + 0.17 * extra, 0.6
@@ -465,8 +494,6 @@ def draw_window(targets: Sequence[Tuple[Path, PdfPages]], header: Tuple[str, str
         axes.append(ax)
         ax.plot(t, g, color=COLORS["GT"], lw=1.4, label="GT", zorder=2)
         ax.plot(t, minmax(preds[model]), color=COLORS[model], lw=MODEL_LW, zorder=3)
-        for b in breaths_sec:
-            ax.axvline(b, ymin=0.94, ymax=1.0, color=COLORS["GT"], lw=1.2)
         ax.set_xlim(t[0], t[-1])
         ax.set_ylim(-1.2, 1.25)
         ax.set_ylabel("Min-max scaled", fontsize=8)
@@ -479,11 +506,10 @@ def draw_window(targets: Sequence[Tuple[Path, PdfPages]], header: Tuple[str, str
             ax.tick_params(labelbottom=False)
         x = (width - side + 0.05) / width
         y = (bottom + panel) / height
-        fig.legend([Line2D([], [], color=COLORS["GT"], lw=1.4), Line2D([], [], color=COLORS[model], lw=MODEL_LW),
-                    Line2D([], [], color=COLORS["GT"], lw=1.2, marker="|", ls="none", ms=8)],
-                   ["GT", LABELS[model], "GT breaths"], loc="upper left", bbox_to_anchor=(x, y), frameon=False,
+        fig.legend([Line2D([], [], color=COLORS["GT"], lw=1.4), Line2D([], [], color=COLORS[model], lw=MODEL_LW)],
+                   ["GT", LABELS[model]], loc="upper left", bbox_to_anchor=(x, y), frameon=False,
                    fontsize=7.8, borderaxespad=0.0)
-        fig.text(x + 0.004, y - 0.95 / height, texts[model], family="monospace", fontsize=7.6, color=INK, va="top")
+        fig.text(x + 0.004, y - 0.75 / height, texts[model], family="monospace", fontsize=7.6, color=INK, va="top")
     axes[-1].set_xlabel("Time in the recording (s)")
     fig.text(left / width, 1.0 - 0.18 / height, header[0], fontsize=10.5, color=INK, va="top")
     fig.text(left / width, 1.0 - 0.47 / height, header[1], fontsize=7.6, color=MUTED, va="top")
@@ -495,9 +521,61 @@ def draw_window(targets: Sequence[Tuple[Path, PdfPages]], header: Tuple[str, str
     plt.close(fig)
 
 
+def draw_fft(targets: Sequence[Tuple[Path, PdfPages]], header: Tuple[str, str, str], spectra: Dict[str, dict],
+             texts: Dict[str, str], max_freq: float) -> None:
+    """|FFT| of one window: (a) GT vs Fusion O, (b) GT vs Fusion X; each spectrum scaled to its peak = 1."""
+    extra = header[2].count("\n")
+    width, side, left, panel, gap, top_in, bottom_in = 12.0, 3.4, 0.7, 1.75, 0.45, 1.15 + 0.17 * extra, 0.6
+    height = top_in + bottom_in + 2 * panel + gap
+    fig = plt.figure(figsize=(width, height))
+    axes = []
+    for k, model in enumerate(("O", "X")):
+        bottom = bottom_in + (1 - k) * (panel + gap)
+        ax = fig.add_axes([left / width, bottom / height, (width - left - side - 0.2) / width, panel / height],
+                          sharex=axes[0] if axes else None)
+        axes.append(ax)
+        top = 1.0
+        for key, lw, z in (("GT", 1.4, 2), (model, MODEL_LW, 3)):
+            sp = spectra[key]
+            if not (np.isfinite(sp["peak_mag"]) and sp["peak_mag"] > 0):
+                continue
+            keep = sp["freq"] <= max_freq
+            yv = sp["mag"][keep] / sp["peak_mag"]
+            top = max(top, float(np.nanmax(yv)))
+            ax.plot(sp["freq"][keep], yv, color=COLORS[key], lw=lw, zorder=z + 2)
+            ax.axvline(sp["peak_hz"], color=COLORS[key], lw=1.0, alpha=0.9, zorder=z)
+            ax.plot([sp["peak_hz"]], [1.0], marker="s", ms=5.5, color=COLORS[key], mec="white", mew=0.8, zorder=z + 4)
+        ax.set_xlim(0.0, max_freq)
+        ax.set_ylim(0.0, top * 1.12)
+        ax.set_ylabel("|FFT| (peak = 1)", fontsize=8)
+        ax.grid(True, color=GRID, lw=0.6)
+        ax.set_axisbelow(True)
+        for s in ("top", "right"):
+            ax.spines[s].set_visible(False)
+        ax.set_title(f"({'ab'[k]}) |FFT|: GT vs {LABELS[model]}", fontsize=9.5, loc="left", pad=3)
+        if k == 0:
+            ax.tick_params(labelbottom=False)
+        x = (width - side + 0.05) / width
+        y = (bottom + panel) / height
+        fig.legend([Line2D([], [], color=COLORS["GT"], lw=1.4), Line2D([], [], color=COLORS[model], lw=MODEL_LW)],
+                   ["GT", LABELS[model]], loc="upper left", bbox_to_anchor=(x, y), frameon=False,
+                   fontsize=7.8, borderaxespad=0.0)
+        fig.text(x + 0.004, y - 0.75 / height, texts[model], family="monospace", fontsize=7.6, color=INK, va="top")
+    axes[-1].set_xlabel("Frequency (Hz)")
+    fig.text(left / width, 1.0 - 0.18 / height, header[0], fontsize=10.5, color=INK, va="top")
+    fig.text(left / width, 1.0 - 0.47 / height, header[1], fontsize=7.6, color=MUTED, va="top")
+    fig.text(left / width, 1.0 - 0.68 / height, header[2], fontsize=7.6, color=INK, va="top", linespacing=1.4)
+    for path, pdf in targets:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=160)
+        pdf.savefig(fig)
+    plt.close(fig)
+
+
 def draw_subject(args, mod, dataset: str, subject: str, record: dict, files: Dict[str, dict], minutes: pd.DataFrame,
-                 summary: dict, places: List[Tuple[tuple, Path, str]], ann1: Optional[np.ndarray]) -> int:
-    """Every 30 s window of a subject, saved in the folder of each of its groups (places: key, folder, text)."""
+                 summary: dict, places: List[Tuple[tuple, Path, str]]) -> int:
+    """Every 30 s window of a subject (waveform and FFT figure), saved in the folder of each of its groups
+    (places: key, folder, text); the FFT figures in the FFT subfolder."""
     fs = mod.TARGET_FS
     tag = mod.safe_tag(subject)
     diff = summary["Diff_O_minus_X"]
@@ -510,11 +588,12 @@ def draw_subject(args, mod, dataset: str, subject: str, record: dict, files: Dic
             f"|PCC| X {summary['AbsPCC_X']:.2f}, O {summary['AbsPCC_O']:.2f}{issue}")
     group_line = "\n".join(textwrap.wrap("groups: " + "; ".join(text for _, _, text in places), 185,
                                           subsequent_indent="    "))
-    pdfs = {}
+    pdfs, fft_pdfs = {}, {}
     try:
         for key, folder in folders.items():
-            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "FFT").mkdir(parents=True, exist_ok=True)
             pdfs[key] = PdfPages(folder / f"{dataset}_{tag}_windows.pdf")
+            fft_pdfs[key] = PdfPages(folder / "FFT" / f"{dataset}_{tag}_FFT.pdf")
         for segment_id, ref in sorted(record["references"].items()):
             length = len(ref["signal"])
             preds = {m: series(files[m]["outputs"], int(segment_id), length) for m in ("O", "X")}
@@ -524,7 +603,8 @@ def draw_subject(args, mod, dataset: str, subject: str, record: dict, files: Dic
             if not covered.any():
                 continue
             mins = minutes[minutes["Segment_ID"] == int(segment_id)].sort_values("Start_Sec")
-            breaths, _ = gt_breaths(dataset, mod, ref, ann1)
+            rate_band = tuple(float(v) / 60.0 for v in ref["profile"]["rr_band_bpm"])
+            max_freq = max(MAX_FREQ_HZ, rate_band[1])
             for t0, t1 in windows_of(mins, covered, fs, args.window_sec):
                 a, b = int(round(t0 * fs)), int(round(t1 * fs))
                 if b - a < 2 * fs:
@@ -550,13 +630,35 @@ def draw_subject(args, mod, dataset: str, subject: str, record: dict, files: Dic
                        + ("raw output" if args.raw_predictions else "band-passed as scored")
                        + "; each waveform min-max scaled in the window")
                 name = f"{f'rec{segment_id}_' if multi else ''}{t0:06.1f}-{t1:06.1f}s.png".replace(".0-", "-").replace(".0s", "s")
-                bs = breaths[(breaths >= a) & (breaths < b)] / fs
+                gt_w = np.asarray(ref["signal"][a:b], float)
                 draw_window([(folders[k] / name, pdfs[k]) for k in folders],
                             (f"{head}{rec} · {t0:.0f}-{t1:.0f} s", sub, group_line), t,
-                            np.asarray(ref["signal"][a:b], float), bs, {m: preds[m][a:b] for m in ("O", "X")}, texts)
+                            gt_w, {m: preds[m][a:b] for m in ("O", "X")}, texts)
                 count += 1
+                if (b - a) / fs < FFT_MIN_SEC - 1e-6:
+                    continue
+                spectra = {}
+                for key, values in (("GT", gt_w), ("O", preds["O"][a:b]), ("X", preds["X"][a:b])):
+                    freq, mag = spectrum(values, fs)
+                    peak_hz, peak_mag = band_peak(freq, mag, rate_band)
+                    spectra[key] = {"freq": freq, "mag": mag, "peak_hz": peak_hz, "peak_mag": peak_mag}
+                status = ("not in a scored 60 s minute" if inside.empty else
+                          f"minute {inside.iloc[0].Start_Sec:.0f}-{inside.iloc[0].End_Sec:.0f} s, "
+                          + ("scored" if inside.iloc[0].Scored else "not scored"))
+                peak = {k: (f"{v['peak_hz']:.3f} Hz {v['peak_hz'] * 60:5.1f} /min" if np.isfinite(v["peak_hz"])
+                            else "n/a") for k, v in spectra.items()}
+                fft_texts = {m: (f"peak in {rate_band[0] * 60:g}-{rate_band[1] * 60:g} /min\n"
+                                 f"GT         {peak['GT']}\n"
+                                 f"Fusion {m}   {peak[m]}\n"
+                                 f"{status}") for m in ("O", "X")}
+                fft_sub = (f"|FFT| of the {(b - a) / fs:g} s window (detrend, Hamming, zero padding), each spectrum "
+                           f"scaled to its peak = 1 (largest |FFT| in the rate band of the scoring); GT: "
+                           f"{MODALITY[dataset]} as scored; models: member m0, "
+                           + ("raw output" if args.raw_predictions else "band-passed as scored"))
+                draw_fft([(folders[k] / "FFT" / name.replace(".png", "_FFT.png"), fft_pdfs[k]) for k in folders],
+                         (f"{head}{rec} · {t0:.0f}-{t1:.0f} s", fft_sub, group_line), spectra, fft_texts, max_freq)
     finally:
-        for pdf in pdfs.values():
+        for pdf in list(pdfs.values()) + list(fft_pdfs.values()):
             pdf.close()
     return count
 
@@ -656,7 +758,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                         / clinical_folder(g) / f"{dataset}_{tag}", clinical_text(c, g, row, args)) for c, g in clinical]
             if not places:
                 continue
-            n = draw_subject(args, mod, dataset, subject, data[subject], files, minutes, row, places, ann1_all.get(subject))
+            n = draw_subject(args, mod, dataset, subject, data[subject], files, minutes, row, places)
             for key, folder, _ in places:
                 is_clinical = key[0] == "clinical"
                 group_rows.append({"Criterion": f"clinical {clinical_rule(key[1], args)}" if is_clinical
@@ -723,7 +825,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                      + ("kept and marked" if args.keep_issue_subjects else "left out of the groups")),
         ("Figures", f"every {args.window_sec:g} s window of every recording of a grouped subject, saved in every "
                     "folder of its groups; (a) GT vs Fusion O (deep red), (b) GT vs Fusion X (deep blue); model lines "
-                    "thicker than the GT and above it; min-max scaled in the window; GT breaths marked at the top"),
+                    "thicker than the GT and above it; min-max scaled in the window"),
+        ("FFT figures", "FFT\\ folder of every subject folder: |FFT| of the same window (detrend, Hamming, zero padding "
+                        "to >= 32768 points), (a) GT vs Fusion O, (b) GT vs Fusion X; every spectrum scaled to its peak = 1; "
+                        "peak = largest |FFT| in the recording's rate band of the scoring (CapnoBase 3-60, BIDMC / STEAM2 "
+                        "6-30 /min); windows shorter than 10 s have none"),
     ], columns=["Item", "Description"])
     path = out_root / "261118_StemFusion_Threshold_Groups.xlsx"
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
