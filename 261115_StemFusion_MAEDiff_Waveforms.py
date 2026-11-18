@@ -26,15 +26,19 @@ Ground truth of the rates (the rescored GT of the stem fusion tables)
   the results (261007 for CapnoBase, 261013 for BIDMC / STEAM2), loaded as a module: its data
   paths are used (--capnobase-path, --bidmc-path, --steam2-ppg-dir, --steam2-rsp-dir override).
 
-Detection: per subject, FFT MAE = mean |stored rate - GT breath count| over the scored minutes,
-for each model on the same minutes; a subject is drawn when |MAE O - MAE X| >= 2 breaths/min
-(--threshold), both directions (Fusion O better: O < X; Fusion O worse: O > X). The subjects with
-an MAE issue (CapnoBase 0115, BIDMC 27, STEAM2 12_YJJ, 22_LMS, 26_CKK) are drawn too and marked
-(--skip-issue-subjects leaves them out).
+Subjects drawn (--subjects): by default the seven subjects discussed for the stem fusion,
+  CapnoBase 0332, 0312, 0018, 0035, 0142 and BIDMC 38, 30, whatever their MAE difference;
+  "--subjects detected" draws, as before, every subject with |MAE O - MAE X| >= 2 breaths/min
+  (--threshold), both directions (Fusion O better: O < X; Fusion O worse: O > X); both can be given
+  ("--subjects detected CapnoBase:0332"). Per subject, FFT MAE = mean |stored rate - GT breath count|
+  over the scored minutes, for each model on the same minutes. The subjects with an MAE issue
+  (CapnoBase 0115, BIDMC 27, STEAM2 12_YJJ, 22_LMS, 26_CKK) are marked (--skip-issue-subjects leaves
+  them out of the threshold detection).
 
-Figures: every 30 s window of every recording of a detected subject (the windows of a minute
+Figures: every 30 s window of every recording of a drawn subject (the windows of a minute
 are its first and second half; stretches outside the scored minute grid in 30 s steps):
-  (a) GT vs Fusion O (top, red), (b) GT vs Fusion X (bottom, blue), the same seconds, no model
+  (a) GT vs Fusion O (top, deep red), (b) GT vs Fusion X (bottom, deep blue; both drawn thicker than the GT
+  and above it), the same seconds, no model
   shifted in time; every waveform min-max scaled in the window; GT = the reference signal the GT
   breaths were found on
   (CapnoBase capnogram, BIDMC impedance, STEAM2 belt; band-passed and aligned as in the scoring),
@@ -46,13 +50,14 @@ Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261115_StemFusion_MAEDiff_Waveforms)
   {Dataset}_{subject}_{O_better|O_worse}\{recording}_{t0}-{t1}s.png   every 30 s window
   {Dataset}_{subject}_{O_better|O_worse}\{Dataset}_{subject}_windows.pdf   all windows, one page each
   261115_StemFusion_MAEDiff.xlsx
-    Detected   the subjects with |MAE O - MAE X| >= threshold (MAE, difference, minutes, folders)
-    Subjects   every subject: MAE X, MAE O, difference, scored minutes
-    Minutes    every minute of the detected subjects: GT, rates and errors of both models
+    Drawn      the drawn subjects (MAE, difference, minutes, why drawn, folders)
+    Subjects   every subject of the datasets read: MAE X, MAE O, difference, scored minutes
+    Minutes    every minute of the drawn subjects: GT, rates and errors of both models
+    Missing    listed subjects without stored results of both models or without a scored minute
     Notes
 
 Run: python 261115_StemFusion_MAEDiff_Waveforms.py     (Spyder: runfile(...), no options needed)
-Options: --threshold, --datasets, --skip-issue-subjects, --ann1-nogap, --window-sec, --root-261007,
+Options: --subjects, --threshold, --datasets, --skip-issue-subjects, --ann1-nogap, --window-sec, --root-261007,
 --root-261013, --root-noise, --output-root, --script-261007, --script-261013, data paths
 """
 
@@ -95,10 +100,16 @@ NEW_GT = {"CapnoBase": "peak detection on the capnogram", "BIDMC": "ann1", "STEA
 MODALITY = {"CapnoBase": "capnogram", "BIDMC": "impedance", "STEAM2": "belt"}
 EXCLUDED = {"STEAM2": ("22_LMS", "26_CKK", "12_YJJ"), "BIDMC": ("27",), "CapnoBase": ("0115",)}
 THRESHOLD_BPM = 2.0
+# The subjects discussed for the stem fusion (MAE X -> O with the original GT: 0332 9.64 -> 2.31,
+# 0312 6.06 -> 2.57, 0018 3.62 -> 0.46, BIDMC 38 3.33 -> 1.05, 0035 5.15 -> 2.88, 0142 0.30 -> 2.28,
+# BIDMC 30 1.54 -> 3.54); drawn by default whatever their difference with the GT used here
+SUBJECTS = ("CapnoBase:0332", "CapnoBase:0312", "CapnoBase:0018", "BIDMC:38", "CapnoBase:0035",
+            "CapnoBase:0142", "BIDMC:30")
 WINDOW_SEC = 30.0
 ANN1_GAP_FACTOR = 2.5
 MEMBER = 0
-COLORS = {"GT": "#111111", "O": "#ed665a", "X": "#559ed5"}  # top panel (Fusion O) red, bottom panel (Fusion X) blue
+COLORS = {"GT": "#111111", "O": "#d7191c", "X": "#0b5fc4"}  # top panel (Fusion O) deep red, bottom (Fusion X) deep blue
+MODEL_LW = 2.2  # model lines drawn thicker than the GT and above it
 LABELS = {"X": "Fusion X (without stem fusion)", "O": "Fusion O (with stem fusion)"}
 INK, MUTED, GRID = "#1f1f1f", "#6b6a66", "#e4e3df"
 
@@ -346,8 +357,8 @@ def draw_window(path: Path, pdf, header: str, t: np.ndarray, gt: np.ndarray, bre
         ax = fig.add_axes([left / width, bottom / height, (width - left - side - 0.2) / width, panel / height],
                           sharex=axes[0] if axes else None)
         axes.append(ax)
-        ax.plot(t, g, color=COLORS["GT"], lw=1.4, label="GT")
-        ax.plot(t, minmax(preds[model]), color=COLORS[model], lw=1.7)
+        ax.plot(t, g, color=COLORS["GT"], lw=1.4, label="GT", zorder=2)
+        ax.plot(t, minmax(preds[model]), color=COLORS[model], lw=MODEL_LW, zorder=3)
         for b in breaths_sec:
             ax.axvline(b, ymin=0.94, ymax=1.0, color=COLORS["GT"], lw=1.2)
         ax.set_xlim(t[0], t[-1])
@@ -362,7 +373,7 @@ def draw_window(path: Path, pdf, header: str, t: np.ndarray, gt: np.ndarray, bre
             ax.tick_params(labelbottom=False)
         x = (width - side + 0.05) / width
         y = (bottom + panel) / height
-        fig.legend([Line2D([], [], color=COLORS["GT"], lw=1.4), Line2D([], [], color=COLORS[model], lw=1.7),
+        fig.legend([Line2D([], [], color=COLORS["GT"], lw=1.4), Line2D([], [], color=COLORS[model], lw=MODEL_LW),
                     Line2D([], [], color=COLORS["GT"], lw=1.2, marker="|", ls="none", ms=8)],
                    ["GT", LABELS[model], "GT breaths"], loc="upper left", bbox_to_anchor=(x, y), frameon=False,
                    fontsize=7.8, borderaxespad=0.0)
@@ -435,9 +446,35 @@ def draw_subject(args, mod, dataset: str, subject: str, record: dict, files: Dic
 # Main
 # ---------------------------------------------------------------------------
 
+def same_subject(a: object, b: object) -> bool:
+    a, b = str(a).strip(), str(b).strip()
+    return a == b or (a.isdigit() and b.isdigit() and int(a) == int(b))
+
+
+def parse_subjects(items: Sequence[str]) -> Tuple[Dict[str, List[str]], bool]:
+    """Dataset:Subject items, and whether "detected" (the threshold detection) was asked for."""
+    listed: Dict[str, List[str]] = {}
+    detect = False
+    for item in items:
+        if item.strip().lower() == "detected":
+            detect = True
+            continue
+        if ":" not in item:
+            raise ValueError(f"--subjects takes Dataset:Subject or detected, got {item}")
+        dataset, subject = item.split(":", 1)
+        match = [d for d in DATASETS if d.lower() == dataset.strip().lower()]
+        if not match:
+            raise ValueError(f"unknown dataset in {item} ({', '.join(DATASETS)})")
+        listed.setdefault(match[0], []).append(subject.strip())
+    return listed, detect
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Subjects whose MAE changes >= 2 /min with the stem fusion, and their "
-                                            "waveforms in every 30 s window")
+    p = argparse.ArgumentParser(description="GT vs Fusion O / Fusion X waveforms in every 30 s window of the stem "
+                                            "fusion subjects")
+    p.add_argument("--subjects", nargs="+", default=list(SUBJECTS),
+                   help="Dataset:Subject items and/or 'detected' (|MAE O - MAE X| >= threshold); default: the seven "
+                        "discussed subjects")
     p.add_argument("--threshold", type=float, default=THRESHOLD_BPM, help="|MAE O - MAE X| (breaths/min)")
     p.add_argument("--datasets", nargs="+", choices=list(DATASETS), default=list(DATASETS))
     p.add_argument("--skip-issue-subjects", action="store_true")
@@ -462,8 +499,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
     out_root = Path(args.output_root)
     out_root.mkdir(parents=True, exist_ok=True)
-    subjects_rows, minute_frames, detected = [], [], []
-    for dataset in args.datasets:
+    listed, detect = parse_subjects(args.subjects)
+    subjects_rows, minute_frames, detected, missing = [], [], [], []
+    for dataset in [d for d in args.datasets if detect or d in listed]:
         source = SOURCE[dataset]
         roots = [args.root_261007] if source == "261007" else [args.root_261013]
         script = find_script(SCRIPTS[source], args.script_261007 if source == "261007" else args.script_261013, roots)
@@ -477,14 +515,25 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         data = mod.load_dataset(KEYS[dataset], spec)
         ann1_all = read_ann1(mod) if dataset == "BIDMC" else {}
         found = 0
+        wanted = listed.get(dataset, [])
+        for name in wanted:
+            if not any(same_subject(name, s) for s in data):
+                missing.append({"Dataset": dataset, "Subject": name, "Missing": "not in the data read"})
         for subject in sorted(data):
+            is_listed = any(same_subject(subject, s) for s in wanted)
             files = {m: model_files(args, mod, dataset, m, subject) for m in ("O", "X")}
             if not files["O"] or not files["X"]:
+                if is_listed:
+                    missing.append({"Dataset": dataset, "Subject": subject,
+                                    "Missing": "stored results of " + " and ".join(
+                                        LABELS[m] for m in ("O", "X") if not files[m])})
                 continue
-            issue = any(str(subject) == x for x in EXCLUDED[dataset])
+            issue = any(same_subject(subject, x) for x in EXCLUDED[dataset])
             minutes = subject_minutes(args, mod, dataset, subject, data[subject], files, ann1_all.get(subject))
             scored = minutes[minutes.Scored]
             if scored.empty:
+                if is_listed:
+                    missing.append({"Dataset": dataset, "Subject": subject, "Missing": "no scored minute"})
                 continue
             found += 1
             row = {"Dataset": dataset, "Subject": subject, "Issue_Subject": issue, "Scored_Minutes": int(len(scored)),
@@ -492,10 +541,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             row["Diff_O_minus_X"] = row["MAE_O"] - row["MAE_X"]
             row["Files_O"], row["Files_X"] = str(files["O"]["root"]), str(files["X"]["root"])
             subjects_rows.append(row)
-            if abs(row["Diff_O_minus_X"]) >= args.threshold and not (issue and args.skip_issue_subjects):
+            passes = abs(row["Diff_O_minus_X"]) >= args.threshold and not (issue and args.skip_issue_subjects)
+            if is_listed or (detect and passes):
                 folder, n = draw_subject(args, mod, dataset, subject, data[subject], files, minutes, row,
                                          ann1_all.get(subject), out_root)
                 detected.append({**row, "Direction": "Fusion O better" if row["Diff_O_minus_X"] < 0 else "Fusion O worse",
+                                 "Drawn_Because": "listed" if is_listed else f"|O - X| >= {args.threshold:g}",
+                                 "Passes_Threshold": bool(abs(row["Diff_O_minus_X"]) >= args.threshold),
                                  "Windows_Drawn": n, "Folder": folder})
                 minute_frames.append(minutes)
                 print(f"  {subject}: MAE X {row['MAE_X']:.2f}, O {row['MAE_O']:.2f} (O - X {row['Diff_O_minus_X']:+.2f})"
@@ -511,20 +563,26 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         ("GT", "CapnoBase: peak detection on the capnogram (RRest rule); BIDMC: ann1 (expert-label rule"
                + (", minutes with an ann1 gap left out" if args.ann1_nogap else "") + "); STEAM2: stored GT"),
         ("MAE", "per subject, mean |stored rate - GT breath count| over the scored minutes, the same minutes for both"),
-        ("Detection", f"|MAE O - MAE X| >= {args.threshold:g} breaths/min, both directions"
-                      + ("; MAE issue subjects left out" if args.skip_issue_subjects else "; MAE issue subjects marked")),
-        ("Figures", f"every {args.window_sec:g} s window of every recording of a detected subject; (a) GT vs Fusion O, "
-                    "(b) GT vs Fusion X; min-max scaled in the window; GT breaths marked at the top"),
+        ("Subjects drawn", "listed: " + (", ".join(f"{d} {s}" for d, v in listed.items() for s in v) or "none")
+                           + ("; and every subject with |MAE O - MAE X| >= " + f"{args.threshold:g} breaths/min"
+                              + ("; MAE issue subjects left out" if args.skip_issue_subjects else "")
+                              if detect else "")),
+        ("Figures", f"every {args.window_sec:g} s window of every recording of a drawn subject; (a) GT vs Fusion O "
+                    "(deep red), (b) GT vs Fusion X (deep blue); model lines thicker than the GT and above it; "
+                    "min-max scaled in the window; GT breaths marked at the top"),
     ], columns=["Item", "Description"])
     path = out_root / "261115_StemFusion_MAEDiff.xlsx"
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        (det.round(4) if not det.empty else det).to_excel(writer, sheet_name="Detected", index=False)
+        (det.round(4) if not det.empty else det).to_excel(writer, sheet_name="Drawn", index=False)
         (subjects.sort_values("Diff_O_minus_X").round(4) if not subjects.empty else subjects).to_excel(
             writer, sheet_name="Subjects", index=False)
         (pd.concat(minute_frames, ignore_index=True).round(4) if minute_frames else pd.DataFrame()).to_excel(
             writer, sheet_name="Minutes", index=False)
+        pd.DataFrame(missing, columns=["Dataset", "Subject", "Missing"]).to_excel(writer, sheet_name="Missing", index=False)
         notes.to_excel(writer, sheet_name="Notes", index=False)
-    print(f"\n{len(det)} subjects with |MAE O - MAE X| >= {args.threshold:g}; figures under {out_root}; table: {path}")
+    for m in missing:
+        print(f"  not drawn: {m['Dataset']} {m['Subject']} ({m['Missing']})")
+    print(f"\n{len(det)} subjects drawn; figures under {out_root}; table: {path}")
 
 
 if __name__ == "__main__":
