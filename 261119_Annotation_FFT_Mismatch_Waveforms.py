@@ -1,27 +1,35 @@
 # -*- coding: utf-8 -*-
 r"""261119_Annotation_FFT_Mismatch_Waveforms: every subject of the datasets with expert breath annotations
 (BIDMC, CapnoBase) whose annotated breathing rate and the FFT rate of the preprocessed reference differ by
-2 breaths/min or more in a 30 s window - the raw reference, the preprocessed reference, the reconstructed
-waveform and the |FFT| of the three with their peaks, in every 30 s window, with the subject's MAE and PCC.
+2 breaths/min or more in a 30 s window, split into the subjects with a difference of 4 breaths/min or more and
+those whose largest difference is 2-4 breaths/min - the raw reference, the preprocessed reference, the
+reconstructed waveform and the |FFT| of the three with their peaks, in every 30 s window, with the subject's
+MAE and PCC.
 
 Annotations
   BIDMC      ann1 and ann2 (bidmc_data.mat ref.breaths; two annotators), --bidmc-annotators (default both)
   CapnoBase  the expert breath labels of the capnogram (co2_startexp of {case}_8min_labels)
   (STEAM2 has no annotation and is not part of this script.)
 
-Selection (every 30 s window of every recording from its start: 0-30, 30-60, ... s)
+Comparison (every 30 s window of every recording from its start: 0-30, 30-60, ... s)
   annotation rate  60 / mean breath interval of the annotation in the window (>= 2 breaths)
   FFT rate         peak of the |FFT| of the preprocessed reference in the window (detrend, Hamming window,
                    zero padding to >= 32768 points, as 261116) in the rate band of the scoring
                    (BIDMC 6-30, CapnoBase 3-60 /min)
+  difference       |annotation rate - FFT rate|; BIDMC: the larger of ann1 and ann2
   usable window    the reference is usable in the window as in the scoring: structurally valid for at least
                    half of it and no expert artifact span (CapnoBase CO2 artifacts); other windows are drawn
-                   but never select a subject
-  mismatch         usable window with |annotation rate - FFT rate| >= --threshold-bpm (default 2) for an
-                   annotation (BIDMC: ann1 or ann2)
-  A subject with at least one mismatch window is drawn (every window of it; the mismatch windows are
-  shaded and their files end in _mismatch). The MAE issue subjects (BIDMC 27, CapnoBase 0115) are kept and
-  marked.
+                   but never count
+Levels (--thresholds, default 2 and 4 breaths/min)
+  window   2-4 bpm   usable window with 2 <= difference < 4
+           >=4 bpm   usable window with difference >= 4
+  subject  the level of its largest window difference; every subject with a level is drawn, in the folder of
+           its level:
+             ge4bpm\        at least one window with a difference of 4 breaths/min or more
+             ge2_lt4bpm\    a difference of 2 breaths/min or more in a window, none of 4 or more
+  The windows are shaded by level (2-4 bpm yellow, >=4 bpm salmon) and their files end in _2-4bpm or _ge4bpm.
+  The table counts the windows and subjects at both thresholds (>= 2 includes >= 4). The MAE issue subjects
+  (BIDMC 27, CapnoBase 0115) are kept and marked.
 
 Model (stored outputs, nothing is trained): the final model with the 1x1 stem fusion, member m0
   BIDMC      261013 (D:\PPG2RSP_RRWaveNet_Inspired\261013_RRWavNet_STEAM_BIDMC_v1), the weight decay selected
@@ -44,28 +52,31 @@ Scores per drawn subject (the stored minutes of member m0, as in the final resul
                   CapnoBase expert labels)
   |PCC|           mean |Wave_PCC| over the scored minutes
 
-Figures ({Dataset}\{Dataset}_{subject}\ under the output folder)
-  {Dataset}_{subject}_overview.png           the whole recording
-  {Dataset}_{subject}_{t0}-{t1}s[_mismatch].png   every 30 s window
-  {Dataset}_{subject}_all.pdf                all of them, one page each
+Figures ({level folder}\{Dataset}\{Dataset}_{subject}\ under the output folder)
+  {Dataset}_{subject}_overview.png                      the whole recording
+  {Dataset}_{subject}_{t0}-{t1}s[_2-4bpm | _ge4bpm].png  every 30 s window
+  {Dataset}_{subject}_all.pdf                           all of them, one page each
   (a) raw (raw units) with the annotated breaths (BIDMC: ann1 triangles at the top, ann2 at the bottom;
       CapnoBase: expert labels at the top); (b) preprocessed reference, min-max scaled in the window, with
       the same marks; (c) reconstructed waveform over the preprocessed reference, min-max scaled;
   (d) |FFT| of the raw, preprocessed and reconstructed waveform of the same seconds, each scaled to its peak = 1,
       the peak in the rate band marked by a vertical line and a square, the annotation rates as dashed lines.
-  Beside the panels: annotation and FFT rates and their difference; the stored rate, GT and error of the 60 s
-  minute that holds the window; PCC; the FFT peaks.
+  Beside the panels: annotation and FFT rates, their difference and level; the stored rate, GT and error of the
+  60 s minute that holds the window; PCC; the FFT peaks.
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261119_Annotation_FFT_Mismatch_Waveforms)
   261119_Annotation_FFT_Mismatch.xlsx
-    Summary   per dataset: subjects, usable windows, mismatch windows, subjects drawn
-    Subjects  every subject: usable / mismatch windows, largest difference, drawn, MAE and |PCC| (drawn subjects)
-    Windows   every 30 s window of every subject: annotation rates, FFT rate, differences, usable, mismatch
+    Summary   per dataset and threshold: windows and subjects with a difference >= 2 and >= 4 breaths/min, and
+              the subjects of each level folder
+    Subjects  every subject: usable windows, windows >= 2 and >= 4, largest difference, level, MAE and |PCC|
+              (drawn subjects), folder
+    Windows   every 30 s window of every subject: annotation rates, FFT rate, differences, usable, level
+    Minutes   every stored minute of the drawn subjects: GT, annotation counts, stored rate, errors, PCC
     Missing   subjects without stored results (still drawn without the reconstructed waveform)
     Notes
 
 Run: python 261119_Annotation_FFT_Mismatch_Waveforms.py     (Spyder: runfile(...), no options needed)
-Options: --threshold-bpm, --window-sec, --datasets, --bidmc-annotators, --raw-predictions, --root-261007,
+Options: --thresholds, --window-sec, --datasets, --bidmc-annotators, --raw-predictions, --root-261007,
 --root-261013, --root-noise, --output-root, --script-261007, --script-261013, --capnobase-path, --bidmc-path
 """
 
@@ -111,7 +122,7 @@ RAW_LABEL = {"BIDMC": "impedance", "CapnoBase": "capnogram"}
 ISSUE_SUBJECTS = {"BIDMC": ("27",), "CapnoBase": ("0115",)}  # MAE issue subjects of the final results
 BIDMC_ANNOTATORS = ("ann1", "ann2")
 ANNOTATION_TEXT = {"ann1": "ann1 (annotator 1)", "ann2": "ann2 (annotator 2)", "expert": "expert label"}
-THRESHOLD_BPM = 2.0
+THRESHOLDS = (2.0, 4.0)  # breaths/min: levels 2-4 and >= 4
 WINDOW_SEC = 30.0
 MIN_WINDOW_SEC = 10.0  # a last window shorter than this is not drawn
 MEMBER = 0
@@ -120,11 +131,54 @@ MAX_FREQ_HZ = 1.0       # frequency axis of the |FFT| panel (at least the rate b
 COLORS = {"raw": "#111111", "raw_fft": "#9a9893", "GT": "#111111", "model": "#d7191c",
           "ann1": "#e08214", "ann2": "#5e3c99", "expert": "#e08214"}
 MARKERS = {"ann1": ("v", 0.95), "ann2": ("^", 0.05), "expert": ("v", 0.95)}
-SHADE = "#fbe7a1"
+LEVEL_SHADES = ("#fbe7a1", "#f6b8a8", "#e9a3c9", "#c2a5cf")  # level 0 (lowest threshold) upwards
 MODEL_LW = 2.0
 INK, MUTED, GRID = "#1f1f1f", "#6b6a66", "#e4e3df"
 
 _MODULES: Dict[str, object] = {}
+
+
+# ---------------------------------------------------------------------------
+# Levels
+# ---------------------------------------------------------------------------
+
+def tkey(t: float) -> str:
+    """Threshold in column names (2 -> "2", 2.5 -> "2p5")."""
+    return f"{t:g}".replace(".", "p")
+
+
+def level_of(diff: float, thresholds: Sequence[float]) -> int:
+    """Index of the highest threshold the difference reaches (-1: below the lowest or undefined)."""
+    if diff is None or not np.isfinite(diff):
+        return -1
+    reached = [k for k, t in enumerate(thresholds) if diff >= t]
+    return reached[-1] if reached else -1
+
+
+def level_label(k: int, thresholds: Sequence[float]) -> str:
+    """Window level for text and file names: 2-4bpm, ge4bpm."""
+    if k < 0:
+        return ""
+    if k == len(thresholds) - 1:
+        return f"ge{thresholds[k]:g}bpm"
+    return f"{thresholds[k]:g}-{thresholds[k + 1]:g}bpm"
+
+
+def level_rule(k: int, thresholds: Sequence[float]) -> str:
+    if k == len(thresholds) - 1:
+        return f">= {thresholds[k]:g} /min"
+    return f"{thresholds[k]:g}-{thresholds[k + 1]:g} /min"
+
+
+def level_folder(k: int, thresholds: Sequence[float]) -> str:
+    """Subject folder of a level: ge4bpm (a window >= 4), ge2_lt4bpm (largest difference 2-4)."""
+    if k == len(thresholds) - 1:
+        return f"ge{thresholds[k]:g}bpm"
+    return f"ge{thresholds[k]:g}_lt{thresholds[k + 1]:g}bpm"
+
+
+def level_shade(k: int) -> str:
+    return LEVEL_SHADES[min(k, len(LEVEL_SHADES) - 1)]
 
 
 # ---------------------------------------------------------------------------
@@ -309,14 +363,15 @@ def spectra_of(raw_v: np.ndarray, raw_fs: float, ref_v: np.ndarray, pred_v: np.n
 
 
 # ---------------------------------------------------------------------------
-# Windows (selection) and minutes (scores)
+# Windows (levels) and minutes (scores)
 # ---------------------------------------------------------------------------
 
 def subject_windows(args, mod, dataset: str, subject: str, record: dict, raw: Optional[dict]) -> pd.DataFrame:
     """Every 30 s window of every recording: annotation rates, FFT rate of the preprocessed reference,
-    differences, usable, mismatch."""
+    differences, usable, level."""
     fs = mod.TARGET_FS
     size = int(round(args.window_sec * fs))
+    thresholds = args.thresholds
     rows = []
     for segment_id, ref in sorted(record["references"].items()):
         ann = annotations_of(mod, dataset, ref, raw, args.bidmc_annotators)
@@ -330,17 +385,19 @@ def subject_windows(args, mod, dataset: str, subject: str, record: dict, raw: Op
             ref_rate = fft_rate(np.asarray(ref["signal"][a:b], float), fs, band)
             row = {"Dataset": dataset, "Subject": subject, "Segment_ID": int(segment_id),
                    "Start_Sec": a / fs, "End_Sec": b / fs, "Usable": ok, "Reason": reason, "FFT_Rate": ref_rate}
-            diffs = []
+            diffs = {}
             for key, labels in ann.items():
                 n, rate = label_rate(labels, a, b, fs)
                 row[f"{key}_Count"], row[f"{key}_Rate"] = n, rate
                 row[f"{key}_minus_FFT"] = rate - ref_rate
                 if np.isfinite(rate) and np.isfinite(ref_rate):
-                    diffs.append((key, abs(rate - ref_rate)))
-            over = [k for k, d in diffs if d >= args.threshold_bpm]
-            row["Max_Abs_Diff"] = max((d for _, d in diffs), default=math.nan)
-            row["Mismatch"] = bool(ok and over)
-            row["Mismatch_Annotations"] = ", ".join(over) if ok else ""
+                    diffs[key] = abs(rate - ref_rate)
+            row["Max_Abs_Diff"] = max(diffs.values(), default=math.nan)
+            level = level_of(row["Max_Abs_Diff"], thresholds) if ok else -1
+            row["Level"] = level_label(level, thresholds)
+            row["Level_Index"] = level
+            for t in thresholds:
+                row[f"ge{tkey(t)}_Annotations"] = ", ".join(k for k, d in diffs.items() if d >= t) if ok else ""
             rows.append(row)
     return pd.DataFrame(rows)
 
@@ -375,6 +432,8 @@ def subject_minutes(args, mod, dataset: str, subject: str, record: dict, raw: Op
     """Every stored minute: validity and GT of the final results, annotation counts, stored rate, errors, PCC."""
     fs = mod.TARGET_FS
     table = pd.read_csv(files["minutes"], dtype={"Subject": str}, encoding="utf-8-sig")
+    # BIDMC: ann1 always (the final GT), then the other compared annotator
+    keys = ("ann1",) + tuple(k for k in args.bidmc_annotators if k != "ann1")
     rows = []
     for m in table.itertuples(index=False):
         ref = record["references"].get(int(m.Segment_ID))
@@ -382,8 +441,6 @@ def subject_minutes(args, mod, dataset: str, subject: str, record: dict, raw: Op
             continue
         t0, t1 = float(m.RR_Window_Start_Sec), float(m.RR_Window_End_Sec)
         a, b = int(round(t0 * fs)), int(round(t1 * fs))
-        # BIDMC: ann1 always (the final GT), then the other compared annotator
-        keys = ("ann1",) + tuple(k for k in args.bidmc_annotators if k != "ann1")
         ann = annotations_of(mod, dataset, ref, raw, keys)
         valid, reason, count = minute_gt(mod, dataset, ref, a, b, ann)
         rate = float(m.Pred_Wave_FFT_RR)
@@ -513,10 +570,10 @@ def peak_text(spectra: Dict[str, dict], ann_rates: Dict[str, float], band_bpm: T
 def draw_page(targets: Sequence[Tuple[Path, PdfPages]], header: Tuple[str, str], titles: Sequence[str],
               t0: float, t1: float, raw_t: np.ndarray, raw_v: np.ndarray, raw_unit: str, ref_t: np.ndarray,
               ref_v: np.ndarray, pred_v: np.ndarray, ann_sec: Dict[str, np.ndarray],
-              shades: Sequence[Tuple[float, float]], texts: Sequence[str], spectra: Dict[str, dict],
-              ann_rates: Dict[str, float], band_bpm: Tuple[float, float]) -> None:
+              shades: Sequence[Tuple[float, float, int]], thresholds: Sequence[float], texts: Sequence[str],
+              spectra: Dict[str, dict], ann_rates: Dict[str, float], band_bpm: Tuple[float, float]) -> None:
     """(a) raw, (b) preprocessed, (c) reconstructed over the preprocessed, for the seconds t0-t1, and (d) the
-    |FFT| of the three with their peaks."""
+    |FFT| of the three with their peaks; shades = (start, end, level) of the windows to shade."""
     width, side, left, panel, gap, top_in, bottom_in = 13.0, 3.5, 0.75, 1.7, 0.5, 1.25, 1.35
     fft_panel, fft_gap = 1.9, 1.65  # (d) below (c): room for the time axis of (c) and the top axis of (d)
     height = top_in + bottom_in + 3 * panel + 2 * gap + fft_gap + fft_panel
@@ -530,8 +587,8 @@ def draw_page(targets: Sequence[Tuple[Path, PdfPages]], header: Tuple[str, str],
         ax = fig.add_axes([left / width, bottom / height, plot_w, panel / height], sharex=axes[0] if axes else None)
         axes.append(ax)
         style(ax)
-        for s0, s1 in shades:
-            ax.axvspan(max(s0, t0), min(s1, t1), color=SHADE, lw=0, zorder=0)
+        for s0, s1, level in shades:
+            ax.axvspan(max(s0, t0), min(s1, t1), color=level_shade(level), lw=0, zorder=0)
         if k == 0:
             ax.plot(raw_t, raw_v, color=COLORS["raw"], lw=0.9, zorder=2)
             ax.set_ylabel(raw_unit, fontsize=8)
@@ -566,11 +623,11 @@ def draw_page(targets: Sequence[Tuple[Path, PdfPages]], header: Tuple[str, str],
         marker, _ = MARKERS[key]
         handles.append(Line2D([], [], linestyle="none", marker=marker, ms=6, color=COLORS[key]))
         labels.append(f"{ANNOTATION_TEXT[key]} breath")
-    if shades:
-        handles.append(Patch(facecolor=SHADE, edgecolor="none"))
-        labels.append("annotation vs FFT mismatch (window)")
+    for level in sorted({s[2] for s in shades}):
+        handles.append(Patch(facecolor=level_shade(level), edgecolor="none"))
+        labels.append(f"|annotation - FFT| {level_rule(level, thresholds)}")
     fig.legend(handles, labels, loc="lower left", bbox_to_anchor=(left / width, 0.42 / height), ncol=len(labels),
-               frameon=False, fontsize=7.8, handlelength=1.8, columnspacing=1.6)
+               frameon=False, fontsize=7.8, handlelength=1.8, columnspacing=1.4)
     fft_handles = [Line2D([], [], color=COLORS["raw_fft"], lw=1.2), Line2D([], [], color=COLORS["GT"], lw=1.4),
                    Line2D([], [], color=COLORS["model"], lw=MODEL_LW),
                    Line2D([], [], linestyle="none", marker="s", ms=6, color=INK)]
@@ -601,9 +658,10 @@ def panel_titles(dataset: str, ref: dict, raw: Optional[dict]) -> Tuple[str, str
 def draw_subject(args, mod, dataset: str, subject: str, record: dict, raw: Optional[dict],
                  files: Optional[Dict[str, Path]], windows: pd.DataFrame, minutes: pd.DataFrame, row: dict,
                  folder: Path) -> int:
-    """Overview and every 30 s window of one subject."""
+    """Overview and every 30 s window of one subject, in the folder of its level."""
     fs = mod.TARGET_FS
     tag = mod.safe_tag(subject)
+    thresholds = args.thresholds
     folder.mkdir(parents=True, exist_ok=True)
     issue = " · MAE issue subject (left out of the final results)" if row["Issue_Subject"] else ""
     if files is None:
@@ -612,12 +670,12 @@ def draw_subject(args, mod, dataset: str, subject: str, record: dict, raw: Optio
         ann_mae = ", ".join(f"MAE ({k}) {row.get(f'MAE_{k}', math.nan):.2f}" for k in row["Annotations"])
         scores = (f"MAE (final GT) {row['MAE_GT']:.2f}; {ann_mae} breaths/min; |PCC| {row['AbsPCC']:.2f}; "
                   f"{row['Scored_Minutes']} scored minutes")
-    head = f"{dataset} {subject}: {scores}{issue}"
+    head = f"{dataset} {subject} [{level_rule(row['Level_Index'], thresholds)}]: {scores}{issue}"
     gt_text = "ann1 (expert-label rule)" if dataset == "BIDMC" else "count-orig breaths of the capnogram (RRest rule)"
-    sub = (f"Mismatch: |annotation rate - FFT rate of the preprocessed reference| >= {args.threshold_bpm:g} /min in a "
-           f"usable {args.window_sec:g} s window (shaded; {row['Mismatch_Windows']} of {row['Usable_Windows']} usable "
-           f"windows)\nfinal GT = {gt_text}; model: member m0, "
-           + ("raw output" if args.raw_predictions else "band-passed as scored"))
+    counts = "; ".join(f">= {t:g} /min: {row[f'Windows_ge{tkey(t)}']}" for t in thresholds)
+    sub = (f"|annotation rate - FFT rate of the preprocessed reference| in usable {args.window_sec:g} s windows "
+           f"(of {row['Usable_Windows']}): {counts}; shaded by level\n"
+           f"final GT = {gt_text}; model: member m0, " + ("raw output" if args.raw_predictions else "band-passed as scored"))
     count = 0
     multi = len(record["references"]) > 1
     with PdfPages(folder / f"{dataset}_{tag}_all.pdf") as pdf:
@@ -641,17 +699,22 @@ def draw_subject(args, mod, dataset: str, subject: str, record: dict, raw: Optio
             titles = panel_titles(dataset, ref, raw)
             wins = windows[windows["Segment_ID"] == int(segment_id)].sort_values("Start_Sec")
             mins = minutes[minutes["Segment_ID"] == int(segment_id)] if not minutes.empty else minutes
-            shades = [(w.Start_Sec, w.End_Sec) for w in wins.itertuples() if w.Mismatch]
+            shades = [(w.Start_Sec, w.End_Sec, int(w.Level_Index)) for w in wins.itertuples() if w.Level_Index >= 0]
             rec = f"rec{segment_id}_" if multi else ""
             # overview: the whole recording
             t0, t1 = 0.0, length / fs
-            listing = [f"{w.Start_Sec:.0f}-{w.End_Sec:.0f} s: " + ", ".join(
-                f"{k} {getattr(w, f'{k}_Rate'):.1f}" for k in ann) + f" vs FFT {w.FFT_Rate:.1f}"
-                for w in wins.itertuples() if w.Mismatch]
+            short = {k: (f">={thresholds[k]:g}" if k == len(thresholds) - 1 else
+                         f"{thresholds[k]:g}-{thresholds[k + 1]:g}") for k in range(len(thresholds))}
+            listing = [f"{w.Start_Sec:3.0f}-{w.End_Sec:3.0f} s {short[int(w.Level_Index)]:>5}  "
+                       + "/".join(fmt(getattr(w, f"{k}_Rate"), ".1f").strip() for k in ann)
+                       + f" vs {fmt(w.FFT_Rate, '.1f').strip()}"
+                       for w in wins.itertuples() if w.Level_Index >= 0]
             shown = listing[:12] + ([f"... {len(listing) - 12} more"] if len(listing) > 12 else [])
             texts = ["\n".join([f"{k} breaths {len(v):4d}" for k, v in ann.items()]
-                               + ["mismatch windows"] + ["  " + s for s in (shown or ["none"])]),
-                     f"usable windows   {int(wins.Usable.sum())} of {len(wins)}",
+                               + [f"windows >= {thresholds[0]:g} /min (level; {'/'.join(ann)} vs FFT /min)"]
+                               + ["  " + s for s in (shown or ["none"])]),
+                     f"usable windows   {int(wins.Usable.sum())} of {len(wins)}\n"
+                     + "\n".join(f"windows >= {t:g} /min  {row[f'Windows_ge{tkey(t)}']}" for t in thresholds),
                      ("no stored result" if files is None else
                       f"MAE (final GT) {row['MAE_GT']:5.2f} /min\n"
                       + "".join(f"MAE ({k}) {row.get(f'MAE_{k}', math.nan):8.2f} /min\n" for k in row["Annotations"])
@@ -661,7 +724,7 @@ def draw_subject(args, mod, dataset: str, subject: str, record: dict, raw: Optio
             whole = {k: label_rate(v, 0, length, fs)[1] for k, v in ann.items()}
             draw_page([(folder / f"{dataset}_{tag}_{rec}overview.png", pdf)], (f"{head} · whole recording", sub),
                       titles, t0, t1, raw_t[raw_k], raw_v[raw_k], raw_unit, ref_t, ref_v, pred, ann_sec, shades,
-                      texts, spectra, whole, band)
+                      thresholds, texts, spectra, whole, band)
             count += 1
             # every 30 s window
             for w in wins.itertuples():
@@ -672,8 +735,9 @@ def draw_subject(args, mod, dataset: str, subject: str, record: dict, raw: Optio
                 lines += [f"{k:<6} {getattr(w, f'{k}_Count'):3d} breaths {fmt(rates[k])} /min" for k in ann]
                 lines += [f"FFT (preprocessed)    {fmt(w.FFT_Rate)} /min"]
                 lines += [f"{k} - FFT {fmt(getattr(w, f'{k}_minus_FFT'), '+5.1f')} /min" for k in ann]
-                if w.Mismatch:
-                    lines.append(f">= {args.threshold_bpm:g} /min: {w.Mismatch_Annotations}  <- mismatch")
+                if w.Level_Index >= 0:
+                    over = getattr(w, f"ge{tkey(thresholds[int(w.Level_Index)])}_Annotations")
+                    lines.append(f"level {level_rule(int(w.Level_Index), thresholds)}: {over}")
                 inside = mins[(mins.Start_Sec <= t0 + 1e-6) & (mins.End_Sec >= t1 - 1e-6)] if not mins.empty else mins
                 r = pearson(ref_v[a:b], pred[a:b])
                 if files is None:
@@ -695,10 +759,12 @@ def draw_subject(args, mod, dataset: str, subject: str, record: dict, raw: Optio
                 raw_k = (raw_t >= t0) & (raw_t < t1)
                 ref_k = slice(a, b)
                 spectra = spectra_of(raw_v[raw_k], raw_fs, ref_v[ref_k], pred[ref_k], fs, band)
-                name = f"{dataset}_{tag}_{rec}{t0:03.0f}-{t1:03.0f}s{'_mismatch' if w.Mismatch else ''}.png"
+                suffix = f"_{w.Level}" if w.Level_Index >= 0 else ""
+                name = f"{dataset}_{tag}_{rec}{t0:03.0f}-{t1:03.0f}s{suffix}.png"
                 draw_page([(folder / name, pdf)], (f"{head} · {t0:.0f}-{t1:.0f} s", sub), titles, t0, t1,
                           raw_t[raw_k], raw_v[raw_k], raw_unit, ref_t[ref_k], ref_v[ref_k], pred[ref_k], ann_sec,
-                          [(t0, t1)] if w.Mismatch else [], texts, spectra, rates, band)
+                          [(t0, t1, int(w.Level_Index))] if w.Level_Index >= 0 else [], thresholds, texts, spectra,
+                          rates, band)
                 count += 1
     return count
 
@@ -714,10 +780,11 @@ def same_subject(a: object, b: object) -> bool:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Subjects whose annotated breathing rate and the FFT rate of the "
-                                            "preprocessed reference differ in a 30 s window: raw, preprocessed and "
-                                            "reconstructed waveforms with their FFT peaks, MAE and PCC")
-    p.add_argument("--threshold-bpm", type=float, default=THRESHOLD_BPM,
-                   help="mismatch when |annotation rate - FFT rate| >= this (default 2 /min)")
+                                            "preprocessed reference differ in a 30 s window (2-4 and >= 4 "
+                                            "breaths/min): raw, preprocessed and reconstructed waveforms with their "
+                                            "FFT peaks, MAE and PCC")
+    p.add_argument("--thresholds", nargs="+", type=float, default=list(THRESHOLDS),
+                   help="levels of |annotation rate - FFT rate| in breaths/min (default 2 4)")
     p.add_argument("--window-sec", type=float, default=WINDOW_SEC, help="window of the comparison and the figures")
     p.add_argument("--datasets", nargs="+", choices=list(DATASETS), default=list(DATASETS))
     p.add_argument("--bidmc-annotators", nargs="+", choices=list(BIDMC_ANNOTATORS), default=list(BIDMC_ANNOTATORS),
@@ -732,11 +799,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p.add_argument("--script-261013", type=Path, default=None)
     p.add_argument("--capnobase-path", type=Path, default=None)
     p.add_argument("--bidmc-path", type=Path, default=None)
-    return p.parse_args(list(sys.argv[1:] if argv is None else argv))
+    args = p.parse_args(list(sys.argv[1:] if argv is None else argv))
+    args.thresholds = sorted({float(t) for t in args.thresholds})
+    return args
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
+    thresholds = args.thresholds
     out_root = Path(args.output_root)
     out_root.mkdir(parents=True, exist_ok=True)
     window_frames, minute_frames, subject_rows, summary, missing = [], [], [], [], []
@@ -753,8 +823,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         data = mod.load_dataset(KEYS[dataset], spec)
         bidmc_raw = read_bidmc(mod.DATASET_CONFIGS["bidmc"]["data_path"]) if dataset == "BIDMC" else {}
         annotations = tuple(args.bidmc_annotators) if dataset == "BIDMC" else ("expert",)
-        drawn = 0
-        n_windows = n_usable = n_mismatch = 0
+        ds_windows = []
         for subject in sorted(data):
             record = data[subject]
             if dataset == "BIDMC":
@@ -765,19 +834,23 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             if windows.empty:
                 continue
             window_frames.append(windows)
+            ds_windows.append(windows)
             issue = any(same_subject(subject, x) for x in ISSUE_SUBJECTS[dataset])
-            mism = windows[windows.Mismatch]
-            n_windows += len(windows)
-            n_usable += int(windows.Usable.sum())
-            n_mismatch += len(mism)
+            use = windows[windows.Usable]
+            level = int(windows.Level_Index.max())
             row = {"Dataset": dataset, "Subject": subject, "Issue_Subject": issue, "Windows": int(len(windows)),
-                   "Usable_Windows": int(windows.Usable.sum()), "Mismatch_Windows": int(len(mism)),
-                   "Max_Abs_Diff_Usable": float(windows.loc[windows.Usable, "Max_Abs_Diff"].max())
-                   if windows.Usable.any() else math.nan,
-                   "Mismatch_List": "; ".join(f"{w.Start_Sec:.0f}-{w.End_Sec:.0f} s ({w.Mismatch_Annotations})"
-                                              for w in mism.itertuples()) or "none",
-                   "Drawn": False, "Annotations": [k for k in annotations if f"{k}_Rate" in windows.columns]}
-            if not mism.empty:
+                   "Usable_Windows": int(len(use)),
+                   "Max_Abs_Diff_Usable": float(use.Max_Abs_Diff.max()) if len(use) else math.nan,
+                   "Level_Index": level, "Level": level_rule(level, thresholds) if level >= 0 else "below "
+                   f"{thresholds[0]:g} /min", "Drawn": False,
+                   "Annotations": [k for k in annotations if f"{k}_Rate" in windows.columns]}
+            for t in thresholds:
+                over = use[use.Max_Abs_Diff >= t]
+                row[f"Windows_ge{tkey(t)}"] = int(len(over))
+                row[f"Windows_ge{tkey(t)}_List"] = "; ".join(
+                    f"{w.Start_Sec:.0f}-{w.End_Sec:.0f} s ({getattr(w, f'ge{tkey(t)}_Annotations')}, "
+                    f"{w.Max_Abs_Diff:.1f})" for w in over.itertuples()) or "none"
+            if level >= 0:
                 files = model_files(args, mod, dataset, subject)
                 minutes = pd.DataFrame()
                 if files is None:
@@ -794,26 +867,40 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                     row["AbsPCC"] = float(scored.Wave_PCC.abs().mean()) if len(scored) else math.nan
                     row["Files"] = str(files["root"])
                     minute_frames.append(minutes)
-                folder = out_root / dataset / f"{dataset}_{mod.safe_tag(subject)}"
+                folder = out_root / level_folder(level, thresholds) / dataset / f"{dataset}_{mod.safe_tag(subject)}"
                 row["Figures"] = draw_subject(args, mod, dataset, subject, record, raw, files, windows, minutes, row,
                                               folder)
                 row["Drawn"], row["Folder"] = True, str(folder)
-                drawn += 1
                 scores = ("no stored result" if files is None else
                           f"MAE (final GT) {row['MAE_GT']:.2f}, |PCC| {row['AbsPCC']:.2f}")
-                print(f"  {subject}: {len(mism)} of {row['Usable_Windows']} usable windows mismatch "
-                      f"(largest |difference| {row['Max_Abs_Diff_Usable']:.1f} /min); {scores}"
+                counts = ", ".join(f">= {t:g}: {row[f'Windows_ge{tkey(t)}']}" for t in thresholds)
+                print(f"  {subject} [{level_folder(level, thresholds)}]: windows {counts} of {row['Usable_Windows']} "
+                      f"usable (largest |difference| {row['Max_Abs_Diff_Usable']:.1f} /min); {scores}"
                       f"{' [issue]' if issue else ''}; {row['Figures']} figures", flush=True)
             row["Annotations"] = ", ".join(row["Annotations"])
             subject_rows.append(row)
         subjects_ds = [r for r in subject_rows if r["Dataset"] == dataset]
-        summary.append({"Dataset": dataset, "Annotations": ", ".join(annotations), "Subjects": len(subjects_ds),
-                        "Windows": n_windows, "Usable_Windows": n_usable, "Mismatch_Windows": n_mismatch,
-                        "Mismatch_Share_of_Usable": n_mismatch / n_usable if n_usable else math.nan,
-                        "Subjects_Drawn": drawn,
-                        "Subjects_Drawn_List": ", ".join(r["Subject"] for r in subjects_ds if r["Drawn"]) or "none"})
-        print(f"  {dataset}: {drawn} of {len(subjects_ds)} subjects drawn; {n_mismatch} of {n_usable} usable "
-              f"{args.window_sec:g} s windows mismatch", flush=True)
+        allw = pd.concat(ds_windows, ignore_index=True) if ds_windows else pd.DataFrame()
+        use = allw[allw.Usable] if not allw.empty else allw
+        for t in thresholds:
+            hit = [r for r in subjects_ds if r[f"Windows_ge{tkey(t)}"] > 0]
+            n = int((use.Max_Abs_Diff >= t).sum()) if len(use) else 0
+            summary.append({"Dataset": dataset, "Annotations": ", ".join(annotations), "Rule": f">= {t:g} /min",
+                            "Subjects": len(subjects_ds), "Usable_Windows": int(len(use)), "Windows": n,
+                            "Share_of_Usable_Windows": n / len(use) if len(use) else math.nan,
+                            "Subjects_with_a_Window": len(hit),
+                            "Subjects_with_a_Window_List": ", ".join(r["Subject"] for r in hit) or "none"})
+        for k in reversed(range(len(thresholds))):
+            members = [r for r in subjects_ds if r["Level_Index"] == k]
+            summary.append({"Dataset": dataset, "Annotations": ", ".join(annotations),
+                            "Rule": f"folder {level_folder(k, thresholds)} (largest difference "
+                                    f"{level_rule(k, thresholds)})",
+                            "Subjects": len(subjects_ds), "Subjects_with_a_Window": len(members),
+                            "Subjects_with_a_Window_List": ", ".join(r["Subject"] for r in members) or "none"})
+        drawn = sum(r["Drawn"] for r in subjects_ds)
+        counts = ", ".join(f">= {t:g} /min: {sum(r[f'Windows_ge{tkey(t)}'] > 0 for r in subjects_ds)} subjects"
+                           for t in thresholds)
+        print(f"  {dataset}: {drawn} of {len(subjects_ds)} subjects drawn ({counts})", flush=True)
         del data
     notes = pd.DataFrame([
         ("Annotations", "BIDMC: ann1 and ann2 (" + ", ".join(args.bidmc_annotators) + " compared); CapnoBase: expert "
@@ -823,9 +910,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         ("Annotation rate", "60 / mean breath interval of the annotation in the window (>= 2 breaths)"),
         ("FFT rate", "peak of the |FFT| of the preprocessed reference in the window (detrend, Hamming, zero padding to "
                      ">= 32768 points) in the rate band of the scoring (BIDMC 6-30, CapnoBase 3-60 /min)"),
-        ("Usable", "reference structurally valid in at least half of the window and no expert artifact span"),
-        ("Mismatch", f"usable window with |annotation rate - FFT rate| >= {args.threshold_bpm:g} /min for an "
-                     "annotation; a subject with at least one is drawn"),
+        ("Difference", "|annotation rate - FFT rate|; BIDMC: the larger of the compared annotators"),
+        ("Usable", "reference structurally valid in at least half of the window and no expert artifact span; other "
+                   "windows never count"),
+        ("Levels", "window: " + "; ".join(level_rule(k, thresholds) for k in range(len(thresholds)))
+                   + "; subject: the level of its largest window difference, drawn in the folder of that level ("
+                   + ", ".join(level_folder(k, thresholds) for k in reversed(range(len(thresholds))))
+                   + "); the Summary counts windows and subjects at every threshold (>= the lower includes >= the "
+                     "higher)"),
         ("Model", "final model with the 1x1 stem fusion, member m0: BIDMC 261013 (weight decay selected in the fold), "
                   "CapnoBase 261007 (full)"),
         ("MAE", "mean |stored rate - breath count| over the scored minutes of the final results: final GT (BIDMC "
@@ -839,8 +931,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         pd.DataFrame(summary).round(4).to_excel(writer, sheet_name="Summary", index=False)
         subjects = pd.DataFrame(subject_rows)
-        (subjects.sort_values(["Dataset", "Drawn", "Mismatch_Windows"], ascending=[True, False, False]).round(4)
-         if not subjects.empty else subjects).to_excel(writer, sheet_name="Subjects", index=False)
+        (subjects.sort_values(["Dataset", "Level_Index", "Max_Abs_Diff_Usable"], ascending=[True, False, False])
+         .round(4) if not subjects.empty else subjects).to_excel(writer, sheet_name="Subjects", index=False)
         (pd.concat(window_frames, ignore_index=True).round(4) if window_frames else pd.DataFrame()).to_excel(
             writer, sheet_name="Windows", index=False)
         (pd.concat(minute_frames, ignore_index=True).round(4) if minute_frames else pd.DataFrame()).to_excel(
