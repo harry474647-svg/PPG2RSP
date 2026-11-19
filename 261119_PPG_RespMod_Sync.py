@@ -22,7 +22,10 @@ Components of the PPG (as 261116_PPG_RIIV_RIAV_RIFV_FFT; Karlen et al. 2013, Cha
   RIIV       respiratory-induced intensity variation: the PPG value at every pulse peak
   RIAV       respiratory-induced amplitude variation: pulse amplitude, peak minus the trough before it
   RIFV       respiratory-induced frequency variation: instantaneous pulse rate, 60 / peak-to-peak interval
-  Beats: peaks of the 0.5-5 Hz pulse band; a beat is used when its interval lies in the heart-rate range of the
+  Beats: peaks of the 0.5-5 Hz pulse band at least 0.6 x the recording's beat interval apart (spectral heart rate of
+  the PPG, estimate_ppg_heart_rate_hz of the source script; without it a dicrotic / secondary wave can be counted as a
+  second beat, which doubles the pulse rate and makes RIIV, RIAV and RIFV move together with the detection error);
+  a beat is used when its interval lies in the heart-rate range of the
   profile and within 30% of the median of the 7 intervals around it, and (CapnoBase) outside the expert PPG
   artifact labels. Each modulation: one value per used beat, resampled to 4 Hz by cubic spline, band-passed with
   the recording's respiratory band (3rd-order Butterworth, zero phase). Extraction and filtering run on the whole
@@ -128,6 +131,7 @@ STYLES = ("overlap", "separate")
 MIN_WINDOW_COVER = 0.9
 MIN_WINDOW_BEATS = 10
 MAX_BEAT_GAP_SEC = 3.0  # modulations left empty between used beats further apart than this
+MIN_BEAT_DISTANCE_FRACTION = 0.6  # beats at least 0.6 x the spectral beat interval apart (no dicrotic double count)
 DPI = 130
 
 _MODULES: Dict[str, object] = {}
@@ -212,8 +216,13 @@ def extract_modulations(mod, ppg: np.ndarray, fs: float, hr_range_bpm: Tuple[flo
     spread = float(np.std(pulse))
     if spread < 1e-8:
         return {"n_detected": 0}
-    distance = max(1, int(round(60.0 / hr_range_bpm[1] * fs)))
-    detected, _ = find_peaks(pulse, distance=distance, prominence=max(1e-8, 0.10 * spread))
+    # minimum beat distance: the highest heart rate of the profile, and at least 60% of the recording's beat interval
+    # (spectral heart rate), so a dicrotic / secondary wave is not taken for a beat (one beat counted twice)
+    distance = 60.0 / hr_range_bpm[1]
+    hr_hz = mod.estimate_ppg_heart_rate_hz(ppg, int(round(fs)), hr_range_bpm)
+    if np.isfinite(hr_hz) and hr_hz > 0:
+        distance = max(distance, MIN_BEAT_DISTANCE_FRACTION / hr_hz)
+    detected, _ = find_peaks(pulse, distance=max(1, int(round(distance * fs))), prominence=max(1e-8, 0.10 * spread))
     half = int(round(PEAK_SEARCH_SEC * fs))
     peaks = np.array([max(0, p - half) + int(np.argmax(smooth[max(0, p - half):p + half + 1])) for p in detected], int)
     peaks = np.unique(peaks)
