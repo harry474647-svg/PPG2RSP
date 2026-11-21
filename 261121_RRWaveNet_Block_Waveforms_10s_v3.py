@@ -6,7 +6,8 @@ ground truth (per subject, per dataset and over all datasets). Every figure is d
 stage (Stem, B1, B2, B3, B4), each overlapped (one axis) and separated (one row per stage, each with the ground truth).
 
 Changes from 261121_RRWaveNet_Block_Waveforms_10s / _v2
-  * normalization: min-max to [-1, 1] in the window (channels, stage curves and ground truth) instead of z-scores;
+  * normalization: min-max to [-1, 1] instead of z-scores - every channel, and every drawn curve on its own: the GT,
+    Stem, B1, B2, B3 and B4 each span [-1, 1] in every window and, in the breath-cycle figures, after averaging;
   * channel sign: fixed per subject and channel - the sign of its r with the ground truth summed over the subject's
     other windows - instead of the sign of its r in the window itself (that sign is chosen with the window's own
     ground truth, so the curve resembled any ground truth by construction);
@@ -39,7 +40,9 @@ Breath-cycle average: the breaths of the GT in every window - troughs of the GT 
 of the [-1, 1] range), a breath = trough to the next trough inside the window, 1-20 s long - each resampled to 0-100%
 (101 points); the GT and every stage curve of these breaths averaged per subject (subjects with at least 3 breaths);
 per dataset and over all datasets the mean of the subject averages with its 95% confidence interval (1.96 x SE over
-the subjects). Beside the curves: mean |r| and r of every stage, mean +- SD over the subjects (their window means).
+the subjects). Every average (GT, Stem, B1, B2, B3, B4) is then min-max normalized to [-1, 1] on its own, its band
+scaled with it, so only the shape and timing of the cycle are compared. Beside the curves: mean |r| and r of every
+stage, mean +- SD over the subjects (their window means).
 Every subject is included (the MAE issue subjects are marked on their pages).
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261121_RRWaveNet_Block_Waveforms_10s_v3); {set} = StemB4 or AllBlocks,
@@ -407,11 +410,22 @@ def group_average(subjects: List[dict]) -> Tuple[Dict[str, Tuple[np.ndarray, np.
     return average, values, int(sum(s["n_breaths"] for s in with_cycles))
 
 
+def minmax_average(mean: np.ndarray, ci: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """An average cycle min-max normalized to [-1, 1]; its band scaled with it."""
+    low = float(np.min(mean))
+    span = float(np.max(mean)) - low
+    if span <= CONSTANT_RANGE:
+        return np.full_like(mean, np.nan), np.full_like(ci, np.nan)
+    return 2.0 * (mean - low) / span - 1.0, 2.0 * ci / span
+
+
 def draw_cycle(ax, average: Dict[str, Tuple[np.ndarray, np.ndarray]], stages: Sequence[str], band: bool = True) -> None:
+    """Average cycles of the GT and the stages, each min-max normalized to [-1, 1] (Stem, B1-B4 and GT each on its
+    own)."""
     phase = np.linspace(0, 100, CYCLE_POINTS)
     style(ax)
     for key in tuple(stages) + ("GT",):
-        mean, ci = average[key]
+        mean, ci = minmax_average(*average[key])
         if band:
             ax.fill_between(phase, mean - ci, mean + ci, color=COLORS[key], alpha=0.14, lw=0, zorder=2)
         ax.plot(phase, mean, color=COLORS[key], lw=WIDTHS[key] + 0.4, zorder=5 if key == "GT" else 3)
@@ -434,9 +448,10 @@ def cycle_figure(base: Path, group: str, subjects: List[dict], stages: Sequence[
     fig = plt.figure(figsize=(11.0, height))
     title = (f"{group}: breath-cycle average of the ground truth and {SET_TITLES[set_name]} "
              f"({n} subjects, {breaths} breaths)")
-    subtitle = ("Breaths of the GT (trough to trough) in every 10 s window, each 0-100%; curves min-max [-1, 1] in the "
-                "window; mean of the subject averages, band = 95% CI over the subjects.\nStage curve = its 24 channels "
-                "(min-max, fixed sign per subject), averaged. mean |r| = 1/24 sum |r_c|; r = Pearson r of the stage curve "
+    subtitle = ("Breaths of the GT (trough to trough) in every 10 s window, each 0-100%; mean of the subject averages, "
+                "each curve (GT, every stage) min-max [-1, 1] on its own, band = 95% CI over the subjects.\nStage "
+                "curve = its 24 channels (min-max, fixed sign per subject), averaged. mean |r| = 1/24 sum |r_c|; "
+                "r = Pearson r of the stage curve "
                 "with the GT; beside the curves: mean ± SD over the subjects")
     page_header(fig, height, title, subtitle, stages, names)
     y = height - head_in
@@ -487,9 +502,10 @@ def subject_cycle_pdf(path: Path, dataset: str, subjects: List[dict], stages: Se
             fig = plt.figure(figsize=(12.5, height))
             page_header(fig, height, f"{dataset}: breath-cycle average of every subject, {SET_TITLES[set_name]} · "
                         f"page {page + 1}/{pages}",
-                        "Breaths of the GT (trough to trough) in every 10 s window, each 0-100%; curves min-max [-1, 1] "
-                        "in the window; band = 95% CI over the breaths of the subject\nmean |r| and r: mean over the "
-                        "subject's windows (mean |r| = 1/24 sum |r_c|; r = Pearson r of the stage curve with the GT)",
+                        "Breaths of the GT (trough to trough) in every 10 s window, each 0-100%; average of the subject, "
+                        "each curve (GT, every stage) min-max [-1, 1] on its own, band = 95% CI over the breaths\n"
+                        "mean |r| and r: mean over the subject's windows (mean |r| = 1/24 sum |r_c|; r = Pearson r of "
+                        "the stage curve with the GT)",
                         stages, names)
             width = 0.88 / cols
             for j, subject in enumerate(chunk):
@@ -723,7 +739,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         ("Models", "final results: CapnoBase 261007 full; BIDMC / STEAM2 261013, weight decay selected in the fold; "
                    f"member m{args.member} of every fold, run on the test windows of its held-out subject"),
         ("Stages", "Stem = stem fusion output (encoder input); B1-B4 = residual encoder block outputs (d = 1, 2, 4, 8)"),
-        ("Normalization", "min-max to [-1, 1] in the window: every channel, every stage curve and the GT"),
+        ("Normalization", "min-max to [-1, 1]: every channel and every drawn curve on its own (GT, Stem, B1, B2, B3, B4) "
+                          "in every window; breath-cycle figures: every average cycle again on its own after averaging "
+                          "(band scaled with it)"),
         ("mean |r|", "1/24 sum |r_c|, r_c = Pearson r of channel c with the GT in the window (the channel-averaged "
                      "absolute PCC; Pearson r does not depend on the normalization)"),
         ("Stage curve", "its 24 channels (min-max) times a fixed sign per subject and channel (sign of r_c summed over "
