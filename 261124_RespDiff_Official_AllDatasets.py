@@ -1116,7 +1116,9 @@ def train_fold(
     if args.resume and final_path.exists() and read_json(key_path) == key:
         model.load_state_dict(torch.load(final_path, map_location=device))
         print(f"    trained model reused ({final_path.name})", flush=True)
-        return model, 0.0, float("nan")
+        loss_path = log_dir / f"{subject}_loss.csv"
+        seconds = float(pd.read_csv(loss_path)["Seconds"].sum()) if loss_path.exists() else float("nan")
+        return model, seconds, float("nan")
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     milestones = [int(fraction * args.epochs) for fraction in LR_MILESTONE_FRACTIONS]
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=LR_GAMMA)
