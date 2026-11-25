@@ -19,6 +19,7 @@ Value of a subject and stage (as channel_abs_r of 261011)
   2. r_c = Pearson r of channel c with the target respiratory waveform of the window (min-max to [-1, 1], as trained)
   3. |r_c| averaged over the windows of the subject, then over the 24 channels: (1/24) sum_c |r_c|
   4. computed per model, then the mean over the members (m0-m2) of the subject
+  No PCA: the PCC is computed on each of the 24 channels directly, and only the |PCC| values are averaged.
 
 Groups
   CapnoBase, BIDMC, STEAM2   the subjects of the dataset
