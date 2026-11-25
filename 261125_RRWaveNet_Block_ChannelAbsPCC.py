@@ -27,8 +27,9 @@ Groups
                              datasets of 261011). The mean of the three dataset means is in the table as well.
 
 Figure (one per group, the same y axis in every figure): the mean over the subjects at Stem, B1, B2, B3, B4 (line,
-open circles, the value above each point) with its 95% confidence interval (1.96 x SE over the subjects, band).
-Table per group and stage: n, mean, SD, 95% CI, median, Q1, Q3, min, max; from B1 on the change from Stem (mean over
+open circles, the value above each point): the trend only, no range drawn.
+Table per group and stage: n, mean, SD, 95% CI (1.96 x SE over the subjects), median, Q1, Q3, min, max; from B1 on the
+change from Stem (mean over
 the subjects), the subjects higher than at Stem and the Wilcoxon signed-rank p vs Stem (two-sided, over the subjects).
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261125_RRWaveNet_Block_ChannelAbsPCC)
@@ -332,21 +333,15 @@ def summary_table(groups: List[Tuple[str, pd.DataFrame]]) -> pd.DataFrame:
 def y_top(summary: pd.DataFrame, given: Optional[float]) -> float:
     if given:
         return float(given)
-    part = summary[summary.Group != DATASET_MEANS]
-    high = np.nanmax(np.r_[part["Mean"].to_numpy(float),
-                           part["CI95_High"].to_numpy(float) if "CI95_High" in part else np.array([])])
+    high = np.nanmax(summary.loc[summary.Group != DATASET_MEANS, "Mean"].to_numpy(float))
     return float(min(1.0, np.ceil((high + 0.05) * 10.0) / 10.0)) if np.isfinite(high) else 1.0
 
 
 def block_figure(base: Path, group: str, frame: pd.DataFrame, summary: pd.DataFrame, top: float) -> None:
     part = summary[summary.Group == group].set_index("Stage").reindex(list(STAGES))
     mean = part["Mean"].to_numpy(float)
-    low = part["CI95_Low"].to_numpy(float) if "CI95_Low" in part else np.full(len(STAGES), np.nan)
-    high = part["CI95_High"].to_numpy(float) if "CI95_High" in part else np.full(len(STAGES), np.nan)
     x = np.arange(len(STAGES))
     fig, ax = plt.subplots(figsize=(5.6, 4.3))
-    if np.isfinite(low).all() and np.isfinite(high).all():
-        ax.fill_between(x, low, high, color=LINE, alpha=0.15, lw=0, zorder=2)
     ax.plot(x, mean, "-", color=LINE, lw=2.2, zorder=3)
     ax.plot(x, mean, "o", ms=9, mfc="white", mec=LINE, mew=2.2, zorder=4)
     for xi, m in zip(x, mean):
@@ -367,7 +362,7 @@ def block_figure(base: Path, group: str, frame: pd.DataFrame, summary: pd.DataFr
     if group == ALL:
         counts = frame.groupby("Dataset", sort=False).size()
         subtitle += " (" + ", ".join(f"{d} {int(counts[d])}" for d in DATASETS if d in counts.index) + ")"
-    subtitle += "; mean over subjects, band 95% CI"
+    subtitle += "; mean over subjects"
     ax.set_title(f"{group}\n", fontsize=12, fontweight="bold", color=INK, loc="center")
     ax.text(0.5, 1.02, subtitle, transform=ax.transAxes, ha="center", va="bottom", fontsize=8.5, color=MUTED)
     fig.tight_layout()
@@ -441,7 +436,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                   "261011); per model, then the mean over the members of the subject"),
         ("All datasets", "every subject of the three datasets once (mean over all subjects, as 261011); "
                          f"'{DATASET_MEANS}' = the mean of the dataset means"),
-        ("95% CI", "mean ± 1.96 x SD / sqrt(n) over the subjects (band of the figures)"),
+        ("95% CI", "mean ± 1.96 x SD / sqrt(n) over the subjects (table only; the figures show the mean)"),
         ("vs Stem", "change = mean over the subjects of (stage - Stem); subjects higher than at Stem; Wilcoxon "
                     "signed-rank test, two-sided, over the subjects"),
         ("Figures", f"<Group>_{FIGURE_NAME}.png / .pdf, the same y axis (0 to {top:g}) in every figure"),
