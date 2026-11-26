@@ -38,8 +38,8 @@ What is new
   there); AE and r of every model complete in the window (AE needs >= 3 GT breaths); the reason in
   Not_Scored_Because.
   Figure (one per window): the GT and the three models overlapped on one axis, the same seconds of the recording;
-  every waveform min-max scaled in the window; GT black, RRWaveNet red, Deep Corr-Encoder blue, RespDiff green - the
-  colours of 261108 a little darker (#f64636 -> #dc2a1c, #2d93e1 -> #1a73c4, #24a085 -> #11895a), the line widths of
+  every waveform min-max scaled in the window; GT black, RRWaveNet red (the red of 261108 a little darker, #f64636 ->
+  #dc2a1c), Deep Corr-Encoder blue and RespDiff green (the colours of 261108, #2d93e1 and #24a085), the line widths of
   261108 (GT 1.5, models 1.7); the models drawn over the GT (RRWaveNet on top). Beside the axis: the legend (GT with
   its rate) and a table of every model's AE and r in the window and its subject mean (MAE, PCC).
 
@@ -116,14 +116,14 @@ GT_BAND_HZ = (0.1, 0.5)  # GT band-pass for the figures and r (RespDiff v3's ban
 GT_BAND_ORDER = 3
 OUTPUT_FOLDER = "v3_overlap"  # the results: PROJECT_ROOT\v3_overlap
 
-# Figures: the GT black; the models in the hues of 261108 (RRWaveNet red, Deep Corr-Encoder blue, RespDiff green), a
-# little darker than there (#f64636, #2d93e1, #24a085); the three pass the categorical palette checks (lightness band,
-# chroma, colour-blind and normal-vision separation, contrast >= 3:1 on white); all solid lines, the widths of
-# 261108 (GT 1.5, models 1.7) as there
+# Figures: the GT black; RRWaveNet the red of 261108 a little darker (#f64636 -> #dc2a1c), Deep Corr-Encoder and
+# RespDiff the blue and green of 261108 (#2d93e1, #24a085), lighter than the red; the three pass the categorical
+# palette checks (lightness band, chroma, colour-blind and normal-vision separation, contrast >= 3:1 on white); all
+# solid lines, the widths of 261108 (GT 1.5, models 1.7) as there
 GT_LINE = "#000000"
 FIG_MODELS = ("RRWaveNet", "Deep corr-encoder", "RespDiff")
 FIG_NAME = {"RRWaveNet": "RRWaveNet", "Deep corr-encoder": "Deep Corr-Encoder", "RespDiff": "RespDiff"}
-FIG_COLOR = {"RRWaveNet": "#dc2a1c", "Deep corr-encoder": "#1a73c4", "RespDiff": "#11895a"}
+FIG_COLOR = {"RRWaveNet": "#dc2a1c", "Deep corr-encoder": "#2d93e1", "RespDiff": "#24a085"}
 GT_WIDTH, MODEL_WIDTH = 1.5, 1.7
 SIZES = (30,)  # 30 s windows covering every second (--sizes)
 DRAW_ORDER = ("RespDiff", "Deep corr-encoder", "RRWaveNet")  # drawn over the GT in this order (RRWaveNet on top)
@@ -1556,10 +1556,10 @@ def draw_window(folder: Path, pdf, dataset: str, run: str, row: dict, values: Di
         sub.append(f"not scored: {row['Not_Scored_Because']}")
     subheader = "; ".join(sub)
     notes_text = ("GT and every model on one axis, the same seconds of the recording (no model shifted in time; a model "
-                  f"inverted when r < 0 over the recording); GT black, band-passed {band}\n"
-                  "each waveform min-max scaled in the window; RRWaveNet low-pass 1 Hz; no line = no stored output "
-                  "there\nAE = |FFT rate - GT rate| (breaths/min); r = Pearson r with the band-passed GT; subject mean "
-                  "over the scored non-overlapping windows")
+                  f"inverted when r < 0 over the recording)\nGT black, band-passed {band}; each waveform min-max scaled "
+                  "in the window; RRWaveNet low-pass 1 Hz; no line = no stored output there\nAE = |FFT rate - GT rate| "
+                  "(breaths/min); r = Pearson r with the band-passed GT; subject mean over the scored non-overlapping "
+                  "windows")
     stem = f"{k:0{digits}d}_{safe_name(row['Subject'] if single else row['Recording'])}_{t0:.0f}-{t1:.0f}s"
     path = folder / f"{stem}.png"
     overlap_page(path, pdf, header, subheader, notes_text, t, size, gt_line, model_lines,
@@ -1596,8 +1596,9 @@ def notes(args: argparse.Namespace) -> pd.DataFrame:
         ("Coverage_Pct", "share of the window in which a model has an output (%)"),
         ("Left out", "; ".join(f"{d} {', '.join(s)}" for d, s in args.excluded.items() if s)),
         ("Figures", "one per window: the GT and the three models on one axis (the same seconds, no model shifted; the "
-                    "models over the GT, RRWaveNet on top); GT black, RRWaveNet #dc2a1c, Deep Corr-Encoder #1a73c4, "
-                    "RespDiff #11895a (the 261108 colours a little darker); lines GT 1.5, models 1.7 (as 261108); "
+                    "models over the GT, RRWaveNet on top); GT black, RRWaveNet #dc2a1c (the 261108 red a little darker), "
+                    "Deep Corr-Encoder #2d93e1, RespDiff #24a085 (the 261108 blue and green); lines GT 1.5, "
+                    "models 1.7 (as 261108); "
                     "every waveform min-max scaled in the window; beside it the legend and the AE / r table"),
     ], columns=["Item", "Description"])
 
