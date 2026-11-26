@@ -22,19 +22,27 @@ ChannelAbsPCC)
   4. computed per model, then the mean over the members (m0-m2) of the subject
   No PCA: the PCC is computed on each of the 24 channels directly, and only the |PCC| values are averaged.
 
+Subject sets (each computed and drawn on its own)
+  All subjects                  every subject with stored models (as 261011, whose block figures did not leave out
+                                the MAE issue subjects)
+  MAE issue subjects left out   without the MAE issue subjects of the final results: CapnoBase 0115, BIDMC 27,
+                                STEAM2 12_YJJ, 22_LMS, 26_CKK
+
 Change from Stem (%) of a group (a dataset; All datasets = every subject of the three datasets once)
   100 x (mean PCC of the stage - mean PCC of Stem) / mean PCC of Stem, the means over the subjects of the group: the
   curve of the mean PCC on a scale relative to Stem (Stem = 0%).
 
-Figures: x axis Stem, B1, B2, B3, B4; y axis the change from Stem (%), Stem = 0% (dashed line); the change written at
-every point; the same y axis in every panel and figure.
+Figures: x axis Stem, B1, B2, B3, B4; y axis the change from Stem (%), Stem = 0% (dashed line), fitted to the values of
+every panel on its own, so the change of every dataset fills its panel (compare the datasets by the written values,
+not by the heights); the change written at every point.
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261126_RRWaveNet_Block_ChannelAbsPCC_PercentChange)
-  Datasets_block_channel_abs_pcc_change.png / .pdf       STEAM2, BIDMC, CapnoBase side by side
-  All_datasets_block_channel_abs_pcc_change.png / .pdf   all datasets together
+  All_subjects\ and Issue_subjects_left_out\
+    Datasets_block_channel_abs_pcc_change.png / .pdf       STEAM2, BIDMC, CapnoBase side by side
+    All_datasets_block_channel_abs_pcc_change.png / .pdf   all datasets together
   261126_RRWaveNet_Block_ChannelAbsPCC_PercentChange.xlsx
-    Summary   per group and stage: subjects, mean PCC, SD, change from Stem (%)
-    Subjects  every subject: PCC of every stage (mean over the members), members, windows
+    Summary   per subject set, group and stage: subjects, mean PCC, SD, change from Stem (%)
+    Subjects  every subject: MAE issue subject or not, PCC of every stage (mean over the members), members, windows
     Members   every subject and member: PCC of every stage
     Missing   folds without a stored model of a member (or without a weight decay selection)
     Notes
@@ -84,6 +92,9 @@ STAGES = ("Stem", "B1", "B2", "B3", "B4")
 MEMBERS = (0, 1, 2)
 VALUE = "Channel_AbsPCC"
 FIGURE_NAME = "block_channel_abs_pcc_change"
+# MAE issue subjects of the final results
+ISSUE_SUBJECTS = {"STEAM2": ("22_LMS", "26_CKK", "12_YJJ"), "BIDMC": ("27",), "CapnoBase": ("0115",)}
+SUBJECT_SETS = {"All subjects": "All_subjects", "MAE issue subjects left out": "Issue_subjects_left_out"}
 
 COLOR = "#1f77b4"
 INK, MUTED, GRID = "#1f1f1f", "#6b6a66", "#e6e6e6"
@@ -223,6 +234,7 @@ def process_dataset(args, dataset: str, chosen: Dict[str, List[str]], device, st
             store["missing"].append({"Dataset": dataset, "Subject": subject, "Member": "", "Missing": reason})
             print(f"  {subject}: {reason}", flush=True)
             continue
+        issue = any(same_subject(subject, x) for x in ISSUE_SUBJECTS[dataset])
         loader = mod.make_eval_loader(mod.SubjectWindowDataset(data, [subject], "test", False), args.batch_size,
                                       device)
         values, used, windows = [], [], 0
@@ -239,19 +251,19 @@ def process_dataset(args, dataset: str, chosen: Dict[str, List[str]], device, st
                      for stage, features in zip(STAGES, stages)}
             values.append(value)
             used.append(f"m{member}")
-            store["members"].append({"Dataset": dataset, "Subject": subject, "Model": variant,
-                                     "Member": f"m{member}", "Windows": windows,
+            store["members"].append({"Dataset": dataset, "Subject": subject, "Issue_Subject": issue,
+                                     "Model": variant, "Member": f"m{member}", "Windows": windows,
                                      **{f"{s}_{VALUE}": value[s] for s in STAGES}})
             del stages, target
         del loader
         if not used:
             continue
         mean = {s: float(np.mean([v[s] for v in values])) for s in STAGES}
-        store["subjects"].append({"Dataset": dataset, "Subject": subject, "Model": variant,
+        store["subjects"].append({"Dataset": dataset, "Subject": subject, "Issue_Subject": issue, "Model": variant,
                                   "Members": " ".join(used), "Windows": windows,
                                   **{f"{s}_{VALUE}": mean[s] for s in STAGES}})
-        print(f"  {subject} ({variant}, {' '.join(used)}): {windows} windows; channel-averaged |PCC| "
-              + ", ".join(f"{s} {mean[s]:.3f}" for s in STAGES), flush=True)
+        print(f"  {subject} ({variant}, {' '.join(used)}{', MAE issue subject' if issue else ''}): {windows} windows; "
+              "channel-averaged |PCC| " + ", ".join(f"{s} {mean[s]:.3f}" for s in STAGES), flush=True)
     del data, model
     mod.release_memory(device)
 
@@ -268,7 +280,7 @@ def groups_of(subjects: pd.DataFrame, datasets: Sequence[str]) -> List[Tuple[str
     return groups
 
 
-def summary_table(groups: List[Tuple[str, pd.DataFrame]]) -> pd.DataFrame:
+def summary_table(subject_set: str, groups: List[Tuple[str, pd.DataFrame]]) -> pd.DataFrame:
     """Mean PCC of every stage over the subjects of a group and its change from the mean PCC of Stem (%)."""
     rows = []
     for group, frame in groups:
@@ -276,7 +288,8 @@ def summary_table(groups: List[Tuple[str, pd.DataFrame]]) -> pd.DataFrame:
         for stage in STAGES:
             values = frame[f"{stage}_{VALUE}"].astype(float).dropna()
             mean = float(values.mean())
-            rows.append({"Group": group, "Stage": stage, "N_Subjects": int(values.size), "Mean_PCC": mean,
+            rows.append({"Subject_Set": subject_set, "Group": group, "Stage": stage, "N_Subjects": int(values.size),
+                         "Mean_PCC": mean,
                          "SD_PCC": float(values.std(ddof=1)) if values.size > 1 else float("nan"),
                          "Change_from_Stem_Pct": 100.0 * (mean - stem) / stem if stem > 0 else float("nan")})
     return pd.DataFrame(rows)
@@ -293,23 +306,25 @@ def change_text(percent: float, decimals: int) -> str:
     return text + "%"
 
 
-def y_limits(summary: pd.DataFrame) -> Tuple[float, float]:
-    change = summary["Change_from_Stem_Pct"].to_numpy(float)
+def y_limits(change: np.ndarray) -> Tuple[float, float]:
+    """y axis of one panel: its own values and 0 (Stem), with room for the written values."""
     change = change[np.isfinite(change)]
     low, high = min(0.0, float(change.min())), max(0.0, float(change.max()))
-    span = max(high - low, 10.0)
-    return low - (0.18 if low < 0 else 0.08) * span, high + 0.18 * span
+    span = max(high - low, 2.0)
+    return low - 0.16 * span, high + 0.16 * span
 
 
-def draw_panel(ax, summary: pd.DataFrame, group: str, frame: pd.DataFrame, limits: Tuple[float, float],
-               decimals: int, ylabel: bool) -> None:
+def draw_panel(ax, summary: pd.DataFrame, group: str, frame: pd.DataFrame, decimals: int, ylabel: bool) -> None:
     part = summary[summary.Group == group].set_index("Stage").reindex(list(STAGES))
     change = part["Change_from_Stem_Pct"].to_numpy(float)
+    limits = y_limits(change)
     x = np.arange(len(STAGES))
     ax.axhline(0.0, color=MUTED, lw=1.0, ls="--", zorder=1)
     ax.plot(x, change, "o-", color=COLOR, lw=1.8, ms=7, zorder=3)
     for xi, pct in zip(x, change):
-        below = pct < 0  # a decrease: the value under the point
+        # the value on the side away from the line: under a point lower than its neighbours, else above
+        neighbours = [change[j] for j in (xi - 1, xi + 1) if 0 <= j < len(change) and np.isfinite(change[j])]
+        below = bool(neighbours) and pct < float(np.mean(neighbours))
         ax.annotate(change_text(pct, decimals), (xi, pct), textcoords="offset points", xytext=(0, -9 if below else 8),
                     ha="center", va="top" if below else "bottom", fontsize=10.5, color=COLOR, fontweight="bold",
                     zorder=5,
@@ -340,24 +355,33 @@ def save(fig, base: Path) -> None:
     plt.close(fig)
 
 
-def draw_figures(out_root: Path, groups: List[Tuple[str, pd.DataFrame]], summary: pd.DataFrame,
+def set_note(subject_set: str, datasets: Sequence[str]) -> str:
+    if subject_set == "All subjects":
+        return "Subjects: all (MAE issue subjects included)"
+    left = "; ".join(f"{d} {', '.join(ISSUE_SUBJECTS[d])}" for d in PANEL_ORDER if d in datasets)
+    return f"Subjects: MAE issue subjects left out ({left})"
+
+
+def draw_figures(out_root: Path, subject_set: str, groups: List[Tuple[str, pd.DataFrame]], summary: pd.DataFrame,
                  decimals: int) -> None:
-    limits = y_limits(summary)
-    note = "Change from Stem (%) = (mean |PCC| of the stage - mean |PCC| of Stem) / mean |PCC| of Stem x 100"
+    out_root.mkdir(parents=True, exist_ok=True)
+    formula = "Change from Stem (%) = (mean |PCC| of the stage - mean |PCC| of Stem) / mean |PCC| of Stem x 100"
     frames = dict(groups)
     panels = [d for d in PANEL_ORDER if d in frames]
+    note = set_note(subject_set, panels)
     if panels:
-        fig, axes = plt.subplots(1, len(panels), figsize=(5.4 * len(panels), 4.7), squeeze=False)
+        fig, axes = plt.subplots(1, len(panels), figsize=(5.4 * len(panels), 4.9), squeeze=False)
         for index, (ax, dataset) in enumerate(zip(axes[0], panels)):
-            draw_panel(ax, summary, dataset, frames[dataset], limits, decimals, ylabel=index == 0)
-        fig.text(0.5, 0.01, note, ha="center", va="bottom", fontsize=9.5, color=MUTED)
-        fig.tight_layout(rect=(0, 0.05, 1, 1))
+            draw_panel(ax, summary, dataset, frames[dataset], decimals, ylabel=index == 0)
+        fig.text(0.5, 0.01, f"{formula}\n{note}", ha="center", va="bottom", fontsize=9.5, color=MUTED)
+        fig.tight_layout(rect=(0, 0.08, 1, 1))
         save(fig, out_root / f"Datasets_{FIGURE_NAME}")
     if ALL in frames:
-        fig, ax = plt.subplots(figsize=(6.0, 4.9))
-        draw_panel(ax, summary, ALL, frames[ALL], limits, decimals, ylabel=True)
-        fig.text(0.5, 0.01, note.replace(" = ", " =\n", 1), ha="center", va="bottom", fontsize=8.5, color=MUTED)
-        fig.tight_layout(rect=(0, 0.08, 1, 1))
+        fig, ax = plt.subplots(figsize=(6.0, 5.2))
+        draw_panel(ax, summary, ALL, frames[ALL], decimals, ylabel=True)
+        fig.text(0.5, 0.01, formula.replace(" = ", " =\n", 1) + "\n" + note.replace(" (", "\n(", 1), ha="center",
+                 va="bottom", fontsize=8.5, color=MUTED)
+        fig.tight_layout(rect=(0, 0.15, 1, 1))
         save(fig, out_root / f"All_datasets_{FIGURE_NAME}")
 
 
@@ -400,16 +424,27 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     subjects = pd.DataFrame(store["subjects"])
     if subjects.empty:
         raise SystemExit("No stored model found: nothing to draw.")
-    groups = groups_of(subjects, datasets)
-    summary = summary_table(groups)
-    draw_figures(out_root, groups, summary, args.decimals)
-
-    print("\nChannel-averaged |PCC| (mean over the subjects) and its change from Stem")
-    for group, _ in groups:
-        part = summary[summary.Group == group]
-        print(f"  {group:<13} n {int(part.N_Subjects.iloc[0]):3d}: "
-              + ", ".join(f"{r.Stage} {r.Mean_PCC:.3f} ({change_text(r.Change_from_Stem_Pct, 1)})"
-                          for r in part.itertuples(index=False)))
+    issue = subjects.Issue_Subject.astype(bool)
+    print("\nMAE issue subjects: "
+          + "; ".join(f"{d} {', '.join(ISSUE_SUBJECTS[d])}" for d in PANEL_ORDER if d in datasets)
+          + f". In the data with stored models: {', '.join(subjects.Dataset[issue] + ' ' + subjects.Subject[issue].astype(str)) or 'none'}"
+          + " - included in 'All subjects', left out in 'MAE issue subjects left out'")
+    summaries = []
+    for subject_set, folder in SUBJECT_SETS.items():
+        frame = subjects if subject_set == "All subjects" else subjects[~issue]
+        if frame.empty:
+            continue
+        groups = groups_of(frame, datasets)
+        summary = summary_table(subject_set, groups)
+        draw_figures(out_root / folder, subject_set, groups, summary, args.decimals)
+        summaries.append(summary)
+        print(f"\nChannel-averaged |PCC| (mean over the subjects) and its change from Stem: {subject_set}")
+        for group, _ in groups:
+            part = summary[summary.Group == group]
+            print(f"  {group:<13} n {int(part.N_Subjects.iloc[0]):3d}: "
+                  + ", ".join(f"{r.Stage} {r.Mean_PCC:.3f} ({change_text(r.Change_from_Stem_Pct, 1)})"
+                              for r in part.itertuples(index=False)))
+    summary = pd.concat(summaries, ignore_index=True)
 
     notes = pd.DataFrame([
         ("Models", "final results: CapnoBase 261007 full; BIDMC / STEAM2 261013, weight decay selected in the fold; "
@@ -419,11 +454,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         ("PCC", "Pearson r of every channel with the target (min-max [-1, 1]) in every window; |r| averaged over the "
                 "windows, then over the 24 channels: (1/24) sum |r_c| (channel_abs_r / Channel_AbsR_Mean of 261011); "
                 "per model, then the mean over the members of the subject; no PCA"),
+        ("Subject sets", "All subjects (as 261011: the MAE issue subjects included); MAE issue subjects left out "
+                         "(CapnoBase 0115, BIDMC 27, STEAM2 12_YJJ, 22_LMS, 26_CKK); Subjects: Issue_Subject"),
         ("Groups", "every dataset; All datasets = every subject of the three datasets once"),
         ("Change from Stem", "100 x (mean PCC of the stage - mean PCC of Stem) / mean PCC of Stem, means over the "
                              "subjects of the group; Stem = 0%"),
-        ("Figures", f"Datasets_{FIGURE_NAME} (STEAM2, BIDMC, CapnoBase) and All_datasets_{FIGURE_NAME}, .png / .pdf; "
-                    "y axis: change from Stem (%), the same in every panel"),
+        ("Figures", f"<subject set folder>\\Datasets_{FIGURE_NAME} (STEAM2, BIDMC, CapnoBase) and "
+                    f"All_datasets_{FIGURE_NAME}, .png / .pdf; y axis: change from Stem (%), fitted to every panel on "
+                    "its own"),
     ], columns=["Item", "Description"])
     path = out_root / f"{NAME}.xlsx"
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
