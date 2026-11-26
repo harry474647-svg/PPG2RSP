@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 r"""261108_Wavefom_Comparison_v3_overlap: the respiratory waveforms of RRWaveNet, the deep corr-encoder (paper version)
 and RespDiff against the ground truth (GT) as in 261108_Wavefom_Comparison, but all three models and the GT on ONE
-axis (one figure per window), for EVERY non-overlapping window of every subject (the subjects that had an MAE issue
-left out). Nothing is trained: the stored outputs are read.
+axis (one figure per window), in 30 s windows covering every second of every subject (the subjects that had an MAE
+issue left out). Nothing is trained: the stored outputs are read.
 
 What is the same as 261108_Wavefom_Comparison (its code, unchanged)
   Models (stored outputs)
@@ -25,28 +25,33 @@ What is the same as 261108_Wavefom_Comparison (its code, unchanged)
   Subjects left out (MAE issue): STEAM2 22_LMS, 26_CKK, 12_YJJ; BIDMC 27; CapnoBase 0115 (--exclude-*).
 
 What is new
-  Windows: EVERY non-overlapping window of every recording (0-30, 30-60, ... s; 0-60, 60-120, ... s; --sizes 30 60),
-  not one chosen window per subject. A window is drawn when at least one model has an output in it; a window in which
-  no model has an output (only the GT) is listed in Skipped_Windows.
-    Scored     every model of the recording complete in the window and >= 3 GT breaths: the measures of 261108
-               (these windows make the subject means, as the "subject mean over non-overlapping windows" of 261108)
-    not scored a gap in a model (e.g. a RespDiff window v3 left out) or < 3 GT breaths: drawn as it is (a gap = no
-               line there); AE and r of every model complete in the window (AE needs >= 3 GT breaths); the reason in
-               Not_Scored_Because
+  Windows: 30 s windows covering EVERY second of every recording with a model output (--sizes for other lengths),
+  not one chosen window per subject; every window is drawn, also one without a model output in it (the GT alone).
+    grid   0-30, 30-60, ... s, one after the other
+    end    when the recording does not end on a window border: one more 30 s window ending at the end of the
+           recording (it overlaps the window before, so that the last seconds are drawn too)
+    whole  a recording shorter than 30 s: one window over all of it (the x axis still 30 s long)
+  Scored: RRWaveNet and another model in the recording, every model complete in the window and >= 3 GT breaths -
+  the measures of 261108; the scored grid windows make the subject means (as the "subject mean over non-overlapping
+  windows" of 261108; end and whole windows are not in them). Not scored: a gap in a model (e.g. a RespDiff window
+  v3 left out), < 3 GT breaths, or a recording without RRWaveNet / another model: drawn as it is (a gap = no line
+  there); AE and r of every model complete in the window (AE needs >= 3 GT breaths); the reason in
+  Not_Scored_Because.
   Figure (one per window): the GT and the three models overlapped on one axis, the same seconds of the recording;
   every waveform min-max scaled in the window; GT black, RRWaveNet red, Deep Corr-Encoder blue, RespDiff green - the
-  colours of 261108 a little darker (#f64636 -> #dc2a1c, #2d93e1 -> #1a73c4, #24a085 -> #11895a) and every line 1.2 x
-  as thick (GT 1.5 -> 1.8, models 1.7 -> 2.04); the models drawn over the GT (RRWaveNet on top). Beside the axis: the
-  legend (GT with its rate) and a table of every model's AE and r in the window and its subject mean (MAE, PCC).
+  colours of 261108 a little darker (#f64636 -> #dc2a1c, #2d93e1 -> #1a73c4, #24a085 -> #11895a), the line widths of
+  261108 (GT 1.5, models 1.7); the models drawn over the GT (RRWaveNet on top). Beside the axis: the legend (GT with
+  its rate) and a table of every model's AE and r in the window and its subject mean (MAE, PCC).
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261108_Wavefom_Comparison\v3_overlap)
-  {Dataset}\{30s,60s}\{subject}\{nn}_{subject}_{t0}-{t1}s.png             every window in time order (nn = window number
-                                                                        of the subject; STEAM2 with several
-                                                                        recordings: {nn}_{recording}_{t0}-{t1}s.png)
-  {Dataset}\{30s,60s}\{subject}\{Dataset}_{subject}_{size}s_overlap.pdf  every window of the subject, one page each
+  {Dataset}\30s\{subject}\{nn}_{subject}_{t0}-{t1}s.png               every window in time order (nn = window number of
+                                                                     the subject; STEAM2 with several recordings:
+                                                                     {nn}_{recording}_{t0}-{t1}s.png)
+  {Dataset}\30s\{subject}\{Dataset}_{subject}_30s_overlap.pdf          every window of the subject, one page each
   261108_Waveform_v3_overlap.xlsx
-    Windows            every drawn window: scored or not (why), GT rate, AE / r / rate of every model, Advantage, figure
-    Skipped_Windows    windows not drawn (no model output in them) and recordings without RRWaveNet or another model
+    Windows            every drawn window: kind (grid / end / whole), scored or not (why), GT rate, AE / r / rate of
+                       every model, coverage of every model, Advantage, figure
+    Skipped            recordings without any model output (and subjects without a data file): not drawn
     Subject_Summary    per subject and size: scored windows, mean MAE / PCC of every model
     RespDiff_Placement how the RespDiff windows of every subject were placed
     Notes
@@ -113,13 +118,14 @@ OUTPUT_FOLDER = "v3_overlap"  # the results: PROJECT_ROOT\v3_overlap
 
 # Figures: the GT black; the models in the hues of 261108 (RRWaveNet red, Deep Corr-Encoder blue, RespDiff green), a
 # little darker than there (#f64636, #2d93e1, #24a085); the three pass the categorical palette checks (lightness band,
-# chroma, colour-blind and normal-vision separation, contrast >= 3:1 on white); all solid lines, 1.2 x the widths of
-# 261108 (GT 1.5, models 1.7)
+# chroma, colour-blind and normal-vision separation, contrast >= 3:1 on white); all solid lines, the widths of
+# 261108 (GT 1.5, models 1.7) as there
 GT_LINE = "#000000"
 FIG_MODELS = ("RRWaveNet", "Deep corr-encoder", "RespDiff")
 FIG_NAME = {"RRWaveNet": "RRWaveNet", "Deep corr-encoder": "Deep Corr-Encoder", "RespDiff": "RespDiff"}
 FIG_COLOR = {"RRWaveNet": "#dc2a1c", "Deep corr-encoder": "#1a73c4", "RespDiff": "#11895a"}
-GT_WIDTH, MODEL_WIDTH = 1.5 * 1.2, 1.7 * 1.2
+GT_WIDTH, MODEL_WIDTH = 1.5, 1.7
+SIZES = (30,)  # 30 s windows covering every second (--sizes)
 DRAW_ORDER = ("RespDiff", "Deep corr-encoder", "RRWaveNet")  # drawn over the GT in this order (RRWaveNet on top)
 
 
@@ -1297,13 +1303,14 @@ def gt_bandpass(gt: np.ndarray) -> np.ndarray:
 
 
 def window_measures(values: Dict[str, np.ndarray], cycles: Dict[str, List[dict]], breaths: np.ndarray, t0: float,
-                    t1: float, band: Tuple[float, float]) -> dict:
-    """One non-overlapping window: the measures of 261108 (window_row) when it can be scored (every waveform complete,
-    >= 3 GT breaths); otherwise AE and r of every model complete in the window and why it is not scored. With the
-    share of the window every model covers."""
+                    t1: float, band: Tuple[float, float], note: str = "") -> dict:
+    """One window: the measures of 261108 (window_row) when it can be scored (RRWaveNet and another model in the
+    recording, every waveform complete, >= 3 GT breaths); otherwise AE and r of every model complete in the window
+    and why it is not scored (note: a reason of the whole recording). With the share of the window every model
+    covers."""
     a, b = int(round(t0 * FS30)), int(round(t1 * FS30))
     cover = {m: float(np.isfinite(values[m][a:b]).mean()) for m in MODELS if m in values}
-    row = window_row(values, cycles, breaths, t0, t1, band)
+    row = None if note else window_row(values, cycles, breaths, t0, t1, band)
     if row is not None:
         row = dict(row, Scored=True, Not_Scored_Because="")
     else:
@@ -1320,8 +1327,9 @@ def window_measures(values: Dict[str, np.ndarray], cycles: Dict[str, List[dict]]
             s = SHORT[model]
             row.update({f"{s}_Rate": rate, f"{s}_AE": abs(rate - gt_rr) if np.isfinite(gt_rr) else math.nan,
                         f"{s}_PCC": pearson(values["GT"][a:b], seg)})
-        reasons = [f"no {FIG_NAME[m]} output in the window" if share == 0 else
-                   f"{FIG_NAME[m]} covers {100 * share:.0f}% of the window" for m, share in cover.items() if share < 1.0]
+        reasons = ([note] if note else []) + [
+            f"no {FIG_NAME[m]} output in the window" if share == 0 else
+            f"{FIG_NAME[m]} covers {100 * share:.0f}% of the window" for m, share in cover.items() if share < 1.0]
         if len(br) < MIN_BREATHS:
             reasons.append(f"fewer than {MIN_BREATHS} GT breaths")
         row.update(Scored=False, Not_Scored_Because="; ".join(reasons) or "-")
@@ -1332,8 +1340,8 @@ def window_measures(values: Dict[str, np.ndarray], cycles: Dict[str, List[dict]]
 
 def dataset_windows(args: argparse.Namespace, dataset: str, run: str, root: Path
                     ) -> Tuple[List[dict], List[dict], Dict[Tuple[str, str], Dict[str, np.ndarray]], Dict[str, int]]:
-    """Every non-overlapping window of every recording of every subject with RRWaveNet and another model (readers,
-    alignment and cycles of 261108's dataset_windows): the drawn windows with their measures, the windows and
+    """30 s windows covering every second of every recording (with a model output) of every subject with RRWaveNet and
+    another model (readers, alignment and cycles of 261108's dataset_windows): the windows with their measures, the
     recordings not drawn, and the aligned waveforms of every recording."""
     key = DATASET_KEYS[dataset]
     band = RATE_BAND_BPM[key]
@@ -1377,10 +1385,14 @@ def dataset_windows(args: argparse.Namespace, dataset: str, run: str, root: Path
             if index in segments:
                 raw["RRWaveNet"] = rrwavenet_track(segments[index], alignment.get((subject, index)), key, gt,
                                                    args.rrwavenet_lowpass_hz)
-            if "RRWaveNet" not in raw or len(raw) < 2:
+            if not raw:
                 skipped.append({"Run": run, "Dataset": dataset, "Subject": subject, "Recording": name,
-                                "Reason": "no RRWaveNet output" if "RRWaveNet" not in raw else "no other model output"})
+                                "Reason": "no model output in the recording"})
                 continue
+            # 261108 scores a recording only with RRWaveNet and another model: the others are drawn, not scored
+            note = ("" if "RRWaveNet" in raw and len(raw) >= 2 else
+                    "no RRWaveNet output in the recording" if "RRWaveNet" not in raw else
+                    "no other model output in the recording")
             breaths = rec["breaths"]
             if breaths is None or len(breaths) < MIN_BREATHS:
                 breaths = np.array([c["start"] for c in recording_cycles({"GT": gt}, modality)["GT"]])
@@ -1394,25 +1406,33 @@ def dataset_windows(args: argparse.Namespace, dataset: str, run: str, root: Path
             store[(subject, name)] = values
             length = len(gt) / FS30
             for size in args.sizes:
-                for t0 in np.arange(0.0, length - size + 1e-9, size).round(3):
-                    t0 = float(t0)
-                    t1 = t0 + size
-                    a, b = int(round(t0 * FS30)), int(round(t1 * FS30))
-                    base = {"Run": run, "Dataset": dataset, "Subject": subject, "Recording": name, "Size_Sec": size}
-                    if not any(np.isfinite(values[m][a:b]).any() for m in MODELS if m in values):
-                        skipped.append({**base, "Start_Sec": t0, "End_Sec": t1,
-                                        "Reason": "no model output in the window"})
-                        continue
-                    rows.append({**base, "Models": ", ".join(SHORT[m] for m in MODELS if m in values),
-                                 **window_measures(values, cycles, breaths, t0, t1, band)})
+                for t0, t1, kind in cover_windows(length, size):
+                    rows.append({"Run": run, "Dataset": dataset, "Subject": subject, "Recording": name,
+                                 "Size_Sec": size, "Window_Kind": kind, "Grid": kind == "grid",
+                                 "Models": ", ".join(SHORT[m] for m in MODELS if m in values),
+                                 **window_measures(values, cycles, breaths, t0, t1, band, note)})
                     count += 1
         print(f"  {dataset} {subject}: {count} windows", flush=True)
     return rows, skipped, store, n_recordings
 
 
+def cover_windows(length: float, size: float) -> List[Tuple[float, float, str]]:
+    """Windows of `size` s covering every second of a recording of `length` s: one after the other from 0 s (grid);
+    when the recording does not end on a border, one more ending at its end (end; it overlaps the window before); a
+    recording shorter than a window: one window over all of it (whole)."""
+    if length < size:
+        return [(0.0, float(length), "whole")]
+    starts = np.arange(0.0, length - size + 1e-9, size).round(3)
+    out = [(float(t0), float(t0) + size, "grid") for t0 in starts]
+    if length - out[-1][1] > 1.0 / FS30:
+        out.append((float(length) - size, float(length), "end"))
+    return out
+
+
 def subject_means_v3(rows: List[dict], size: int) -> dict:
-    """Per model the mean AE (MAE) and r (PCC) over the subject's scored non-overlapping windows of a size."""
-    scored = [r for r in rows if r["Size_Sec"] == size and r["Scored"]]
+    """Per model the mean AE (MAE) and r (PCC) over the subject's scored non-overlapping windows of a size (the end
+    window and a short recording's window are drawn, not in the mean)."""
+    scored = [r for r in rows if r["Size_Sec"] == size and r["Scored"] and r["Grid"]]
     out = {"N_Windows": sum(r["Size_Sec"] == size for r in rows), "N_Scored_Windows": len(scored)}
     for model in MODELS:
         s = SHORT[model]
@@ -1439,27 +1459,24 @@ def window_table(row: dict, means: dict, size: int, present: Dict[str, str], nam
              f"{'':{width}}{'AE':>6}{'r':>8}   {'MAE':>6}{'PCC':>8}"]
     for m in FIG_MODELS:
         s = SHORT[m]
-        if present[m] == "none":
-            lines.append(f"{names[m]:<{width}}no output in this window   {number(means.get(f'{s}_MAE', math.nan)):>6}"
-                         f"{number(means.get(f'{s}_PCC', math.nan)):>8}" if f"{s}_MAE" in means else
-                         f"{names[m]:<{width}}no stored output")
+        if present[m] == "none" and f"{s}_MAE" not in means:
+            lines.append(f"{names[m]:<{width}}no stored output")
             continue
-        if present[m] == "gap":
-            here = f"{'gap':>6}{'':>8}"
+        if present[m] in ("none", "gap"):
+            here = f"{'no output' if present[m] == 'none' else 'gap':^14}"
         else:
             here = f"{number(row.get(f'{s}_AE', math.nan)):>6}{number(row.get(f'{s}_PCC', math.nan)):>8}"
         lines.append(f"{names[m]:<{width}}{here}   {number(means.get(f'{s}_MAE', math.nan)):>6}"
                      f"{number(means.get(f'{s}_PCC', math.nan)):>8}")
-    lines.append(f"Subject mean over {means['N_Scored_Windows']} scored windows of {size} s")
+    lines.append(f"Subject mean over {means['N_Scored_Windows']} scored non-overlapping windows of {size} s")
     return "\n".join(lines)
 
 
-def overlap_page(path: Path, pdf, header: str, notes_text: str, t: np.ndarray, gt_line: tuple,
-                 model_lines: Dict[str, tuple], table_text: str) -> None:
+def overlap_page(path: Path, pdf, header: str, subheader: str, notes_text: str, t: np.ndarray, size: float,
+                 gt_line: tuple, model_lines: Dict[str, tuple], table_text: str) -> None:
     """One figure: the GT and the models on one axis (the models drawn over the GT, RRWaveNet on top); beside the axis
     the legend and the table."""
-    side_in, left_in, top_in, bottom_in, panel_in = 3.9, 0.75, 1.35, 0.6, 2.9
-    size = t[-1] - t[0]
+    side_in, left_in, top_in, bottom_in, panel_in = 3.9, 0.75, 1.6, 0.6, 2.9
     width = 7.0 + 4.0 * size / 60.0 + 0.6
     height = top_in + bottom_in + panel_in
     fig = plt.figure(figsize=(width, height))
@@ -1478,7 +1495,7 @@ def overlap_page(path: Path, pdf, header: str, notes_text: str, t: np.ndarray, g
             _, c, lab, w = model_lines[m]
             handles.append(Line2D([], [], color=c, lw=w))
             labels.append(lab)
-    ax.set_xlim(t[0], t[-1])
+    ax.set_xlim(t[0], t[0] + size if len(t) < size * FS30 else t[-1])
     ax.set_ylim(-1.18, 1.18)
     ax.set_ylabel("Min-max scaled", fontsize=8)
     ax.set_xlabel("Time in the recording (s)")
@@ -1493,7 +1510,9 @@ def overlap_page(path: Path, pdf, header: str, notes_text: str, t: np.ndarray, g
     fig.text(x + 0.004, top - (0.3 + 0.2 * len(labels)) / height, table_text, family="monospace", fontsize=7.0,
              color=INK, va="top")
     fig.text(left_in / width, 1.0 - 0.22 / height, header, fontsize=10.5, color=INK, va="top")
-    fig.text(left_in / width, 1.0 - 0.50 / height, notes_text, fontsize=7.2, color=MUTED, va="top", linespacing=1.4)
+    if subheader:
+        fig.text(left_in / width, 1.0 - 0.50 / height, subheader, fontsize=8.5, color=INK, va="top")
+    fig.text(left_in / width, 1.0 - 0.76 / height, notes_text, fontsize=7.2, color=MUTED, va="top", linespacing=1.4)
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=200)
     pdf.savefig(fig)
@@ -1528,8 +1547,14 @@ def draw_window(folder: Path, pdf, dataset: str, run: str, row: dict, values: Di
     header = f"{dataset} {who} · {size} s window {t0:.0f}-{t1:.0f} s · window {k} of {n}"
     if row["Scored"] and np.isfinite(row.get("Advantage", math.nan)):
         header += f" · Advantage {row['Advantage']:.2f}"
-    elif not row["Scored"]:
-        header += f" · not scored: {row['Not_Scored_Because']}"
+    sub = []
+    if row["Window_Kind"] == "end":
+        sub.append(f"the last {size} s of the recording, overlapping the window before")
+    elif row["Window_Kind"] == "whole":
+        sub.append(f"the whole recording ({t1 - t0:.0f} s, shorter than {size} s)")
+    if not row["Scored"]:
+        sub.append(f"not scored: {row['Not_Scored_Because']}")
+    subheader = "; ".join(sub)
     notes_text = ("GT and every model on one axis, the same seconds of the recording (no model shifted in time; a model "
                   f"inverted when r < 0 over the recording); GT black, band-passed {band}\n"
                   "each waveform min-max scaled in the window; RRWaveNet low-pass 1 Hz; no line = no stored output "
@@ -1537,7 +1562,7 @@ def draw_window(folder: Path, pdf, dataset: str, run: str, row: dict, values: Di
                   "over the scored non-overlapping windows")
     stem = f"{k:0{digits}d}_{safe_name(row['Subject'] if single else row['Recording'])}_{t0:.0f}-{t1:.0f}s"
     path = folder / f"{stem}.png"
-    overlap_page(path, pdf, header, notes_text, t, gt_line, model_lines,
+    overlap_page(path, pdf, header, subheader, notes_text, t, size, gt_line, model_lines,
                  window_table(row, means, size, present, names))
     return path
 
@@ -1558,18 +1583,21 @@ def notes(args: argparse.Namespace) -> pd.DataFrame:
                "expert labels, BIDMC ann1, STEAM2 the cycles of the GT as recorded)"),
         ("Alignment", "no model shifted in time; a model inverted once per recording when its r with the band-passed "
                       "GT is negative; RRWaveNet training sign / lag undone, low-pass 1 Hz"),
-        ("Windows", f"every non-overlapping window of every recording ({', '.join(f'{s} s' for s in args.sizes)}, "
-                    "from 0 s); drawn when at least one model has an output in it (else Skipped_Windows)"),
-        ("Scored", f"every model of the recording complete in the window and >= {MIN_BREATHS} GT breaths: the measures "
-                   "of 261108; these windows make the subject means. Not scored: a gap in a model or fewer GT breaths "
-                   "(Not_Scored_Because); AE and r then for every model complete in the window"),
+        ("Windows", f"every second of every recording with a model output: windows of {', '.join(f'{s} s' for s in args.sizes)} "
+                    "from 0 s, one after the other (Window_Kind grid); when the recording does not end on a window "
+                    "border, one more window ending at its end (end, overlaps the window before); a recording shorter "
+                    "than a window in one window (whole); every window drawn, also without a model output in it"),
+        ("Scored", f"RRWaveNet and another model in the recording, every model complete in the window and >= "
+                   f"{MIN_BREATHS} GT breaths: the measures of 261108. The scored grid windows make the subject means "
+                   "(as 261108). Not scored: why in Not_Scored_Because; AE and r then for every model complete in the "
+                   "window"),
         ("AE / r / score", f"AE = |FFT rate - GT rate| (breaths/min); r = Pearson r with the band-passed GT; score = r - "
                            f"{AE_WEIGHT} x min(AE, {AE_CAP}); Advantage = RRWaveNet's score - the better of the others"),
         ("Coverage_Pct", "share of the window in which a model has an output (%)"),
         ("Left out", "; ".join(f"{d} {', '.join(s)}" for d, s in args.excluded.items() if s)),
         ("Figures", "one per window: the GT and the three models on one axis (the same seconds, no model shifted; the "
                     "models over the GT, RRWaveNet on top); GT black, RRWaveNet #dc2a1c, Deep Corr-Encoder #1a73c4, "
-                    "RespDiff #11895a (the 261108 colours a little darker); lines GT 1.8, models 2.04 (1.2 x 261108); "
+                    "RespDiff #11895a (the 261108 colours a little darker); lines GT 1.5, models 1.7 (as 261108); "
                     "every waveform min-max scaled in the window; beside it the legend and the AE / r table"),
     ], columns=["Item", "Description"])
 
@@ -1583,7 +1611,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                             help=f"results folder of {run} (default {config['root']})")
     parser.add_argument("--output-root", type=Path, default=PROJECT_ROOT / OUTPUT_FOLDER)
     parser.add_argument("--datasets", nargs="+", choices=list(FIGURE_ORDER), default=list(FIGURE_ORDER))
-    parser.add_argument("--sizes", nargs="+", type=int, default=list(WINDOW_SIZES), help="window sizes (s)")
+    parser.add_argument("--sizes", nargs="+", type=int, default=list(SIZES), help="window sizes (s), default 30")
     parser.add_argument("--subjects", nargs="+", default=None, help="only these subjects")
     parser.add_argument("--correncoder-root", type=Path, default=CORRENCODER_ROOT)
     parser.add_argument("--respdiff-root", type=Path, default=RESPDIFF_ROOT,
@@ -1610,7 +1638,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 
 FIRST_COLUMNS = ["Dataset", "Run", "Size_Sec", "Subject", "Recording", "Window_No", "Windows_Of_Subject", "Start_Sec",
-                 "End_Sec", "Scored", "Not_Scored_Because", "GT_RR", "GT_Clipped_Cycles", "Advantage",
+                 "End_Sec", "Window_Kind", "Grid", "Scored", "Not_Scored_Because", "GT_RR", "GT_Clipped_Cycles", "Advantage",
                  "RRWaveNet_AE", "RRWaveNet_PCC", "RRWaveNet_Rate", "CorrEncoder_AE", "CorrEncoder_PCC",
                  "CorrEncoder_Rate", "RespDiff_AE", "RespDiff_PCC", "RespDiff_Rate", "RRWaveNet_Coverage_Pct",
                  "CorrEncoder_Coverage_Pct", "RespDiff_Coverage_Pct", "Figure"]
@@ -1627,7 +1655,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
     out_root = Path(args.output_root)
     out_root.mkdir(parents=True, exist_ok=True)
-    print(f"Output: {out_root} (every non-overlapping window of every subject, {', '.join(map(str, args.sizes))} s)\n"
+    print(f"Output: {out_root} (every second of every subject in {', '.join(map(str, args.sizes))} s windows)\n"
           f"Deep Corr-Encoder: {args.correncoder_root}\nRespDiff (Baseline): {args.respdiff_root}; CapnoBase "
           f"first {args.respdiff_capnobase_root} ({args.respdiff_run_tag})")
     set_data_paths(args)
@@ -1663,15 +1691,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         del store
     path = out_root / "261108_Waveform_v3_overlap.xlsx"
     sheets = {"Windows": ordered(drawn),
-              "Skipped_Windows": pd.DataFrame(skipped, columns=["Run", "Dataset", "Subject", "Recording", "Size_Sec",
-                                                                "Start_Sec", "End_Sec", "Reason"]),
+              "Skipped": pd.DataFrame(skipped, columns=["Run", "Dataset", "Subject", "Recording", "Reason"]),
               "Subject_Summary": pd.DataFrame(subject_rows), "RespDiff_Placement": pd.DataFrame(RESPDIFF_PLACEMENT),
               "Notes": notes(args)}
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         for name, frame in sheets.items():
             (frame.round(4) if name != "Notes" else frame).to_excel(writer, sheet_name=name, index=False)
-    print(f"\n{len(drawn)} windows drawn under {out_root}\\<Dataset>\\<size>s\\<subject>; "
-          f"{sum('Start_Sec' in s for s in skipped)} windows not drawn; table: {path}")
+    print(f"\n{len(drawn)} windows drawn under {out_root}\\<Dataset>\\<size>s\\<subject>; {len(skipped)} "
+          f"recordings / subjects not drawn (Skipped); table: {path}")
 
 
 if __name__ == "__main__":
