@@ -32,9 +32,11 @@ Change from Stem (%) of a group (a dataset; All datasets = every subject of the 
   100 x (mean PCC of the stage - mean PCC of Stem) / mean PCC of Stem, the means over the subjects of the group: the
   curve of the mean PCC on a scale relative to Stem (Stem = 0%).
 
-Figures (MAE issue subjects left out; one per group): x axis Stem, B1, B2, B3, B4; y axis the mean PCC over the
-subjects, fitted to the values of the figure; the line of the mean PCC with a dot at every stage, and above the dot
-(under it where it is lower than its neighbours) the change from Stem in % (Stem 0%).
+Figures (MAE issue subjects left out; one per group): x axis the stages, written "Fusion Output" (Stem), "1st Block"
+to "4th Block" (B1-B4); y axis "Channel-Averaged Absolute PCC", the mean PCC over the subjects, fitted to the values of
+the figure; the line of the mean PCC with a dot at every stage and at every dot the change from Stem in % (Stem 0%),
+placed away from the line. Axis titles and stage names bold, Arial (Liberation Sans / DejaVu Sans where it is
+missing).
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261126_RRWaveNet_Block_ChannelAbsPCC_PercentChange)
   Issue_subjects_left_out\
@@ -98,6 +100,14 @@ FIGURE_SET, FIGURE_FOLDER = "MAE issue subjects left out", "Issue_subjects_left_
 
 COLOR = "#1f77b4"
 INK, MUTED, GRID = "#1f1f1f", "#6b6a66", "#e6e6e6"
+# Axis titles and tick labels of the figures
+STAGE_LABELS = ("Fusion\nOutput", r"1$^{\mathbf{st}}$ Block", r"2$^{\mathbf{nd}}$ Block", r"3$^{\mathbf{rd}}$ Block",
+                r"4$^{\mathbf{th}}$ Block")
+Y_LABEL = "Channel-Averaged\nAbsolute PCC"
+# Arial (Windows); Liberation Sans (the same widths) or DejaVu Sans where it is missing; superscripts in the same font
+FONT = {"font.family": "sans-serif", "font.sans-serif": ["Arial", "Liberation Sans", "DejaVu Sans"],
+        "mathtext.fontset": "custom", "mathtext.rm": "sans", "mathtext.bf": "sans:bold", "mathtext.it": "sans:italic",
+        "mathtext.cal": "sans", "mathtext.sf": "sans"}
 
 _MODULES: Dict[str, object] = {}
 
@@ -331,29 +341,30 @@ def draw_figure(base: Path, summary: pd.DataFrame, group: str, decimals: int) ->
     values = part["Mean_PCC"].to_numpy(float)
     change = part["Change_from_Stem_Pct"].to_numpy(float)
     x = np.arange(len(STAGES))
-    fig, ax = plt.subplots(figsize=(7.0, 4.9))
-    ax.plot(x, values, "o-", color=COLOR, lw=2.6, ms=9.5, zorder=3)
-    for i, pct in enumerate(change):
-        offset, ha, va = label_place(values, i)
-        ax.annotate(change_text(pct, decimals), (i, values[i]), textcoords="offset points", xytext=offset, ha=ha,
-                    va=va, fontsize=15.5, color=COLOR, fontweight="bold", zorder=5,
-                    bbox={"boxstyle": "round,pad=0.1", "facecolor": "white", "edgecolor": "none", "alpha": 0.9})
-    finite = values[np.isfinite(values)]
-    low, high = float(finite.min()), float(finite.max())
-    span = max(high - low, 0.01)
-    ax.set_ylim(low - 0.22 * span, high + 0.2 * span)
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=8, steps=[1, 2, 2.5, 5, 10]))
-    ax.set_xticks(x)
-    ax.set_xticklabels(STAGES)
-    ax.set_xlim(-0.35, len(STAGES) - 0.65)
-    ax.tick_params(axis="x", labelsize=14.5)
-    ax.tick_params(axis="y", labelsize=13)
-    ax.grid(True, color=GRID, lw=1.0)
-    ax.set_axisbelow(True)
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.3)
-    fig.tight_layout()
-    save(fig, base)
+    with plt.rc_context(FONT):
+        fig, ax = plt.subplots(figsize=(7.66, 5.12))
+        ax.plot(x, values, "o-", color=COLOR, lw=2.4, ms=9, zorder=3)
+        for i, pct in enumerate(change):
+            offset, ha, va = label_place(values, i)
+            ax.annotate(change_text(pct, decimals), (i, values[i]), textcoords="offset points", xytext=offset, ha=ha,
+                        va=va, fontsize=16, color=COLOR, fontweight="bold", zorder=5,
+                        bbox={"boxstyle": "round,pad=0.1", "facecolor": "white", "edgecolor": "none", "alpha": 0.9})
+        finite = values[np.isfinite(values)]
+        low, high = float(finite.min()), float(finite.max())
+        span = max(high - low, 0.01)
+        ax.set_ylim(low - 0.18 * span, high + 0.16 * span)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=10, steps=[1, 2, 5, 10]))
+        ax.set_xticks(x)
+        ax.set_xticklabels(STAGE_LABELS, fontsize=14, fontweight="bold", color="black")
+        ax.set_xlim(-0.35, len(STAGES) - 0.65)
+        ax.tick_params(axis="y", labelsize=12, colors="black")
+        ax.set_ylabel(Y_LABEL, fontsize=20, fontweight="bold", color="black", labelpad=12)
+        ax.grid(True, color=GRID, lw=1.0)
+        ax.set_axisbelow(True)
+        for spine in ax.spines.values():
+            spine.set_linewidth(1.3)
+        fig.tight_layout()
+        save(fig, base)
 
 
 def save(fig, base: Path) -> None:
