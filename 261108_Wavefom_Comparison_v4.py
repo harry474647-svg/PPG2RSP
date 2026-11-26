@@ -2,7 +2,7 @@
 r"""261108_Wavefom_Comparison_v4: the respiratory waveforms of RRWaveNet, the deep corr-encoder (paper version) and
 RespDiff against the ground truth (GT) as in 261108_Wavefom_Comparison, in 30 s windows covering every second of every
 subject (the subjects that had an MAE issue left out), two figures per window - panels (GT vs each model) and
-highlight (GT and RRWaveNet over the other models, faint) - and the windows where RRWaveNet does best listed first, to
+highlight (GT and RRWaveNet over the other models, drawn lighter) - and the windows where RRWaveNet does best listed first, to
 choose the windows to show. Nothing is trained: the stored outputs are read.
 
 What is the same as 261108_Wavefom_Comparison (its code, unchanged)
@@ -44,8 +44,9 @@ What is new
     _panels     (a) GT vs RRWaveNet, (b) GT vs Deep Corr-Encoder, (c) GT vs RespDiff: three panels on one time axis,
                 each the GT and one model (the layout of 261108); beside every panel the model's AE and r in the
                 window and its subject mean (MAE, PCC). The figure to show every model fairly.
-    _highlight  one axis: Deep Corr-Encoder and RespDiff faint underneath (their colours, alpha 0.45, line 1.2), the
-                GT, RRWaveNet on top; beside it the legend and a table of every model's AE and r and subject mean.
+    _highlight  one axis: Deep Corr-Encoder and RespDiff lighter underneath (their colours, alpha 0.8, line 1.4), the
+                GT, RRWaveNet on top (line 1.7); beside it the legend and a table of every model's AE and r and
+                subject mean.
                 The figure to show at a glance that RRWaveNet follows the GT.
   RRWaveNet_Best (sheet): the windows where RRWaveNet does best - scored, all three models in the window, Advantage
   > 0 - per dataset by Advantage, largest first.
@@ -136,9 +137,9 @@ FIG_NAME = {"RRWaveNet": "RRWaveNet", "Deep corr-encoder": "Deep Corr-Encoder", 
 FIG_COLOR = {"RRWaveNet": "#dc2a1c", "Deep corr-encoder": "#1a73c4", "RespDiff": "#11895a"}
 GT_WIDTH, MODEL_WIDTH = 1.5, 1.7
 SIZES = (30,)  # 30 s windows covering every second (--sizes)
-# highlight figure: these models faint underneath the GT and RRWaveNet; the legend order
+# highlight figure: these models drawn lighter underneath the GT and RRWaveNet; the legend order
 FAINT_MODELS = ("RespDiff", "Deep corr-encoder")
-FAINT_ALPHA, FAINT_WIDTH = 0.45, 1.2
+FAINT_ALPHA, FAINT_WIDTH = 0.8, 1.4
 LEGEND_ORDER = ("GT", "RRWaveNet", "Deep corr-encoder", "RespDiff")
 
 
@@ -1459,7 +1460,7 @@ def subject_means_v3(rows: List[dict], size: int) -> dict:
 
 # ===========================================================================
 # Figures (v4): (1) panels - GT vs each model, one panel each; (2) highlight - the GT and RRWaveNet over the other
-# models drawn faint, on one axis
+# models drawn lighter, on one axis
 # ===========================================================================
 
 def number(value: float) -> str:
@@ -1576,7 +1577,7 @@ def panels_page(path: Path, pdf, header: str, subheader: str, notes_text: str, t
 
 def highlight_page(path: Path, pdf, header: str, subheader: str, notes_text: str, t: np.ndarray, size: float,
                    lines: List[tuple], table_text: str) -> None:
-    """One axis: the other models faint underneath, the GT, RRWaveNet on top; beside it the legend and the table."""
+    """One axis: the other models lighter underneath, the GT, RRWaveNet on top; beside it the legend and the table."""
     side_in, left_in, top_in, bottom_in, panel_in = 3.9, 0.75, 1.6, 0.6, 2.9
     width = 7.0 + 4.0 * size / 60.0 + 0.6
     height = top_in + bottom_in + panel_in
@@ -1650,7 +1651,7 @@ def draw_window(folder: Path, pdfs: Dict[str, object], dataset: str, run: str, r
                 f"over the recording); GT black, band-passed {band}\neach waveform min-max scaled in the window; "
                 f"RRWaveNet low-pass 1 Hz; no line = no stored output there\n{measures}", t, size, panels)
 
-    # (2) highlight: the other models faint underneath, the GT, RRWaveNet on top
+    # (2) highlight: the other models lighter underneath, the GT, RRWaveNet on top
     lines = [(curves[m], FIG_COLOR[m], (m, label[m]), FAINT_WIDTH, FAINT_ALPHA, 2 + j)
              for j, m in enumerate(FAINT_MODELS) if m in curves]
     lines.append((gt, GT_LINE, ("GT", gt_label), GT_WIDTH, 1.0, 5))
@@ -1659,7 +1660,7 @@ def draw_window(folder: Path, pdfs: Dict[str, object], dataset: str, run: str, r
                       1.0, 6))
     highlight_path = folder / f"{stem}_highlight.png"
     highlight_page(highlight_path, pdfs["highlight"], header, subheader,
-                   "GT and RRWaveNet over the other models (drawn faint); the same seconds of the recording (no model "
+                   "GT and RRWaveNet over the other models (drawn lighter); the same seconds of the recording (no model "
                    "shifted in time; a model inverted when r < 0 over the recording)\n"
                    f"GT black, band-passed {band}; each waveform min-max scaled in the window; RRWaveNet low-pass 1 Hz; "
                    f"no line = no stored output there\n{measures}", t, size, lines,
@@ -1716,7 +1717,7 @@ def notes(args: argparse.Namespace) -> pd.DataFrame:
         ("Figures", "two per window, the same seconds, no model shifted, every waveform min-max scaled in the window. "
                     "_panels: (a) GT vs RRWaveNet, (b) GT vs Deep Corr-Encoder, (c) GT vs RespDiff on one time axis "
                     "(as 261108), beside every panel the model's AE / r and subject mean. _highlight: one axis, Deep "
-                    f"Corr-Encoder and RespDiff faint underneath (alpha {FAINT_ALPHA}, line {FAINT_WIDTH}), the GT, "
+                    f"Corr-Encoder and RespDiff lighter underneath (alpha {FAINT_ALPHA}, line {FAINT_WIDTH}), the GT, "
                     "RRWaveNet on top, beside it the AE / r table. GT black, RRWaveNet #dc2a1c, Deep Corr-Encoder "
                     "#1a73c4, RespDiff #11895a; lines GT 1.5, models 1.7 (as 261108)"),
         ("RRWaveNet_Best", "the windows where RRWaveNet does best: scored, all three models in the window, Advantage > "
