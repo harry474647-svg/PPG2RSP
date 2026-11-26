@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 r"""261126_RRWaveNet_Block_ChannelAbsPCC_PercentChange: the block comparison of the channel-averaged absolute PCC with
-the target respiratory waveform (Stem, B1, B2, B3, B4) drawn with the y axis as the change from Stem in % (Stem = 0%),
-from the PCC computed here with the stored RRWaveNet models (not from values of earlier figures): STEAM2, BIDMC and
-CapnoBase side by side, and all datasets together.
+the target respiratory waveform (Stem, B1, B2, B3, B4), from the PCC computed here with the stored RRWaveNet models (not
+from values of earlier figures): y axis the mean PCC, and at every point the change from Stem in % - one figure for
+STEAM2, BIDMC, CapnoBase and all datasets each, with the MAE issue subjects left out.
 
 Models (stored, nothing is trained): the final results
   CapnoBase      261007_RRWaveNet_Ensemble_NoEvent    (D:\PPG2RSP_RRWaveNet_Inspired\261007_RRWaveNet_NoEvent_v1),
@@ -22,24 +22,23 @@ ChannelAbsPCC)
   4. computed per model, then the mean over the members (m0-m2) of the subject
   No PCA: the PCC is computed on each of the 24 channels directly, and only the |PCC| values are averaged.
 
-Subject sets (each computed and drawn on its own)
-  All subjects                  every subject with stored models (as 261011, whose block figures did not leave out
-                                the MAE issue subjects)
+Subject sets
   MAE issue subjects left out   without the MAE issue subjects of the final results: CapnoBase 0115, BIDMC 27,
-                                STEAM2 12_YJJ, 22_LMS, 26_CKK
+                                STEAM2 12_YJJ, 22_LMS, 26_CKK (the figures)
+  All subjects                  every subject with stored models, as 261011 (whose block figures did not leave out
+                                the MAE issue subjects): in the table only
 
 Change from Stem (%) of a group (a dataset; All datasets = every subject of the three datasets once)
   100 x (mean PCC of the stage - mean PCC of Stem) / mean PCC of Stem, the means over the subjects of the group: the
   curve of the mean PCC on a scale relative to Stem (Stem = 0%).
 
-Figures: x axis Stem, B1, B2, B3, B4; y axis the change from Stem (%), Stem = 0% (dashed line), fitted to the values of
-every panel on its own, so the change of every dataset fills its panel (compare the datasets by the written values,
-not by the heights); the change written at every point.
+Figures (MAE issue subjects left out; one per group): x axis Stem, B1, B2, B3, B4; y axis the mean PCC over the
+subjects, fitted to the values of the figure; the line of the mean PCC with a dot at every stage, and above the dot
+(under it where it is lower than its neighbours) the change from Stem in % (Stem 0%).
 
 Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261126_RRWaveNet_Block_ChannelAbsPCC_PercentChange)
-  All_subjects\ and Issue_subjects_left_out\
-    Datasets_block_channel_abs_pcc_change.png / .pdf       STEAM2, BIDMC, CapnoBase side by side
-    All_datasets_block_channel_abs_pcc_change.png / .pdf   all datasets together
+  Issue_subjects_left_out\
+    STEAM2_block_channel_abs_pcc.png / .pdf, BIDMC_..., CapnoBase_..., All_datasets_...
   261126_RRWaveNet_Block_ChannelAbsPCC_PercentChange.xlsx
     Summary   per subject set, group and stage: subjects, mean PCC, SD, change from Stem (%)
     Subjects  every subject: MAE issue subject or not, PCC of every stage (mean over the members), members, windows
@@ -49,7 +48,7 @@ Outputs (D:\PPG2RSP_RRWaveNet_Inspired\261126_RRWaveNet_Block_ChannelAbsPCC_Perc
 
 Run: python 261126_RRWaveNet_Block_ChannelAbsPCC_PercentChange.py     (Spyder: runfile(...), no options needed)
 Options: --datasets, --subjects CapnoBase:0009 BIDMC:05 ..., --members 0 1 2, --decimals (of the % at the points,
-default 1), --root-261007, --root-261013, --output-root, --script-261007, --script-261013, --capnobase-path,
+default 0), --root-261007, --root-261013, --output-root, --script-261007, --script-261013, --capnobase-path,
 --bidmc-path, --steam2-ppg-dir, --steam2-rsp-dir, --batch-size, --cpu
 """
 
@@ -68,7 +67,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-from matplotlib.ticker import FuncFormatter, MaxNLocator
+from matplotlib.ticker import MaxNLocator
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -91,10 +90,11 @@ SOURCE = {"CapnoBase": "261007", "BIDMC": "261013", "STEAM2": "261013"}
 STAGES = ("Stem", "B1", "B2", "B3", "B4")
 MEMBERS = (0, 1, 2)
 VALUE = "Channel_AbsPCC"
-FIGURE_NAME = "block_channel_abs_pcc_change"
+FIGURE_NAME = "block_channel_abs_pcc"
 # MAE issue subjects of the final results
 ISSUE_SUBJECTS = {"STEAM2": ("22_LMS", "26_CKK", "12_YJJ"), "BIDMC": ("27",), "CapnoBase": ("0115",)}
-SUBJECT_SETS = {"All subjects": "All_subjects", "MAE issue subjects left out": "Issue_subjects_left_out"}
+SUBJECT_SETS = ("All subjects", "MAE issue subjects left out")
+FIGURE_SET, FIGURE_FOLDER = "MAE issue subjects left out", "Issue_subjects_left_out"   # the set drawn
 
 COLOR = "#1f77b4"
 INK, MUTED, GRID = "#1f1f1f", "#6b6a66", "#e6e6e6"
@@ -306,83 +306,60 @@ def change_text(percent: float, decimals: int) -> str:
     return text + "%"
 
 
-def y_limits(change: np.ndarray) -> Tuple[float, float]:
-    """y axis of one panel: its own values and 0 (Stem), with room for the written values."""
-    change = change[np.isfinite(change)]
-    low, high = min(0.0, float(change.min())), max(0.0, float(change.max()))
-    span = max(high - low, 2.0)
-    return low - 0.16 * span, high + 0.16 * span
+def label_place(values: np.ndarray, i: int) -> Tuple[Tuple[float, float], str, str]:
+    """Offset (points), horizontal and vertical alignment of the value at dot i, on the side away from the line:
+    a peak or the first dot above, a dip under, a dot on the way up above-left, on the way down above-right, the
+    last dot above (under it if the line comes down to it)."""
+    previous = values[i - 1] if i > 0 else np.nan
+    following = values[i + 1] if i + 1 < len(values) else np.nan
+    value = values[i]
+    above, below = ((0, 9), "center", "bottom"), ((0, -11), "center", "top")
+    if not np.isfinite(previous):
+        return above
+    if not np.isfinite(following):
+        return above if value >= previous else below
+    if value >= previous and value >= following:
+        return above
+    if value < previous and value < following:
+        return below
+    return ((-7, 7), "right", "bottom") if previous < value else ((7, 7), "left", "bottom")
 
 
-def draw_panel(ax, summary: pd.DataFrame, group: str, frame: pd.DataFrame, decimals: int, ylabel: bool) -> None:
+def draw_figure(base: Path, summary: pd.DataFrame, group: str, decimals: int) -> None:
+    """One group: the mean PCC of every stage (line and dots) and the change from Stem (%) at every dot."""
     part = summary[summary.Group == group].set_index("Stage").reindex(list(STAGES))
+    values = part["Mean_PCC"].to_numpy(float)
     change = part["Change_from_Stem_Pct"].to_numpy(float)
-    limits = y_limits(change)
     x = np.arange(len(STAGES))
-    ax.axhline(0.0, color=MUTED, lw=1.0, ls="--", zorder=1)
-    ax.plot(x, change, "o-", color=COLOR, lw=1.8, ms=7, zorder=3)
-    for xi, pct in zip(x, change):
-        # the value on the side away from the line: under a point lower than its neighbours, else above
-        neighbours = [change[j] for j in (xi - 1, xi + 1) if 0 <= j < len(change) and np.isfinite(change[j])]
-        below = bool(neighbours) and pct < float(np.mean(neighbours))
-        ax.annotate(change_text(pct, decimals), (xi, pct), textcoords="offset points", xytext=(0, -9 if below else 8),
-                    ha="center", va="top" if below else "bottom", fontsize=10.5, color=COLOR, fontweight="bold",
-                    zorder=5,
-                    bbox={"boxstyle": "round,pad=0.12", "facecolor": "white", "edgecolor": "none", "alpha": 0.9})
+    fig, ax = plt.subplots(figsize=(7.0, 4.9))
+    ax.plot(x, values, "o-", color=COLOR, lw=2.6, ms=9.5, zorder=3)
+    for i, pct in enumerate(change):
+        offset, ha, va = label_place(values, i)
+        ax.annotate(change_text(pct, decimals), (i, values[i]), textcoords="offset points", xytext=offset, ha=ha,
+                    va=va, fontsize=15.5, color=COLOR, fontweight="bold", zorder=5,
+                    bbox={"boxstyle": "round,pad=0.1", "facecolor": "white", "edgecolor": "none", "alpha": 0.9})
+    finite = values[np.isfinite(values)]
+    low, high = float(finite.min()), float(finite.max())
+    span = max(high - low, 0.01)
+    ax.set_ylim(low - 0.22 * span, high + 0.2 * span)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=8, steps=[1, 2, 2.5, 5, 10]))
     ax.set_xticks(x)
-    ax.set_xticklabels(STAGES, fontsize=12, fontweight="bold")
+    ax.set_xticklabels(STAGES)
     ax.set_xlim(-0.35, len(STAGES) - 0.65)
-    ax.set_ylim(*limits)
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=7, steps=[1, 2, 2.5, 5, 10]))
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: "0%" if abs(v) < 1e-9 else f"{v:+.0f}%"))
-    ax.tick_params(axis="y", labelsize=10.5)
-    ax.grid(True, color=GRID)
+    ax.tick_params(axis="x", labelsize=14.5)
+    ax.tick_params(axis="y", labelsize=13)
+    ax.grid(True, color=GRID, lw=1.0)
     ax.set_axisbelow(True)
-    n = int(frame.Subject.size)
-    subtitle = f"n = {n} subjects"
-    if group == ALL:
-        counts = frame.groupby("Dataset", sort=False).size()
-        subtitle += " (" + ", ".join(f"{d} {int(counts[d])}" for d in PANEL_ORDER if d in counts.index) + ")"
-    ax.set_title(f"{group}\n", fontsize=14, fontweight="bold")
-    ax.text(0.5, 1.02, subtitle, transform=ax.transAxes, ha="center", va="bottom", fontsize=9, color=MUTED)
-    if ylabel:
-        ax.set_ylabel("Change in channel-averaged |PCC|\nfrom Stem (%)", fontsize=12, fontweight="bold")
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.3)
+    fig.tight_layout()
+    save(fig, base)
 
 
 def save(fig, base: Path) -> None:
     for ext in ("png", "pdf"):
         fig.savefig(base.with_name(f"{base.name}.{ext}"), dpi=300)
     plt.close(fig)
-
-
-def set_note(subject_set: str, datasets: Sequence[str]) -> str:
-    if subject_set == "All subjects":
-        return "Subjects: all (MAE issue subjects included)"
-    left = "; ".join(f"{d} {', '.join(ISSUE_SUBJECTS[d])}" for d in PANEL_ORDER if d in datasets)
-    return f"Subjects: MAE issue subjects left out ({left})"
-
-
-def draw_figures(out_root: Path, subject_set: str, groups: List[Tuple[str, pd.DataFrame]], summary: pd.DataFrame,
-                 decimals: int) -> None:
-    out_root.mkdir(parents=True, exist_ok=True)
-    formula = "Change from Stem (%) = (mean |PCC| of the stage - mean |PCC| of Stem) / mean |PCC| of Stem x 100"
-    frames = dict(groups)
-    panels = [d for d in PANEL_ORDER if d in frames]
-    note = set_note(subject_set, panels)
-    if panels:
-        fig, axes = plt.subplots(1, len(panels), figsize=(5.4 * len(panels), 4.9), squeeze=False)
-        for index, (ax, dataset) in enumerate(zip(axes[0], panels)):
-            draw_panel(ax, summary, dataset, frames[dataset], decimals, ylabel=index == 0)
-        fig.text(0.5, 0.01, f"{formula}\n{note}", ha="center", va="bottom", fontsize=9.5, color=MUTED)
-        fig.tight_layout(rect=(0, 0.08, 1, 1))
-        save(fig, out_root / f"Datasets_{FIGURE_NAME}")
-    if ALL in frames:
-        fig, ax = plt.subplots(figsize=(6.0, 5.2))
-        draw_panel(ax, summary, ALL, frames[ALL], decimals, ylabel=True)
-        fig.text(0.5, 0.01, formula.replace(" = ", " =\n", 1) + "\n" + note.replace(" (", "\n(", 1), ha="center",
-                 va="bottom", fontsize=8.5, color=MUTED)
-        fig.tight_layout(rect=(0, 0.15, 1, 1))
-        save(fig, out_root / f"All_datasets_{FIGURE_NAME}")
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +372,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p.add_argument("--datasets", nargs="+", choices=list(DATASETS), default=list(DATASETS))
     p.add_argument("--subjects", nargs="+", default=None, help="Dataset:Subject (default: every subject)")
     p.add_argument("--members", nargs="+", type=int, default=list(MEMBERS), help="members of the fold (default 0 1 2)")
-    p.add_argument("--decimals", type=int, default=1, help="decimals of the % written at the points (default 1)")
+    p.add_argument("--decimals", type=int, default=0, help="decimals of the % written at the points (default 0)")
     p.add_argument("--root-261007", type=Path, default=ROOT_261007)
     p.add_argument("--root-261013", type=Path, default=ROOT_261013)
     p.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
@@ -428,16 +405,20 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     print("\nMAE issue subjects: "
           + "; ".join(f"{d} {', '.join(ISSUE_SUBJECTS[d])}" for d in PANEL_ORDER if d in datasets)
           + f". In the data with stored models: {', '.join(subjects.Dataset[issue] + ' ' + subjects.Subject[issue].astype(str)) or 'none'}"
-          + " - included in 'All subjects', left out in 'MAE issue subjects left out'")
+          + " - left out in the figures ('MAE issue subjects left out'); 'All subjects' in the table only")
     summaries = []
-    for subject_set, folder in SUBJECT_SETS.items():
+    for subject_set in SUBJECT_SETS:
         frame = subjects if subject_set == "All subjects" else subjects[~issue]
         if frame.empty:
             continue
         groups = groups_of(frame, datasets)
         summary = summary_table(subject_set, groups)
-        draw_figures(out_root / folder, subject_set, groups, summary, args.decimals)
         summaries.append(summary)
+        if subject_set == FIGURE_SET:
+            folder = out_root / FIGURE_FOLDER
+            folder.mkdir(parents=True, exist_ok=True)
+            for group, _ in groups:
+                draw_figure(folder / f"{group.replace(' ', '_')}_{FIGURE_NAME}", summary, group, args.decimals)
         print(f"\nChannel-averaged |PCC| (mean over the subjects) and its change from Stem: {subject_set}")
         for group, _ in groups:
             part = summary[summary.Group == group]
@@ -454,14 +435,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         ("PCC", "Pearson r of every channel with the target (min-max [-1, 1]) in every window; |r| averaged over the "
                 "windows, then over the 24 channels: (1/24) sum |r_c| (channel_abs_r / Channel_AbsR_Mean of 261011); "
                 "per model, then the mean over the members of the subject; no PCA"),
-        ("Subject sets", "All subjects (as 261011: the MAE issue subjects included); MAE issue subjects left out "
-                         "(CapnoBase 0115, BIDMC 27, STEAM2 12_YJJ, 22_LMS, 26_CKK); Subjects: Issue_Subject"),
+        ("Subject sets", "MAE issue subjects left out (CapnoBase 0115, BIDMC 27, STEAM2 12_YJJ, 22_LMS, 26_CKK): "
+                         "figures and table; All subjects (as 261011: the MAE issue subjects included): table only; "
+                         "Subjects: Issue_Subject"),
         ("Groups", "every dataset; All datasets = every subject of the three datasets once"),
         ("Change from Stem", "100 x (mean PCC of the stage - mean PCC of Stem) / mean PCC of Stem, means over the "
                              "subjects of the group; Stem = 0%"),
-        ("Figures", f"<subject set folder>\\Datasets_{FIGURE_NAME} (STEAM2, BIDMC, CapnoBase) and "
-                    f"All_datasets_{FIGURE_NAME}, .png / .pdf; y axis: change from Stem (%), fitted to every panel on "
-                    "its own"),
+        ("Figures", f"{FIGURE_FOLDER}\\<STEAM2 | BIDMC | CapnoBase | All_datasets>_{FIGURE_NAME}.png / .pdf "
+                    "(MAE issue subjects left out): y axis the mean PCC; at every point the change from Stem (%)"),
     ], columns=["Item", "Description"])
     path = out_root / f"{NAME}.xlsx"
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
